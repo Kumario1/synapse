@@ -1,0 +1,23 @@
+{
+  "name": "synapse",
+  "version": "0.0.0",
+  "private": true,
+  "packageManager": "npm@11.4.1",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "check": "npm run typecheck && npm test",
+    "verify:m0": "npm run build && node scripts/verify-milestone-0.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.2",
+    "tsx": "^4.19.4",
+    "turbo": "^2.5.4",
+    "typescript": "^5.8.3"
+  }
+}
