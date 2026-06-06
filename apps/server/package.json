@@ -1,0 +1,21 @@
+{
+  "name": "@synapse/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "node --test",
+    "dev": "node dist/index.js"
+  },
+  "dependencies": {
+    "@synapse/protocol": "0.0.0",
+    "ws": "^8.18.2"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1"
+  }
+}
