@@ -1,0 +1,269 @@
+# Synapse — Engineering Build Plan & Technical Outline
+
+> Working draft v0.1 · 2026-06-05
+> Companion to `synapse-context.md` (product vision). This document is the *engineering* outline:
+> what we build, with what technology, in what order, and why.
+>
+> Design stance: **robust over scrappy.** The context doc describes a $0 SQLite shell-script MVP.
+> This plan proposes the production-grade architecture instead, and marks where the cheap path
+> diverges so we can consciously choose per-component.
+
+---
+
+## 0. The One Sentence
+
+> A real-time coordination substrate that every coding agent plugs into, so before an agent edits
+> code it knows — at the *contract* level, not just the file level — what the rest of the team's
+> agents are doing, and can avoid colliding with them.
+
+The hard, defensible engineering problem is **contract-level conflict detection across machines in
+real time**. Everything else (briefings, memory) is built on the data this produces. We should build
+the hard part *well*, because that is the moat — a file-name string-match collision detector is a
+weekend toy and copyable in an afternoon.
+
+---
+
+## 1. System Architecture (Robust Version)
+
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│  DEVELOPER MACHINES (N developers, each steering 1+ agents)             │
+│                                                                         │
+│  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐                    │
+│  │ Claude Code │   │   Cursor    │   │  Cline /    │   ... any agent     │
+│  │  (hooks)    │   │ (MCP tools) │   │  Aider      │                     │
+│  └──────┬──────┘   └──────┬──────┘   └──────┬──────┘                     │
+│         │                 │                 │                           │
+│  ┌──────▼─────────────────▼─────────────────▼──────┐                    │
+│  │           SYNAPSE LOCAL AGENT (CLI daemon)        │                   │
+│  │  • installs/owns hooks                            │                   │
+│  │  • watches git working tree (chokidar/fswatch)    │                   │
+│  │  • runs LOCAL contract extraction (tree-sitter)   │                   │
+│  │  • talks to server over WSS, keeps a warm cache   │                   │
+│  └──────────────────────┬────────────────────────────┘                  │
+└─────────────────────────┼───────────────────────────────────────────────┘
+                          │  authenticated WebSocket / SSE + REST
+                          ▼
+┌───────────────────────────────────────────────────────────────────────┐
+│                      SYNAPSE SERVER (the shared brain)                  │
+│                                                                         │
+│  ┌────────────────┐  ┌──────────────────┐  ┌────────────────────────┐  │
+│  │  MCP Gateway   │  │ Conflict Engine  │  │ Distillation Pipeline   │  │
+│  │ (tools agents  │  │ • dependency     │  │ • diff → contract delta │  │
+│  │  call directly)│  │   graph          │  │ • tree-sitter + LLM     │  │
+│  │                │  │ • symbol overlap │  │   (Haiku via Gateway)   │  │
+│  └───────┬────────┘  │ • severity score │  └───────────┬─────────────┘  │
+│          │           └────────┬─────────┘              │                │
+│  ┌───────▼────────────────────▼──────────────────────▼─────────────┐   │
+│  │                     STATE & EVENT CORE                            │   │
+│  │  Redis (Upstash): live sessions, locks, pub/sub fan-out          │   │
+│  │  Postgres (Neon): durable team/repo/session, contract deltas     │   │
+│  │  pgvector: Layer III decision/memory embeddings                  │   │
+│  └───────────────────────────────────────────────────────────────────┘ │
+│                                                                         │
+│  ┌────────────────┐  ┌──────────────────┐  ┌────────────────────────┐  │
+│  │ GitHub Webhooks│  │ Briefing Service │  │ Memory / RAG Service    │  │
+│  │ (PR/push/merge)│  │ (Layer II)       │  │ (Layer III)             │  │
+│  └────────────────┘  └──────────────────┘  └────────────────────────┘  │
+└───────────────────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+              ┌───────────────────────────┐
+              │  Web Dashboard (optional)  │  Next.js — team-level view,
+              │  read-only team awareness  │  NOT required for core loop
+              └───────────────────────────┘
+```
+
+### Why a local daemon (the key robustness decision)
+
+The context doc imagines hooks as a "single shell script." That works for a demo but caps us at
+file-level detection and Claude-Code-only support. A **persistent local agent** instead:
+
+- Runs contract extraction **locally** (privacy: raw code never leaves the machine — only contract
+  deltas do), satisfying the "zero-trust / privacy-paranoid" principle.
+- Keeps a **warm cache** of team state so the PreToolUse hook answers in <50ms (no network in the
+  hot path → satisfies "silent on no-conflict" without adding latency devs will notice).
+- Is **agent-agnostic**: Claude Code drives it via hooks; Cursor/Cline/others drive it via MCP tools.
+- Watches the git tree continuously, so we capture in-flight state even between agent edits.
+
+---
+
+## 2. Component Breakdown
+
+### 2.1 Synapse Local Agent (CLI + daemon)
+- **`synapse join`** — one command: authenticates, links repo→team, installs Claude Code hooks,
+  registers the MCP server endpoint, starts the daemon. Target: <5s, zero manual config.
+- **Daemon** — long-running local process. Responsibilities: git working-tree watch, local contract
+  extraction, WSS connection to server, warm-cache of team state, hook RPC endpoint.
+- **Hook adapters** — translate each agent's hook/extension model into Synapse calls.
+  - Claude Code: native `PreToolUse` / `PostToolUse` hooks (shell out to the daemon over a local socket).
+  - Cursor / Cline / Aider: MCP tools (`synapse_check`, `synapse_report`) the agent calls, plus
+    optional editor rules that nudge the agent to call them.
+- **Distribution**: npm package (`npx @synapse/cli join`) and a standalone binary (so non-Node users
+  aren't blocked). Cheap-path fallback: a thin shell script for Claude-Code-only early adopters.
+
+### 2.2 Contract Extraction (the high-signal core)
+This is what separates Synapse from a filename-collision toy.
+- **tree-sitter** parses each changed file in its language; we extract the **public contract**:
+  exported functions + signatures, types/interfaces, class methods, API route definitions, DB
+  schema/migrations, env/config keys.
+- Diff the *before* and *after* contract → a structured **contract delta** (e.g.
+  `auth.TokenValidator.validate: (str) -> Optional[Token]  ⇒  (str) -> Result[Token, AuthError]`).
+- The LLM (Haiku via AI Gateway) is used only to write the **human-readable summary** of the delta,
+  not to detect it — detection is deterministic AST diffing. Cheaper, faster, no hallucinated contracts.
+- Languages at launch (proposal): TypeScript/JS, Python, Go. Extensible via tree-sitter grammars.
+
+### 2.3 Dependency / Symbol Graph
+- Build a per-repo **import + symbol-reference graph** so "related contracts" is precise, not guessed.
+  When agent A is about to edit symbol `X`, we know which other in-flight changes touch `X` or things
+  that depend on `X`.
+- Build options (decision needed): tree-sitter queries (lightweight, language-by-language) vs. SCIP /
+  language-server indexing (heavier, much more accurate cross-file resolution).
+- The graph is what powers **transitive** conflict detection — "you're editing a function whose caller
+  was just changed in someone's unpushed branch."
+
+### 2.4 Conflict Engine
+- Inputs: the symbol(s) an edit will touch + current live state (active edits, unpushed contract
+  deltas, recent pushes) + the dependency graph.
+- Output: a **severity-scored** verdict, not a binary. e.g. `none` (proceed silently) /
+  `info` / `warn` (surface inline) / `block-suggest` (recommend the agent pause & coordinate).
+- Severity rules (initial): same-symbol concurrent edit = high; dependent-symbol contract change
+  unpushed = high; same-file different-symbol = low; reads = none.
+- **Tunable + learns**: track whether surfaced warnings were acted on, to fight alarm fatigue
+  (principle #4: noisy = uninstalled).
+
+### 2.5 State & Event Core
+- **Redis (Upstash)** — ephemeral live state: active sessions, soft "editing" locks with TTL,
+  and **pub/sub** so a contract delta on machine A is pushed to machine B's warm cache in real time.
+- **Postgres (Neon)** — durable: teams, repos, members, auth, session history, contract-delta log
+  (kept until pushed, then cleared per the "Synapse clears itself" principle — but we keep an
+  *audit trail* table for Layer III, separate from live state).
+- **pgvector** — Layer III decision/memory embeddings (defer; same DB, no new infra).
+
+### 2.6 GitHub Integration
+- GitHub App with webhooks: `push`, `pull_request`, `pull_request_review`, `issue_comment`.
+- On push/merge: clear the corresponding in-flight contract deltas (state reset).
+- On PR thread / review: candidate signal for Layer III decision capture.
+
+### 2.7 Briefing Service (Layer II)
+- `synapse whatsup` MCP tool + proactive session-start push.
+- Batch summarization (Haiku via AI Gateway) on session end — never in the edit hot path.
+
+### 2.8 Memory / RAG Service (Layer III)
+- Ingest distilled session summaries, PR decisions, flagged Slack threads → embed → pgvector.
+- Plain-language query tool (`synapse_why`) returns reasoning with provenance links.
+
+### 2.9 Web Dashboard (optional, later)
+- Next.js read-only team-awareness view. Explicitly **not** required for the core agent loop and
+  **not** a management/surveillance tool (principle #6).
+
+---
+
+## 3. Proposed Technology Stack
+
+| Concern              | Proposed choice                                  | Cheap-path fallback           |
+|----------------------|--------------------------------------------------|-------------------------------|
+| Language (server)    | TypeScript (Node 24, Fluid Compute)              | same                          |
+| Language (analysis)  | TypeScript + tree-sitter WASM bindings           | Python + tree-sitter          |
+| MCP                  | `@modelcontextprotocol/sdk`                      | same                          |
+| Local daemon         | TypeScript / Bun, local Unix socket for hooks    | shell script (CC-only)        |
+| Live state + pub/sub | Redis (Upstash, Vercel Marketplace)              | in-memory / SQLite            |
+| Durable store        | Postgres (Neon, Vercel Marketplace) + pgvector   | SQLite                        |
+| Code parsing         | tree-sitter (TS/JS, Python, Go grammars)         | filename match only           |
+| Dep graph            | tree-sitter queries → SCIP later                 | none (file-level)             |
+| LLM (distill/brief)  | Claude Haiku via **Vercel AI Gateway**           | direct Anthropic SDK          |
+| GitHub               | GitHub App + Octokit + webhooks                  | poll API                      |
+| Realtime transport   | WebSocket (WSS) + SSE fallback                   | HTTP polling                  |
+| Hosting              | Vercel (server + dashboard, Fluid Compute)       | Fly.io / Railway              |
+| Auth/multi-tenancy   | Clerk or Sign-in-with-GitHub + org/team model    | API keys                      |
+| CLI distribution     | npm + standalone binary                          | curl-pipe shell script        |
+| Monorepo             | Turborepo (cli / server / shared-types / web)    | single package                |
+
+Shared TypeScript types between daemon, server, and dashboard (one source of truth for the wire
+protocol) is a big robustness win — hence TS-end-to-end as the default proposal.
+
+---
+
+## 4. Data Model (initial sketch)
+
+```
+Team(id, name, plan)
+Member(id, team_id, github_login, role)
+Repo(id, team_id, github_full_name, default_branch)
+Session(id, repo_id, member_id, agent_type, started_at, last_seen, status, last_task)
+EditLock(session_id, file_path, symbol, acquired_at, ttl)            # Redis
+ContractDelta(id, repo_id, session_id, file_path, symbol,
+              before_sig, after_sig, summary, created_at, pushed_at) # Postgres; cleared on push
+RecentPush(id, repo_id, member_id, summary, files[], sha, pushed_at)
+DecisionMemory(id, repo_id, kind, text, embedding, source_url, created_at)  # Layer III, pgvector
+```
+
+---
+
+## 5. Phased Roadmap (engineering milestones, mapped to product layers)
+
+**Milestone 0 — Skeleton & protocol (week 1)**
+Turborepo scaffold; shared wire-protocol types; MCP server with stub `synapse_check`/`synapse_report`;
+local daemon connects over WSS; `synapse join` installs a Claude Code hook that pings the daemon.
+*Exit test:* one machine reports an edit, a second machine sees it in `synapse_check`.
+
+**Milestone 1 — Contract-level conflict prevention (Layer I) (weeks 2–4)**
+tree-sitter contract extraction (TS + Python first); contract-delta diffing; Redis live state +
+pub/sub warm cache; conflict engine with severity scoring; inline warning surfaced in Claude Code.
+*Exit test:* the "Contract Collision" scenario (auth refactor vs. login feature) is caught **before**
+the second agent starts, on two real machines.
+
+**Milestone 2 — Dependency graph & multi-agent (weeks 4–6)**
+Symbol/import graph for transitive conflicts; Cursor/Cline support via MCP tools; GitHub App +
+webhooks for state reset on push; severity tuning + acted-on telemetry.
+
+**Milestone 3 — Briefings (Layer II) (weeks 6–9)**
+Session-end summarization (Haiku via Gateway); `synapse whatsup`; morning push on session start;
+PR ingestion into briefings.
+
+**Milestone 4 — Memory (Layer III) (when validated)**
+pgvector decision store; `synapse_why` RAG query; Slack ingestion; onboarding mode.
+
+**Cross-cutting (start early):** auth/multi-tenancy, self-host packaging (Docker compose), telemetry,
+and a tiny eval harness for "did we correctly flag/ignore this conflict?" on recorded scenarios.
+
+---
+
+## 6. Key Technical Risks & Open Decisions
+
+1. Hot-path latency vs. accuracy — solved by local warm cache + deterministic AST diff, but needs proof.
+2. Cross-agent support — only Claude Code has true hooks; others need MCP-tool cooperation which is
+   softer (the agent must *choose* to call). How hard do we push v1 beyond Claude Code?
+3. Dep-graph accuracy vs. cost — tree-sitter queries vs. full LSP/SCIP indexing.
+4. Privacy boundary — keep raw code local, ship only contract deltas + summaries. Confirm acceptable.
+5. Self-hosted vs. SaaS first (affects auth, hosting, packaging from day one).
+6. Alarm fatigue — severity model must be right or the tool gets disabled.
+
+(Open product questions from the context doc — conflict granularity, friction point, session
+definition, multi-repo, pricing, name — are tracked in `synapse-context.md` §13.)
+
+---
+
+## 7. Decisions Log (resolved 2026-06-05)
+
+| # | Decision | Choice | Implication |
+|---|----------|--------|-------------|
+| 1 | Conflict detection depth | **Dependency-graph from day one** | Transitive, contract-level detection is the moat; heaviest build path |
+| 2 | Hosting | **Self-hosted first** | Ship Docker Compose; SaaS later. Privacy-first packaging from day one |
+| 3 | Agent support | **Agent-agnostic from start** | Universal MCP tools + Claude Code native hooks as the first-class path |
+| 4 | Stack | **Hybrid: TS server + polyglot analyzers** | TS server/daemon/realtime; analyzer layer is Node-for-TS + Python-for-Python |
+| 5 | Languages first | **TypeScript/JS + Python** | Two analyzers at launch (ts-morph; pyright/jedi) |
+| 6 | Intervention model | **Warn inline, dev decides** | No auto-block; severity levels none/info/warn. "Agents query, agents decide" |
+| 7 | Analysis location | **Local daemon** | Raw code never leaves the machine; only contract deltas + symbol IDs do |
+| 8 | Repo topology | **Single repo first** | Simplest graph scope; monorepo/multi-repo later |
+| 9 | Graph engine | **Language-server grade** | ts-morph (TS), pyright/jedi (Python) for real cross-file resolution |
+| 10 | Auth | **GitHub OAuth** | Identity = GitHub login; pairs with the GitHub App for webhooks |
+| 11 | Collaboration mode | User codes some, owns vision; I own architecture + hard parts | — |
+| 12 | Immediate next step | **Write deep technical spec, then scaffold** | See `synapse-technical-spec.md` |
+
+> Note on #4/#5: "language-server-grade" forces the analyzer layer to be polyglot — accurate TS
+> resolution needs Node tooling, accurate Python needs Python tooling. So the analyzer layer is
+> native-tool-per-language behind one uniform JSON-RPC protocol; Python remains the home for the
+> shared graph model and future ML/embeddings. This is the correct reading of "robust," not a deviation.
+```
+
