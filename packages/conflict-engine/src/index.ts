@@ -1,11 +1,19 @@
 import type {
   AgentType,
   Conflict,
+  ContractDelta,
   EditLock,
   Session,
   SymbolId,
   TeamState
 } from "@synapse/protocol";
+import {
+  contractChangeFor,
+  describeCompatibility,
+  renderChange,
+  renderSignature
+} from "./compare.js";
+import { deterministicAnalysis, templateExplanation } from "./explain.js";
 
 export interface ConflictTarget {
   filePath: string;
@@ -52,6 +60,7 @@ export function verdictFor(conflicts: Conflict[]): "none" | "info" | "warn" {
 export function evaluateConflicts(context: ConflictCheckContext): Conflict[] {
   const graph = context.graph ?? emptyDependencyGraph;
   const conflicts = new Map<string, Conflict>();
+  const selfDeltasBySymbol = selfUnpushedDeltas(context);
 
   for (const target of context.targets) {
     const targetSymbol = target.symbolId ?? fileSymbol(target.filePath);
@@ -80,15 +89,54 @@ export function evaluateConflicts(context: ConflictCheckContext): Conflict[] {
       }
 
       const counterpart = counterpartFor(context.state.sessions, delta.sessionId);
+      const change = contractChangeFor(delta);
 
       if (sameSymbol(delta.symbolId, targetSymbol)) {
+        const selfDelta = selfDeltasBySymbol.get(targetSymbol.raw);
+
+        // Both sides have an unpushed change to the same symbol with different
+        // resulting shapes — a direct, two-way contradiction. This is the
+        // strongest signal: it compares the actual changes, not just the names.
+        if (
+          selfDelta &&
+          selfDelta.after &&
+          delta.after &&
+          selfDelta.after.raw !== delta.after.raw
+        ) {
+          addConflict(conflicts, {
+            severity: "warn",
+            rule: "contract_divergent",
+            targetSymbol,
+            counterpart,
+            detail:
+              `${counterpart.memberLogin} and you both changed ${targetSymbol.raw} to different contracts: ` +
+              `theirs ${renderSignature(delta.after)} vs yours ${renderSignature(selfDelta.after)}.`,
+            suggestion: "Your changes are incompatible — agree on one final contract before continuing.",
+            change
+          });
+          continue;
+        }
+
+        // Otherwise classify the counterpart's change. Backward-compatible and
+        // no-op changes are demoted to info so they don't add to alarm fatigue.
+        const severity =
+          change.compatibility === "compatible" || change.compatibility === "identical"
+            ? "info"
+            : "warn";
+
         addConflict(conflicts, {
-          severity: "warn",
+          severity,
           rule: "same_symbol_unpushed",
           targetSymbol,
           counterpart,
-          detail: `${counterpart.memberLogin} has an unpushed change to ${delta.symbolId.raw}: ${delta.summary}`,
-          suggestion: "Pull or inspect the counterpart branch, or agree on the final contract."
+          detail:
+            `${counterpart.memberLogin} has ${describeCompatibility(change.compatibility)} to ` +
+            `${delta.symbolId.raw}${renderChange(change)}: ${delta.summary}`,
+          suggestion:
+            severity === "warn"
+              ? "Pull or inspect the counterpart branch, or agree on the final contract."
+              : "Likely safe to proceed; keep the related change in mind.",
+          change
         });
         continue;
       }
@@ -101,7 +149,8 @@ export function evaluateConflicts(context: ConflictCheckContext): Conflict[] {
           targetSymbol,
           counterpart,
           detail: `${counterpart.memberLogin} changed ${delta.symbolId.raw}, which ${targetSymbol.raw} depends on: ${delta.summary}`,
-          suggestion: "Adjust to the new dependency contract or coordinate before editing."
+          suggestion: "Adjust to the new dependency contract or coordinate before editing.",
+          change
         });
       } else if (hops === 2) {
         addConflict(conflicts, {
@@ -110,7 +159,8 @@ export function evaluateConflicts(context: ConflictCheckContext): Conflict[] {
           targetSymbol,
           counterpart,
           detail: `${counterpart.memberLogin} changed ${delta.symbolId.raw}, a transitive dependency of ${targetSymbol.raw}.`,
-          suggestion: "Keep the related change in mind while editing."
+          suggestion: "Keep the related change in mind while editing.",
+          change
         });
       }
     }
@@ -158,9 +208,25 @@ export function evaluateConflicts(context: ConflictCheckContext): Conflict[] {
     }
   }
 
-  return suppressSameFileNoise([...conflicts.values()]).sort(
-    (a, b) => severityRank[b.severity] - severityRank[a.severity]
-  );
+  return suppressSameFileNoise([...conflicts.values()])
+    .sort((a, b) => severityRank[b.severity] - severityRank[a.severity])
+    .map((conflict) => ({
+      ...conflict,
+      explanation: conflict.explanation ?? templateExplanation(conflict),
+      analysis: conflict.analysis ?? deterministicAnalysis(conflict)
+    }));
+}
+
+function selfUnpushedDeltas(context: ConflictCheckContext): Map<string, ContractDelta> {
+  const deltas = new Map<string, ContractDelta>();
+
+  for (const delta of context.state.unpushedDeltas) {
+    if (delta.sessionId === context.selfSessionId && delta.pushedAt === null) {
+      deltas.set(delta.symbolId.raw, delta);
+    }
+  }
+
+  return deltas;
 }
 
 function hasSpecificConflict(
@@ -254,5 +320,22 @@ function fileSymbol(filePath: string): SymbolId {
 export function symbolForFile(filePath: string): SymbolId {
   return fileSymbol(filePath);
 }
+
+export {
+  compareSignatures,
+  contractChangeFor,
+  describeCompatibility,
+  renderChange,
+  renderSignature,
+  type SignatureComparison
+} from "./compare.js";
+export {
+  deterministicAnalysis,
+  enrichConflicts,
+  templateExplanation,
+  type AnalysisContext,
+  type AnalysisProvider,
+  type ConflictAnalysisInput
+} from "./explain.js";
 
 export type { Conflict };
