@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { extractTypeScriptContracts } from "@synapse/analyzer-ts";
 import {
   emptyDependencyGraph,
   evaluateConflicts,
@@ -50,6 +51,9 @@ switch (command) {
     break;
   case "join":
     await runJoin(args.slice(1));
+    break;
+  case "analyze":
+    await runAnalyze(args.slice(1));
     break;
   case "help":
   default:
@@ -278,7 +282,7 @@ async function runSession(rawArgs: string[]): Promise<void> {
 
 async function runJoin(rawArgs: string[]): Promise<void> {
   const config = configFromArgs(rawArgs);
-  const dir = join(process.cwd(), ".synapse");
+  const dir = join(commandCwd(), ".synapse");
   await mkdir(dir, { recursive: true });
   await writeFile(
     join(dir, "config.json"),
@@ -300,6 +304,14 @@ async function runJoin(rawArgs: string[]): Promise<void> {
   console.log(
     `start the daemon with: npm run dev --workspace @synapse/cli -- daemon --member ${config.member} --session ${config.sessionId} --port ${config.daemonPort}`
   );
+}
+
+async function runAnalyze(rawArgs: string[]): Promise<void> {
+  const flags = parseFlags(rawArgs);
+  const filePath = requiredFlag(flags, "file");
+  const source = await readFile(resolve(commandCwd(), filePath), "utf8");
+  const result = extractTypeScriptContracts({ filePath, source });
+  console.log(JSON.stringify(result, null, 2));
 }
 
 function configFromArgs(rawArgs: string[]): RuntimeConfig {
@@ -412,6 +424,10 @@ function agentType(value: string): AgentType {
   return allowed.has(value as AgentType) ? (value as AgentType) : "other";
 }
 
+function commandCwd(): string {
+  return process.env.INIT_CWD ?? process.cwd();
+}
+
 function printHelp(): void {
   console.log(`Synapse CLI
 
@@ -421,10 +437,12 @@ Commands:
   report   Call the local synapse_report endpoint
   session  Start, heartbeat, or end a local session
   join     Write a local .synapse/config.json
+  analyze  Extract TypeScript contract symbols from a file
 
 Examples:
   synapse daemon --member alice --session alice --port 4011
   synapse report --port 4011 --file src/auth/token.ts --symbol ts:src/auth/token.ts#TokenValidator.validate
   synapse check --port 4012 --file src/auth/token.ts --symbol ts:src/auth/token.ts#TokenValidator.validate
+  synapse analyze --file packages/analyzer-ts/src/index.ts
 `);
 }

@@ -77,6 +77,13 @@ export interface ContractDelta {
   pushedAt: string | null;
 }
 
+export interface SymbolChange {
+  symbolId: SymbolId;
+  changeKind: ChangeKind;
+  before: CodeSymbol | null;
+  after: CodeSymbol | null;
+}
+
 export type ContractDeltaSummary = Pick<
   ContractDelta,
   "id" | "symbolId" | "changeKind" | "summary" | "filePath" | "createdAt"

@@ -7,13 +7,7 @@
   },
   "references": [
     {
-      "path": "../../packages/protocol"
-    },
-    {
-      "path": "../../packages/analyzer-ts"
-    },
-    {
-      "path": "../../packages/conflict-engine"
+      "path": "../protocol"
     }
   ],
   "include": [

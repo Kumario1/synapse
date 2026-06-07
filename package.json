@@ -12,6 +12,7 @@
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
     "check": "npm run typecheck && npm test",
+    "verify:analyzer-ts": "npm run build --workspace @synapse/analyzer-ts && npm test --workspace @synapse/analyzer-ts",
     "verify:m0": "npm run build && node scripts/verify-milestone-0.mjs"
   },
   "devDependencies": {
