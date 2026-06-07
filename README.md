@@ -70,6 +70,9 @@ Report an unpushed contract change from Alice:
 npm run dev --workspace @synapse/cli -- report --port 4011 --file src/auth/token.ts --symbol ts:src/auth/token.ts#TokenValidator.validate --summary "TokenValidator.validate now returns Result<Token, AuthError>"
 ```
 
+When `--symbol` is omitted for a TypeScript/JavaScript file, the daemon reads the file, extracts
+contracts locally, compares against its previous snapshot, and reports only public contract changes.
+
 Check the same symbol from Bob:
 
 ```bash
@@ -77,6 +80,12 @@ npm run dev --workspace @synapse/cli -- check --port 4012 --file src/auth/token.
 ```
 
 Expected result: Bob receives a `warn` verdict for `same_symbol_unpushed`.
+
+Verify the automatic TypeScript report path:
+
+```bash
+npm run verify:daemon-ts-report
+```
 
 ## Decisions In Force
 

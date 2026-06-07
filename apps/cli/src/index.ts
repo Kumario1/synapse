@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { join, resolve } from "node:path";
-import { extractTypeScriptContracts } from "@synapse/analyzer-ts";
+import { diffTypeScriptContracts, extractTypeScriptContracts } from "@synapse/analyzer-ts";
 import {
   emptyDependencyGraph,
   evaluateConflicts,
@@ -14,8 +14,10 @@ import {
   createEmptyTeamState,
   PROTOCOL_VERSION,
   type AgentType,
+  type CodeSymbol,
   type ClientMessage,
   type ContractDelta,
+  type ContractDeltaSummary,
   type ServerMessage,
   type Session,
   type SynapseCheckRequest,
@@ -31,6 +33,7 @@ interface RuntimeConfig {
   agentType: AgentType;
   daemonPort: number;
   serverUrl: string;
+  worktreeRoot: string;
 }
 
 const args = process.argv.slice(2);
@@ -64,6 +67,7 @@ switch (command) {
 async function startDaemon(config: RuntimeConfig): Promise<void> {
   let teamState = createEmptyTeamState(config.repoId);
   let socket: WebSocket | null = null;
+  const contractSnapshots = new Map<string, CodeSymbol[]>();
 
   const sendToServer = (type: ClientMessage["type"], payload: unknown): void => {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
@@ -165,34 +169,15 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
           return;
         }
 
-        const symbolId = body.symbolId ?? symbolForFile(body.filePath);
-        const delta: ContractDelta = {
-          id: randomUUID(),
-          repoId: config.repoId,
-          sessionId: config.sessionId,
-          symbolId,
-          changeKind: body.changeKind ?? "signature_changed",
-          before: null,
-          after: null,
-          summary: body.summary ?? `Updated ${symbolId.raw}`,
-          filePath: body.filePath,
-          baseSha: body.baseSha ?? "local",
-          dependents: body.dependents ?? [],
-          createdAt: new Date().toISOString(),
-          pushedAt: null
-        };
+        const deltas = await reportContractChanges(config, contractSnapshots, body);
+        for (const delta of deltas) {
+          sendToServer("contract.delta", { delta });
+        }
 
-        sendToServer("contract.delta", { delta });
         writeJson(response, 200, {
           ok: true,
-          delta: {
-            id: delta.id,
-            symbolId: delta.symbolId,
-            changeKind: delta.changeKind,
-            summary: delta.summary,
-            filePath: delta.filePath,
-            createdAt: delta.createdAt
-          }
+          delta: deltas[0] ? summarizeDelta(deltas[0]) : undefined,
+          deltas: deltas.map(summarizeDelta)
         });
         return;
       }
@@ -259,7 +244,8 @@ async function runReport(rawArgs: string[]): Promise<void> {
     filePath: file,
     symbolId: symbol,
     summary: flags.summary,
-    baseSha: flags["base-sha"]
+    baseSha: flags["base-sha"],
+    changeKind: flags["change-kind"] as SynapseReportRequest["changeKind"] | undefined
   });
   console.log(JSON.stringify(response, null, 2));
 }
@@ -293,6 +279,7 @@ async function runJoin(rawArgs: string[]): Promise<void> {
         daemonPort: config.daemonPort,
         member: config.member,
         agentType: config.agentType,
+        worktreeRoot: config.worktreeRoot,
         createdAt: new Date().toISOString()
       },
       null,
@@ -323,7 +310,10 @@ function configFromArgs(rawArgs: string[]): RuntimeConfig {
     sessionId: flags.session ?? process.env.SYNAPSE_SESSION_ID ?? `${member}-${randomUUID()}`,
     agentType: agentType(flags.agent ?? process.env.SYNAPSE_AGENT ?? "other"),
     daemonPort: Number(flags.port ?? process.env.SYNAPSE_DAEMON_PORT ?? 4011),
-    serverUrl: flags.server ?? process.env.SYNAPSE_SERVER_URL ?? "ws://localhost:4010"
+    serverUrl: flags.server ?? process.env.SYNAPSE_SERVER_URL ?? "ws://localhost:4010",
+    worktreeRoot: resolve(
+      flags["worktree-root"] ?? process.env.SYNAPSE_WORKTREE_ROOT ?? commandCwd()
+    )
   };
 }
 
@@ -352,6 +342,119 @@ function envelope(type: ClientMessage["type"], payload: unknown): ClientMessage 
     ts: new Date().toISOString(),
     payload
   } as ClientMessage;
+}
+
+async function reportContractChanges(
+  config: RuntimeConfig,
+  contractSnapshots: Map<string, CodeSymbol[]>,
+  body: Partial<SynapseReportRequest>
+): Promise<ContractDelta[]> {
+  if (!body.filePath) {
+    return [];
+  }
+
+  const filePath = body.filePath;
+
+  if (body.symbolId || !isTypeScriptLike(filePath)) {
+    const symbolId = body.symbolId ?? symbolForFile(filePath);
+    return [
+      createContractDelta(config, {
+        symbolId,
+        filePath,
+        changeKind: body.changeKind ?? "signature_changed",
+        before: null,
+        after: null,
+        summary: body.summary ?? `Updated ${symbolId.raw}`,
+        baseSha: body.baseSha,
+        dependents: body.dependents
+      })
+    ];
+  }
+
+  const source = await readFile(resolve(config.worktreeRoot, filePath), "utf8");
+  const current = extractTypeScriptContracts({
+    filePath,
+    source
+  }).symbols;
+  const previous = contractSnapshots.get(filePath);
+  contractSnapshots.set(filePath, current);
+
+  if (!previous) {
+    return [];
+  }
+
+  return diffTypeScriptContracts(previous, current).map((change) =>
+    createContractDelta(config, {
+      symbolId: change.symbolId,
+      filePath,
+      changeKind: change.changeKind,
+      before: change.before?.signature ?? null,
+      after: change.after?.signature ?? null,
+      summary: body.summary ?? summarizeSymbolChange(change.changeKind, change.symbolId.raw),
+      baseSha: body.baseSha,
+      dependents: body.dependents
+    })
+  );
+}
+
+function createContractDelta(
+  config: RuntimeConfig,
+  input: Pick<
+    ContractDelta,
+    "symbolId" | "changeKind" | "before" | "after" | "filePath"
+  > & {
+    summary: string;
+    baseSha?: string;
+    dependents?: ContractDelta["dependents"];
+  }
+): ContractDelta {
+  return {
+    id: randomUUID(),
+    repoId: config.repoId,
+    sessionId: config.sessionId,
+    symbolId: input.symbolId,
+    changeKind: input.changeKind,
+    before: input.before,
+    after: input.after,
+    summary: input.summary,
+    filePath: input.filePath,
+    baseSha: input.baseSha ?? "local",
+    dependents: input.dependents ?? [],
+    createdAt: new Date().toISOString(),
+    pushedAt: null
+  };
+}
+
+function summarizeDelta(delta: ContractDelta): ContractDeltaSummary {
+  return {
+    id: delta.id,
+    symbolId: delta.symbolId,
+    changeKind: delta.changeKind,
+    summary: delta.summary,
+    filePath: delta.filePath,
+    createdAt: delta.createdAt
+  };
+}
+
+function summarizeSymbolChange(changeKind: ContractDelta["changeKind"], rawSymbolId: string): string {
+  switch (changeKind) {
+    case "added":
+      return `Added ${rawSymbolId}`;
+    case "removed":
+      return `Removed ${rawSymbolId}`;
+    case "signature_changed":
+      return `Changed signature for ${rawSymbolId}`;
+    case "visibility_changed":
+      return `Changed visibility for ${rawSymbolId}`;
+    case "moved":
+      return `Moved ${rawSymbolId}`;
+    case "renamed":
+      return `Renamed ${rawSymbolId}`;
+  }
+}
+
+function isTypeScriptLike(filePath: string): boolean {
+  return /\.(cts|mts|tsx?|jsx?)$/u.test(filePath);
 }
 
 async function readJson(request: IncomingMessage): Promise<unknown> {

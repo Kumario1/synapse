@@ -177,6 +177,7 @@ export interface SynapseReportRequest {
 export interface SynapseReportResponse {
   ok: true;
   delta?: ContractDeltaSummary;
+  deltas?: ContractDeltaSummary[];
 }
 
 export interface SynapseSessionRequest {
