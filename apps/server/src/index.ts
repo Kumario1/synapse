@@ -126,7 +126,7 @@ function applyMessage(repoId: string, message: ClientMessage): void {
         sha: message.payload.sha,
         pushedAt: now
       });
-      clearPushedDeltas(state, message.payload.files, now);
+      clearPushedLiveState(state, message.payload.files, message.payload.symbols);
       break;
     case "query.briefing":
       break;
@@ -244,11 +244,24 @@ function addRecentPush(state: TeamState, push: RecentPush): void {
   state.recentPushes = state.recentPushes.slice(0, 50);
 }
 
-function clearPushedDeltas(state: TeamState, files: string[], pushedAt: string): void {
+function clearPushedLiveState(
+  state: TeamState,
+  files: string[],
+  symbols: ContractDelta["symbolId"][] = []
+): void {
   const fileSet = new Set(files);
-  state.unpushedDeltas = state.unpushedDeltas.map((delta) =>
-    fileSet.has(delta.filePath) ? { ...delta, pushedAt } : delta
+  const symbolSet = new Set(symbols.map((symbol) => symbol.raw));
+
+  state.unpushedDeltas = state.unpushedDeltas.filter(
+    (delta) => !fileSet.has(delta.filePath) && !symbolSet.has(delta.symbolId.raw)
   );
+  state.editLocks = state.editLocks.filter(
+    (lock) => !fileSet.has(lock.filePath) && !symbolSet.has(lock.symbolId.raw)
+  );
+
+  for (const session of state.sessions) {
+    session.filesEditing = session.filesEditing.filter((filePath) => !fileSet.has(filePath));
+  }
 }
 
 function pruneExpiredLocks(state: TeamState): void {

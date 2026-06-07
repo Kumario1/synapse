@@ -16,6 +16,7 @@
     "verify:daemon-ts-report": "npm run build && node scripts/verify-daemon-ts-report.mjs",
     "verify:dependency-ts-check": "npm run build && node scripts/verify-dependency-ts-check.mjs",
     "verify:file-only-ts-check": "npm run build && node scripts/verify-file-only-ts-check.mjs",
+    "verify:push-state-reset": "npm run build && node scripts/verify-push-state-reset.mjs",
     "verify:m0": "npm run build && node scripts/verify-milestone-0.mjs"
   },
   "devDependencies": {

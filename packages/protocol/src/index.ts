@@ -191,6 +191,21 @@ export interface SynapseSessionResponse {
   sessionId: string;
 }
 
+export interface SynapsePushRequest {
+  repoId: string;
+  sessionId: string;
+  sha: string;
+  summary: string;
+  files: string[];
+  symbols?: SymbolId[];
+}
+
+export interface SynapsePushResponse {
+  ok: true;
+  sha: string;
+  files: string[];
+}
+
 export interface WireEnvelope<TType extends string = string, TPayload = unknown> {
   v: typeof PROTOCOL_VERSION;
   type: TType;
