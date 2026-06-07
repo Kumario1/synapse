@@ -1,13 +1,19 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { join, resolve } from "node:path";
-import { diffTypeScriptContracts, extractTypeScriptContracts } from "@synapse/analyzer-ts";
+import { join, relative, resolve } from "node:path";
+import {
+  diffTypeScriptContracts,
+  extractTypeScriptContracts,
+  extractTypeScriptDependencyGraph
+} from "@synapse/analyzer-ts";
 import {
   emptyDependencyGraph,
   evaluateConflicts,
   symbolForFile,
+  type DependencyGraph,
+  type DependencyHop,
   verdictFor
 } from "@synapse/conflict-engine";
 import {
@@ -143,11 +149,12 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
           });
         }
 
+        const graph = await buildDependencyGraph(config);
         const conflicts = evaluateConflicts({
           selfSessionId: config.sessionId,
           targets,
           state: teamState,
-          graph: emptyDependencyGraph
+          graph
         });
 
         writeJson(response, 200, {
@@ -373,6 +380,52 @@ async function resolveCheckTargets(
   return targets;
 }
 
+async function buildDependencyGraph(config: RuntimeConfig): Promise<DependencyGraph> {
+  const files = await readTypeScriptFiles(config.worktreeRoot);
+  if (files.length === 0) {
+    return emptyDependencyGraph;
+  }
+
+  const graph = extractTypeScriptDependencyGraph({ files });
+  const adjacency = new Map<string, ContractDelta["symbolId"][]>();
+
+  for (const edge of graph.edges) {
+    const dependencies = adjacency.get(edge.from.raw) ?? [];
+    dependencies.push(edge.to);
+    adjacency.set(edge.from.raw, dependencies);
+  }
+
+  return {
+    dependenciesOf(symbolId, maxHops): DependencyHop[] {
+      const result: DependencyHop[] = [];
+      const seen = new Set<string>([symbolId.raw]);
+      const queue: { symbolId: ContractDelta["symbolId"]; hops: number }[] = [
+        { symbolId, hops: 0 }
+      ];
+
+      while (queue.length > 0) {
+        const current = queue.shift();
+        if (!current || current.hops >= maxHops) {
+          continue;
+        }
+
+        for (const dependency of adjacency.get(current.symbolId.raw) ?? []) {
+          if (seen.has(dependency.raw)) {
+            continue;
+          }
+
+          const hops = current.hops + 1;
+          seen.add(dependency.raw);
+          result.push({ symbolId: dependency, hops });
+          queue.push({ symbolId: dependency, hops });
+        }
+      }
+
+      return result;
+    }
+  };
+}
+
 async function reportContractChanges(
   config: RuntimeConfig,
   contractSnapshots: Map<string, CodeSymbol[]>,
@@ -488,6 +541,50 @@ async function extractSymbolsForFile(config: RuntimeConfig, filePath: string): P
     filePath,
     source
   }).symbols;
+}
+
+async function readTypeScriptFiles(
+  root: string,
+  currentDir: string = root
+): Promise<{ filePath: string; source: string }[]> {
+  const entries = await readdir(currentDir, { withFileTypes: true });
+  const files: { filePath: string; source: string }[] = [];
+
+  for (const entry of entries) {
+    const fullPath = join(currentDir, entry.name);
+    if (entry.isDirectory()) {
+      if (ignoredDirectory(entry.name)) {
+        continue;
+      }
+
+      files.push(...(await readTypeScriptFiles(root, fullPath)));
+      continue;
+    }
+
+    if (!entry.isFile()) {
+      continue;
+    }
+
+    const filePath = normalizePath(relative(root, fullPath));
+    if (!isTypeScriptLike(filePath)) {
+      continue;
+    }
+
+    files.push({
+      filePath,
+      source: await readFile(fullPath, "utf8")
+    });
+  }
+
+  return files;
+}
+
+function ignoredDirectory(name: string): boolean {
+  return new Set([".git", ".turbo", ".synapse", "dist", "node_modules", "coverage"]).has(name);
+}
+
+function normalizePath(filePath: string): string {
+  return filePath.replaceAll("\\", "/");
 }
 
 async function readJson(request: IncomingMessage): Promise<unknown> {

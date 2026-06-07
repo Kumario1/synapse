@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  extractTypeScriptDependencyGraph,
   diffTypeScriptContracts,
   extractTypeScriptContracts
 } from "./index.js";
@@ -117,6 +118,46 @@ test("emits signature changes and added symbols", () => {
     [
       ["added", "ts:src/auth/token.ts#Token"],
       ["signature_changed", "ts:src/auth/token.ts#validate"]
+    ]
+  );
+});
+
+test("extracts dependency edges from relative named imports", () => {
+  const graph = extractTypeScriptDependencyGraph({
+    files: [
+      {
+        filePath: "src/auth/token.ts",
+        source: `
+          export interface Token {
+            value: string;
+          }
+
+          export function validate(input: string): Token | null {
+            return input ? { value: input } : null;
+          }
+        `
+      },
+      {
+        filePath: "src/auth/login.ts",
+        source: `
+          import { validate as validateToken } from "./token";
+
+          export function login(input: string): boolean {
+            return validateToken(input) !== null;
+          }
+        `
+      }
+    ]
+  });
+
+  assert.deepEqual(
+    graph.edges.map((edge) => [edge.from.raw, edge.to.raw, edge.kind]),
+    [
+      [
+        "ts:src/auth/login.ts#login",
+        "ts:src/auth/token.ts#validate",
+        "references"
+      ]
     ]
   );
 });
