@@ -48,10 +48,10 @@ weekend toy and copyable in an afternoon.
 │                      SYNAPSE SERVER (the shared brain)                  │
 │                                                                         │
 │  ┌────────────────┐  ┌──────────────────┐  ┌────────────────────────┐  │
-│  │  MCP Gateway   │  │ Conflict Engine  │  │ Distillation Pipeline   │  │
+│  │  MCP Gateway   │  │ Conflict Engine  │  │ Analysis Pipeline       │  │
 │  │ (tools agents  │  │ • dependency     │  │ • diff → contract delta │  │
-│  │  call directly)│  │   graph          │  │ • tree-sitter + LLM     │  │
-│  │                │  │ • symbol overlap │  │   (Haiku via Gateway)   │  │
+│  │  call directly)│  │   graph          │  │ • deterministic AST     │  │
+│  │                │  │ • symbol overlap │  │ • optional OpenRouter   │  │
 │  └───────┬────────┘  │ • severity score │  └───────────┬─────────────┘  │
 │          │           └────────┬─────────┘              │                │
 │  ┌───────▼────────────────────▼──────────────────────▼─────────────┐   │
@@ -109,8 +109,9 @@ This is what separates Synapse from a filename-collision toy.
   schema/migrations, env/config keys.
 - Diff the *before* and *after* contract → a structured **contract delta** (e.g.
   `auth.TokenValidator.validate: (str) -> Optional[Token]  ⇒  (str) -> Result[Token, AuthError]`).
-- The LLM (Haiku via AI Gateway) is used only to write the **human-readable summary** of the delta,
-  not to detect it — detection is deterministic AST diffing. Cheaper, faster, no hallucinated contracts.
+- Detection and compatibility classification are deterministic AST/signature diffing. The optional
+  LLM layer (OpenRouter over plain HTTP) only upgrades the already-computed conflict analysis into
+  side-addressed actions; with no key configured, the deterministic action plan is the final output.
 - Languages at launch (proposal): TypeScript/JS, Python, Go. Extensible via tree-sitter grammars.
 
 ### 2.3 Dependency / Symbol Graph
@@ -127,6 +128,9 @@ This is what separates Synapse from a filename-collision toy.
   deltas, recent pushes) + the dependency graph.
 - Output: a **severity-scored** verdict, not a binary. e.g. `none` (proceed silently) /
   `info` / `warn` (surface inline) / `block-suggest` (recommend the agent pause & coordinate).
+- Every conflict carries a structured `change` plus `analysis`: an assessment, recommendation
+  (`block` / `warn` / `info` / `proceed`), and concrete actions for `you`, the `counterpart`, or
+  `both`.
 - Severity rules (initial): same-symbol concurrent edit = high; dependent-symbol contract change
   unpushed = high; same-file different-symbol = low; reads = none.
 - **Tunable + learns**: track whether surfaced warnings were acted on, to fight alarm fatigue
@@ -147,7 +151,7 @@ This is what separates Synapse from a filename-collision toy.
 
 ### 2.7 Briefing Service (Layer II)
 - `synapse whatsup` MCP tool + proactive session-start push.
-- Batch summarization (Haiku via AI Gateway) on session end — never in the edit hot path.
+- Batch summarization (optional OpenRouter model) on session end — never in the edit hot path.
 
 ### 2.8 Memory / RAG Service (Layer III)
 - Ingest distilled session summaries, PR decisions, flagged Slack threads → embed → pgvector.
@@ -171,7 +175,7 @@ This is what separates Synapse from a filename-collision toy.
 | Durable store        | Postgres (Neon, Vercel Marketplace) + pgvector   | SQLite                        |
 | Code parsing         | tree-sitter (TS/JS, Python, Go grammars)         | filename match only           |
 | Dep graph            | tree-sitter queries → SCIP later                 | none (file-level)             |
-| LLM (distill/brief)  | Claude Haiku via **Vercel AI Gateway**           | direct Anthropic SDK          |
+| LLM (analysis/brief) | OpenRouter over plain `fetch` (`SYNAPSE_LLM_MODEL`, default Claude Haiku) | deterministic offline analysis |
 | GitHub               | GitHub App + Octokit + webhooks                  | poll API                      |
 | Realtime transport   | WebSocket (WSS) + SSE fallback                   | HTTP polling                  |
 | Hosting              | Vercel (server + dashboard, Fluid Compute)       | Fly.io / Railway              |
@@ -218,7 +222,7 @@ Symbol/import graph for transitive conflicts; Cursor/Cline support via MCP tools
 webhooks for state reset on push; severity tuning + acted-on telemetry.
 
 **Milestone 3 — Briefings (Layer II) (weeks 6–9)**
-Session-end summarization (Haiku via Gateway); `synapse whatsup`; morning push on session start;
+Session-end summarization (optional OpenRouter model); `synapse whatsup`; morning push on session start;
 PR ingestion into briefings.
 
 **Milestone 4 — Memory (Layer III) (when validated)**
@@ -266,4 +270,3 @@ definition, multi-repo, pricing, name — are tracked in `synapse-context.md` §
 > native-tool-per-language behind one uniform JSON-RPC protocol; Python remains the home for the
 > shared graph model and future ML/embeddings. This is the correct reading of "robust," not a deviation.
 ```
-
