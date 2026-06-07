@@ -28,6 +28,7 @@ apps/
   cli/          local daemon plus CLI commands
   server/       local websocket fanout server
 packages/
+  analyzer-ts/ TypeScript contract extraction
   protocol/     shared wire, state, and symbol types
   conflict-engine/
                 pure conflict evaluator
@@ -41,6 +42,13 @@ Prerequisite: Node.js 20+ and npm.
 npm install
 npm run build
 npm test
+```
+
+Inspect TypeScript contracts from a file:
+
+```bash
+npm run build
+npm run dev --workspace @synapse/cli -- analyze --file packages/analyzer-ts/src/index.ts
 ```
 
 Start the local coordination server:
