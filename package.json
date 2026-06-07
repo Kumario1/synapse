@@ -14,6 +14,7 @@
     "check": "npm run typecheck && npm test",
     "verify:analyzer-ts": "npm run build --workspace @synapse/analyzer-ts && npm test --workspace @synapse/analyzer-ts",
     "verify:daemon-ts-report": "npm run build && node scripts/verify-daemon-ts-report.mjs",
+    "verify:file-only-ts-check": "npm run build && node scripts/verify-file-only-ts-check.mjs",
     "verify:m0": "npm run build && node scripts/verify-milestone-0.mjs"
   },
   "devDependencies": {

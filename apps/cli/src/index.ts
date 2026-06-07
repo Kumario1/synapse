@@ -132,11 +132,7 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
 
       if (request.method === "POST" && url.pathname === "/tools/synapse_check") {
         const body = (await readJson(request)) as Partial<SynapseCheckRequest>;
-        const files = body.files ?? [];
-        const targets = files.map((filePath, index) => ({
-          filePath,
-          symbolId: body.symbols?.[index] ?? symbolForFile(filePath)
-        }));
+        const targets = await resolveCheckTargets(config, body);
 
         for (const target of targets) {
           sendToServer("edit.intent", {
@@ -344,6 +340,39 @@ function envelope(type: ClientMessage["type"], payload: unknown): ClientMessage 
   } as ClientMessage;
 }
 
+async function resolveCheckTargets(
+  config: RuntimeConfig,
+  body: Partial<SynapseCheckRequest>
+): Promise<{ filePath: string; symbolId: ContractDelta["symbolId"] }[]> {
+  const files = body.files ?? [];
+  const targets: { filePath: string; symbolId: ContractDelta["symbolId"] }[] = [];
+
+  for (const [index, filePath] of files.entries()) {
+    const explicitSymbol = body.symbols?.[index];
+    if (explicitSymbol) {
+      targets.push({ filePath, symbolId: explicitSymbol });
+      continue;
+    }
+
+    if (!isTypeScriptLike(filePath)) {
+      targets.push({ filePath, symbolId: symbolForFile(filePath) });
+      continue;
+    }
+
+    const symbols = await extractSymbolsForFile(config, filePath);
+    if (symbols.length === 0) {
+      targets.push({ filePath, symbolId: symbolForFile(filePath) });
+      continue;
+    }
+
+    for (const symbol of symbols) {
+      targets.push({ filePath, symbolId: symbol.id });
+    }
+  }
+
+  return targets;
+}
+
 async function reportContractChanges(
   config: RuntimeConfig,
   contractSnapshots: Map<string, CodeSymbol[]>,
@@ -371,11 +400,7 @@ async function reportContractChanges(
     ];
   }
 
-  const source = await readFile(resolve(config.worktreeRoot, filePath), "utf8");
-  const current = extractTypeScriptContracts({
-    filePath,
-    source
-  }).symbols;
+  const current = await extractSymbolsForFile(config, filePath);
   const previous = contractSnapshots.get(filePath);
   contractSnapshots.set(filePath, current);
 
@@ -455,6 +480,14 @@ function summarizeSymbolChange(changeKind: ContractDelta["changeKind"], rawSymbo
 
 function isTypeScriptLike(filePath: string): boolean {
   return /\.(cts|mts|tsx?|jsx?)$/u.test(filePath);
+}
+
+async function extractSymbolsForFile(config: RuntimeConfig, filePath: string): Promise<CodeSymbol[]> {
+  const source = await readFile(resolve(config.worktreeRoot, filePath), "utf8");
+  return extractTypeScriptContracts({
+    filePath,
+    source
+  }).symbols;
 }
 
 async function readJson(request: IncomingMessage): Promise<unknown> {
