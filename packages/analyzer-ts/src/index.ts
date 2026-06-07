@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { dirname, posix } from "node:path";
 import {
   ClassDeclaration,
   EnumDeclaration,
@@ -9,6 +10,7 @@ import {
   Node,
   Project,
   ScriptTarget,
+  SyntaxKind,
   TypeAliasDeclaration,
   VariableDeclaration,
   type PropertyDeclaration,
@@ -32,31 +34,83 @@ export interface ExtractTypeScriptContractsResult {
   symbols: CodeSymbol[];
 }
 
+export interface ExtractTypeScriptDependencyGraphInput {
+  files: ExtractTypeScriptContractsInput[];
+}
+
+export interface TypeScriptDependencyEdge {
+  from: SymbolId;
+  to: SymbolId;
+  kind: "references";
+}
+
+export interface ExtractTypeScriptDependencyGraphResult {
+  symbols: CodeSymbol[];
+  edges: TypeScriptDependencyEdge[];
+}
+
 export function extractTypeScriptContracts(
   input: ExtractTypeScriptContractsInput
 ): ExtractTypeScriptContractsResult {
-  const project = new Project({
-    useInMemoryFileSystem: true,
-    compilerOptions: {
-      allowJs: true,
-      target: ScriptTarget.ES2022,
-      module: ModuleKind.ESNext,
-      strict: true
-    }
-  });
+  const project = createProject();
   const sourceFile = project.createSourceFile(input.filePath, input.source, { overwrite: true });
-  const symbols = new Map<string, CodeSymbol>();
 
-  for (const declarations of sourceFile.getExportedDeclarations().values()) {
-    for (const declaration of declarations) {
-      for (const symbol of symbolsForDeclaration(sourceFile, input.filePath, declaration)) {
-        symbols.set(symbol.id.raw, symbol);
+  return {
+    symbols: extractSymbolsFromSourceFile(sourceFile, input.filePath)
+  };
+}
+
+export function extractTypeScriptDependencyGraph(
+  input: ExtractTypeScriptDependencyGraphInput
+): ExtractTypeScriptDependencyGraphResult {
+  const project = createProject();
+  const fileSymbols = new Map<string, CodeSymbol[]>();
+  const symbolById = new Map<string, CodeSymbol>();
+
+  for (const file of input.files) {
+    const sourceFile = project.createSourceFile(file.filePath, file.source, { overwrite: true });
+    const symbols = extractSymbolsFromSourceFile(sourceFile, file.filePath);
+    fileSymbols.set(normalizePath(file.filePath), symbols);
+    for (const symbol of symbols) {
+      symbolById.set(symbol.id.raw, symbol);
+    }
+  }
+
+  const edges = new Map<string, TypeScriptDependencyEdge>();
+
+  for (const file of input.files) {
+    const filePath = normalizePath(file.filePath);
+    const sourceFile = project.getSourceFileOrThrow(filePath);
+    const imports = importedSymbolMap(sourceFile, filePath, fileSymbols);
+    const symbols = fileSymbols.get(filePath) ?? [];
+
+    for (const symbol of symbols) {
+      const node = nodeForSymbol(sourceFile, symbol);
+      if (!node) {
+        continue;
+      }
+
+      for (const identifier of node.getDescendantsOfKind(SyntaxKind.Identifier)) {
+        const imported = imports.get(identifier.getText());
+        if (!imported || imported.raw === symbol.id.raw) {
+          continue;
+        }
+
+        const key = `${symbol.id.raw}->${imported.raw}`;
+        edges.set(key, {
+          from: symbol.id,
+          to: imported,
+          kind: "references"
+        });
       }
     }
   }
 
   return {
-    symbols: [...symbols.values()].sort((a, b) => a.id.raw.localeCompare(b.id.raw))
+    symbols: [...symbolById.values()].sort((a, b) => a.id.raw.localeCompare(b.id.raw)),
+    edges: [...edges.values()].sort((a, b) =>
+      `${a.from.raw}->${a.to.raw}`.localeCompare(`${b.from.raw}->${b.to.raw}`)
+    )
   };
 }
 
@@ -112,6 +166,132 @@ export function diffTypeScriptContracts(
   }
 
   return changes.sort((a, b) => a.symbolId.raw.localeCompare(b.symbolId.raw));
+}
+
+function createProject(): Project {
+  return new Project({
+    useInMemoryFileSystem: true,
+    compilerOptions: {
+      allowJs: true,
+      target: ScriptTarget.ES2022,
+      module: ModuleKind.ESNext,
+      strict: true
+    }
+  });
+}
+
+function extractSymbolsFromSourceFile(sourceFile: SourceFile, filePath: string): CodeSymbol[] {
+  const symbols = new Map<string, CodeSymbol>();
+
+  for (const declarations of sourceFile.getExportedDeclarations().values()) {
+    for (const declaration of declarations) {
+      for (const symbol of symbolsForDeclaration(sourceFile, filePath, declaration)) {
+        symbols.set(symbol.id.raw, symbol);
+      }
+    }
+  }
+
+  return [...symbols.values()].sort((a, b) => a.id.raw.localeCompare(b.id.raw));
+}
+
+function importedSymbolMap(
+  sourceFile: SourceFile,
+  filePath: string,
+  fileSymbols: Map<string, CodeSymbol[]>
+): Map<string, SymbolId> {
+  const imports = new Map<string, SymbolId>();
+
+  for (const declaration of sourceFile.getImportDeclarations()) {
+    const targetPath = resolveRelativeModule(
+      filePath,
+      declaration.getModuleSpecifierValue(),
+      fileSymbols
+    );
+    if (!targetPath) {
+      continue;
+    }
+
+    const targetSymbols = fileSymbols.get(targetPath) ?? [];
+
+    for (const namedImport of declaration.getNamedImports()) {
+      const importedName = namedImport.getName();
+      const localName = namedImport.getAliasNode()?.getText() ?? importedName;
+      const targetSymbol = targetSymbols.find((symbol) => symbol.name === importedName);
+      if (targetSymbol) {
+        imports.set(localName, targetSymbol.id);
+      }
+    }
+
+    const defaultImport = declaration.getDefaultImport();
+    if (defaultImport) {
+      const targetSymbol = targetSymbols.find((symbol) => symbol.name === "default");
+      if (targetSymbol) {
+        imports.set(defaultImport.getText(), targetSymbol.id);
+      }
+    }
+  }
+
+  return imports;
+}
+
+function resolveRelativeModule(
+  fromFilePath: string,
+  moduleSpecifier: string,
+  fileSymbols: Map<string, CodeSymbol[]>
+): string | null {
+  if (!moduleSpecifier.startsWith(".")) {
+    return null;
+  }
+
+  const base = normalizePath(posix.join(dirname(normalizePath(fromFilePath)), moduleSpecifier));
+  const candidates = [
+    base,
+    `${base}.ts`,
+    `${base}.tsx`,
+    `${base}.mts`,
+    `${base}.cts`,
+    `${base}.js`,
+    `${base}.jsx`,
+    `${base}/index.ts`,
+    `${base}/index.tsx`
+  ];
+
+  return candidates.find((candidate) => fileSymbols.has(candidate)) ?? null;
+}
+
+function nodeForSymbol(sourceFile: SourceFile, symbol: CodeSymbol): Node | null {
+  if (symbol.name.includes(".")) {
+    const [className, memberName] = symbol.name.split(".", 2);
+    const classDeclaration = sourceFile.getClass(className);
+    const member = classDeclaration
+      ?.getMembers()
+      .find(
+        (candidate) =>
+          (Node.isMethodDeclaration(candidate) || Node.isPropertyDeclaration(candidate)) &&
+          candidate.getName() === memberName
+      );
+    return member ?? null;
+  }
+
+  switch (symbol.kind) {
+    case "function":
+      return sourceFile.getFunction(symbol.name) ?? null;
+    case "class":
+      return sourceFile.getClass(symbol.name) ?? null;
+    case "interface":
+      return sourceFile.getInterface(symbol.name) ?? null;
+    case "type":
+      return sourceFile.getTypeAlias(symbol.name) ?? null;
+    case "enum":
+      return sourceFile.getEnum(symbol.name) ?? null;
+    case "const":
+      return sourceFile.getVariableDeclaration(symbol.name) ?? null;
+    case "field":
+    case "method":
+    case "route":
+    case "schema":
+      return null;
+  }
 }
 
 function symbolsForDeclaration(

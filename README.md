@@ -93,6 +93,13 @@ Verify that a check with only a TypeScript file path can still find symbol-level
 npm run verify:file-only-ts-check
 ```
 
+Verify that a checked TypeScript file warns when it depends on another file's unpushed contract
+change:
+
+```bash
+npm run verify:dependency-ts-check
+```
+
 ## Decisions In Force
 
 These are already resolved in the planning docs and should guide implementation unless we explicitly revise them:
