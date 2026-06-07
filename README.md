@@ -100,6 +100,13 @@ change:
 npm run verify:dependency-ts-check
 ```
 
+Notify Synapse that pushed files should leave live unpushed state:
+
+```bash
+npm run dev --workspace @synapse/cli -- push --port 4011 --file src/auth/token.ts --sha abc123 --summary "Pushed auth token changes"
+npm run verify:push-state-reset
+```
+
 ## Decisions In Force
 
 These are already resolved in the planning docs and should guide implementation unless we explicitly revise them:

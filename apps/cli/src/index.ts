@@ -27,6 +27,7 @@ import {
   type ServerMessage,
   type Session,
   type SynapseCheckRequest,
+  type SynapsePushRequest,
   type SynapseReportRequest,
   type SynapseSessionRequest
 } from "@synapse/protocol";
@@ -54,6 +55,9 @@ switch (command) {
     break;
   case "report":
     await runReport(args.slice(1));
+    break;
+  case "push":
+    await runPush(args.slice(1));
     break;
   case "session":
     await runSession(args.slice(1));
@@ -185,6 +189,32 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
         return;
       }
 
+      if (request.method === "POST" && url.pathname === "/tools/synapse_push") {
+        const body = (await readJson(request)) as Partial<SynapsePushRequest>;
+        const files = body.files ?? [];
+        if (files.length === 0) {
+          writeJson(response, 400, { error: "files is required" });
+          return;
+        }
+
+        const sha = body.sha ?? "local";
+        sendToServer("push.notify", {
+          repoId: config.repoId,
+          memberId: config.member,
+          sha,
+          summary: body.summary ?? `Pushed ${files.join(", ")}`,
+          files,
+          symbols: body.symbols
+        });
+
+        writeJson(response, 200, {
+          ok: true,
+          sha,
+          files
+        });
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/tools/synapse_session") {
         const body = (await readJson(request)) as Partial<SynapseSessionRequest>;
         const action = body.action ?? "heartbeat";
@@ -249,6 +279,31 @@ async function runReport(rawArgs: string[]): Promise<void> {
     summary: flags.summary,
     baseSha: flags["base-sha"],
     changeKind: flags["change-kind"] as SynapseReportRequest["changeKind"] | undefined
+  });
+  console.log(JSON.stringify(response, null, 2));
+}
+
+async function runPush(rawArgs: string[]): Promise<void> {
+  const flags = parseFlags(rawArgs);
+  const port = Number(flags.port ?? process.env.SYNAPSE_DAEMON_PORT ?? 4011);
+  const files = filesFromFlags(flags);
+  if (files.length === 0) {
+    throw new Error("--file or --files is required");
+  }
+
+  const symbols = flags.symbols
+    ? flags.symbols.split(",").map((raw) => ({ raw: raw.trim() })).filter((symbol) => symbol.raw)
+    : flags.symbol
+      ? [{ raw: flags.symbol }]
+      : undefined;
+
+  const response = await postJson(`http://localhost:${port}/tools/synapse_push`, {
+    repoId: flags["repo-id"] ?? process.env.SYNAPSE_REPO_ID ?? "local",
+    sessionId: flags.session ?? process.env.SYNAPSE_SESSION_ID ?? "local",
+    sha: flags.sha ?? "local",
+    summary: flags.summary ?? `Pushed ${files.join(", ")}`,
+    files,
+    symbols
   });
   console.log(JSON.stringify(response, null, 2));
 }
@@ -652,6 +707,16 @@ function requiredFlag(flags: Record<string, string>, name: string): string {
   return value;
 }
 
+function filesFromFlags(flags: Record<string, string>): string[] {
+  const values = [flags.file, flags.files].filter((value): value is string => Boolean(value));
+  return values.flatMap((value) =>
+    value
+      .split(",")
+      .map((file) => file.trim())
+      .filter(Boolean)
+  );
+}
+
 function agentType(value: string): AgentType {
   const allowed = new Set<AgentType>(["claude-code", "cursor", "cline", "aider", "other"]);
   return allowed.has(value as AgentType) ? (value as AgentType) : "other";
@@ -668,6 +733,7 @@ Commands:
   daemon   Start the local daemon
   check    Call the local synapse_check endpoint
   report   Call the local synapse_report endpoint
+  push     Notify Synapse that files were pushed
   session  Start, heartbeat, or end a local session
   join     Write a local .synapse/config.json
   analyze  Extract TypeScript contract symbols from a file
@@ -675,6 +741,7 @@ Commands:
 Examples:
   synapse daemon --member alice --session alice --port 4011
   synapse report --port 4011 --file src/auth/token.ts --symbol ts:src/auth/token.ts#TokenValidator.validate
+  synapse push --port 4011 --file src/auth/token.ts --sha abc123 --summary "Pushed auth token changes"
   synapse check --port 4012 --file src/auth/token.ts --symbol ts:src/auth/token.ts#TokenValidator.validate
   synapse analyze --file packages/analyzer-ts/src/index.ts
 `);
