@@ -107,6 +107,43 @@ npm run dev --workspace @synapse/cli -- push --port 4011 --file src/auth/token.t
 npm run verify:push-state-reset
 ```
 
+## Contract-Level Conflict Classification
+
+A check no longer just reports that two agents touched the same symbol — it compares the
+actual `before`/`after` signatures and classifies whether the change is really a conflict:
+
+- The deterministic comparator (`compareSignatures` in `@synapse/conflict-engine`) labels each
+  change `breaking`, `compatible`, `identical`, or `unknown` and lists concrete reasons.
+- Each `Conflict` carries a structured `change` (the real before -> after) and an `analysis` —
+  an actionable, both-sides verdict: an `assessment`, a `recommendation`
+  (`block`/`warn`/`info`/`proceed`), and `actions` addressed to each side (`you` /
+  `counterpart` / `both`). Backward-compatible changes are demoted to `info`; breaking and
+  unclassifiable changes stay `warn`.
+- When both agents have an unpushed change to the same symbol with different resulting shapes, the
+  engine raises `contract_divergent` — the strongest "you two must agree" signal.
+
+```bash
+npm run verify:contract-compat
+```
+
+### Optional LLM analysis (OpenRouter)
+
+Detection stays fully deterministic. An optional layer turns the conflict — including the **code
+diffs from both sides** — into a richer, task-aware actionable analysis. It runs through
+[OpenRouter](https://openrouter.ai) (any chat model) over plain HTTP, so there is no extra SDK
+dependency and it never affects the verdict.
+
+Set the key in one place (`.env`, see `.env.example`) and start the daemon with Node's env-file
+support:
+
+```bash
+cp .env.example .env   # then paste your OPENROUTER_API_KEY
+node --env-file=.env apps/cli/dist/index.js daemon --member bob --session bob --port 4012
+```
+
+The model defaults to `anthropic/claude-haiku-4.5` (per the build plan) and is overridable via
+`SYNAPSE_LLM_MODEL`. With no key set, the daemon runs fully offline on the deterministic analysis.
+
 ## Decisions In Force
 
 These are already resolved in the planning docs and should guide implementation unless we explicitly revise them:
