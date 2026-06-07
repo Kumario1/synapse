@@ -158,7 +158,7 @@ export function evaluateConflicts(context: ConflictCheckContext): Conflict[] {
     }
   }
 
-  return [...conflicts.values()].sort(
+  return suppressSameFileNoise([...conflicts.values()]).sort(
     (a, b) => severityRank[b.severity] - severityRank[a.severity]
   );
 }
@@ -173,6 +173,20 @@ function hasSpecificConflict(
       conflict.targetSymbol.raw === targetSymbol.raw &&
       conflict.counterpart.sessionId === sessionId &&
       conflict.rule !== "same_file_no_overlap"
+  );
+}
+
+function suppressSameFileNoise(conflicts: Conflict[]): Conflict[] {
+  const sessionsWithSpecificConflicts = new Set(
+    conflicts
+      .filter((conflict) => conflict.rule !== "same_file_no_overlap")
+      .map((conflict) => conflict.counterpart.sessionId)
+  );
+
+  return conflicts.filter(
+    (conflict) =>
+      conflict.rule !== "same_file_no_overlap" ||
+      !sessionsWithSpecificConflicts.has(conflict.counterpart.sessionId)
   );
 }
 
