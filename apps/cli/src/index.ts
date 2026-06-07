@@ -9,24 +9,30 @@ import {
   extractTypeScriptDependencyGraph
 } from "@synapse/analyzer-ts";
 import {
+  contractChangeFor,
   emptyDependencyGraph,
+  enrichConflicts,
   evaluateConflicts,
   symbolForFile,
   type DependencyGraph,
   type DependencyHop,
   verdictFor
 } from "@synapse/conflict-engine";
+import { createOpenRouterAnalysisProvider } from "./explain-openrouter.js";
 import {
   createEmptyTeamState,
   PROTOCOL_VERSION,
   type AgentType,
   type CodeSymbol,
   type ClientMessage,
+  type ContractChange,
   type ContractDelta,
   type ContractDeltaSummary,
   type ServerMessage,
   type Session,
+  type Signature,
   type SynapseCheckRequest,
+  type TeamState,
   type SynapsePushRequest,
   type SynapseReportRequest,
   type SynapseSessionRequest
@@ -78,6 +84,9 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
   let teamState = createEmptyTeamState(config.repoId);
   let socket: WebSocket | null = null;
   const contractSnapshots = new Map<string, CodeSymbol[]>();
+  // Optional LLM analysis layer (Rung 5). Null unless OPENROUTER_API_KEY is
+  // set; detection stays deterministic either way.
+  const analysisProvider = createOpenRouterAnalysisProvider();
 
   const sendToServer = (type: ClientMessage["type"], payload: unknown): void => {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
@@ -161,9 +170,19 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
           graph
         });
 
+        // Verdict is already decided deterministically; the analysis layer only
+        // enriches the actionable steps and falls back silently on any failure.
+        const explained = analysisProvider
+          ? await enrichConflicts(conflicts, analysisProvider, {
+              task: body.task,
+              selfSignatureBySymbol: selfSignatures(targets),
+              selfChangeBySymbol: selfChanges(teamState, config.sessionId)
+            })
+          : conflicts;
+
         writeJson(response, 200, {
           verdict: verdictFor(conflicts),
-          conflicts,
+          conflicts: explained,
           degraded: socket?.readyState !== WebSocket.OPEN
         });
         return;
@@ -402,12 +421,19 @@ function envelope(type: ClientMessage["type"], payload: unknown): ClientMessage 
   } as ClientMessage;
 }
 
+interface CheckTarget {
+  filePath: string;
+  symbolId: ContractDelta["symbolId"];
+  /** The checking agent's current local signature for the symbol, if known. */
+  selfSignature?: Signature | null;
+}
+
 async function resolveCheckTargets(
   config: RuntimeConfig,
   body: Partial<SynapseCheckRequest>
-): Promise<{ filePath: string; symbolId: ContractDelta["symbolId"] }[]> {
+): Promise<CheckTarget[]> {
   const files = body.files ?? [];
-  const targets: { filePath: string; symbolId: ContractDelta["symbolId"] }[] = [];
+  const targets: CheckTarget[] = [];
 
   for (const [index, filePath] of files.entries()) {
     const explicitSymbol = body.symbols?.[index];
@@ -428,11 +454,33 @@ async function resolveCheckTargets(
     }
 
     for (const symbol of symbols) {
-      targets.push({ filePath, symbolId: symbol.id });
+      targets.push({ filePath, symbolId: symbol.id, selfSignature: symbol.signature });
     }
   }
 
   return targets;
+}
+
+/** The checking agent's local signature per symbol, for both-sides analysis. */
+function selfSignatures(targets: CheckTarget[]): Map<string, Signature | null> {
+  const signatures = new Map<string, Signature | null>();
+  for (const target of targets) {
+    signatures.set(target.symbolId.raw, target.selfSignature ?? null);
+  }
+
+  return signatures;
+}
+
+/** The checking agent's own unpushed change per symbol, for both-sides analysis. */
+function selfChanges(state: TeamState, selfSessionId: string): Map<string, ContractChange | null> {
+  const changes = new Map<string, ContractChange | null>();
+  for (const delta of state.unpushedDeltas) {
+    if (delta.sessionId === selfSessionId && delta.pushedAt === null) {
+      changes.set(delta.symbolId.raw, contractChangeFor(delta));
+    }
+  }
+
+  return changes;
 }
 
 async function buildDependencyGraph(config: RuntimeConfig): Promise<DependencyGraph> {

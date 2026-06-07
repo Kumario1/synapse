@@ -144,7 +144,8 @@ Extracts: module-level `def` (params + annotations + return annotation), class p
 attributes, dataclass/Pydantic model fields, and — phase 2 — FastAPI/Flask route decorators.
 tree-sitter gives fast structural parse; pyright/jedi give cross-file reference resolution.
 
-**Detection is deterministic AST diffing — never the LLM.** The LLM only writes the human summary (§12).
+**Detection is deterministic AST/signature diffing — never the LLM.** The optional LLM layer only
+upgrades already-detected conflicts into richer, side-addressed action plans (§12).
 
 ---
 
@@ -195,7 +196,7 @@ interface ContractDelta {
   changeKind: ChangeKind;
   before: Signature | null;
   after: Signature | null;
-  summary: string;               // LLM-written, e.g. "validate() now returns Result<Token,AuthError>"
+  summary: string;               // short human summary, not trusted for detection
   filePath: string;
   baseSha: string;               // commit the change is relative to
   dependents: SymbolId[];        // from local graph — who is affected (IDs only)
@@ -339,9 +340,20 @@ interface Conflict {
   rule: string;                        // e.g. "dependency_changed"
   targetSymbol: SymbolId;
   counterpart: { memberLogin: string; sessionId: string; agentType: string };
-  detail: string;                      // human, e.g. "alice's agent changed TokenValidator.validate()
-                                       //   (now returns Result<...>), which login.ts:42 calls"
-  suggestion: string;                  // e.g. "pull alice's branch, or coordinate on the new contract"
+  detail: string;                      // short deterministic explanation
+  change?: {
+    changeKind: ChangeKind;
+    before: Signature | null;
+    after: Signature | null;
+    compatibility: "identical" | "compatible" | "breaking" | "unknown";
+    breakingReasons: string[];
+  };
+  analysis?: {
+    assessment: string;
+    recommendation: "block" | "warn" | "info" | "proceed";
+    actions: { audience: "you" | "counterpart" | "both"; step: string }[];
+    source: "deterministic" | string;  // model id when OpenRouter upgraded it
+  };
 }
 ```
 
@@ -361,26 +373,33 @@ interface Conflict {
 6. Dev decides. Agent edits.
 7. PostToolUse hook → daemon (synapse_report)
 8. Daemon: re-extract contract for the file (TS analyzer), diff vs. previous, compute ContractDelta
-9. If sigHash changed -> LLM writes one-line summary (Haiku) -> send contract.delta over WSS
+9. If sigHash changed -> daemon emits a deterministic contract.delta over WSS
 10. Server fans out state.delta to every other daemon in the repo room -> their warm caches update
 11. On `git push`: daemon detects, sends push.notify -> server clears matching unpushedDeltas
 ```
 
 Latency budget: steps 2–5 ≈ <50ms (no network). Steps 8–10 are off the critical path (post-edit).
+When `OPENROUTER_API_KEY` is set, the daemon may upgrade a conflict's deterministic `analysis` by
+sending the relevant self/counterpart contract-change payloads to OpenRouter. Failure, timeout, or a
+missing key keeps the deterministic analysis.
 
 ---
 
 ## 11. Privacy Boundary
 
-| Leaves the machine | Never leaves the machine |
-|--------------------|--------------------------|
+| Leaves the machine by default | Never leaves the machine by default |
+|-------------------------------|------------------------------------|
 | Symbol IDs (path + name) | Function/method bodies |
 | Normalized signatures (param names/types, returns) | Full file contents |
-| Human-readable contract summaries | Raw diffs |
+| Human-readable contract summaries and deterministic actions | Raw implementation diffs |
 | Commit SHAs, file paths | Business logic / comments |
 | Session metadata (task description, agent type) | Anything not in a public contract |
 
-- All analysis runs locally (daemon + Python sidecar). The server is a coordination hub, not a code store.
+- All detection and compatibility analysis runs locally (daemon + Python sidecar). The server is a
+  coordination hub, not a code store.
+- The optional OpenRouter layer is explicit opt-in via `OPENROUTER_API_KEY`. When enabled, the daemon
+  can send the relevant self/counterpart contract-change payloads and deterministic baseline to the
+  model provider to improve `ConflictAnalysis`; no key means fully offline deterministic output.
 - **`privacy.redactSignatures` config**: for maximum-paranoia teams, send only `{symbolId, changeKind}`
   — no param names/types. Reduces conflict detail but keeps same-symbol/dependency detection working.
 - Self-hosted means even the coordination metadata stays on the team's own infra.
@@ -389,15 +408,27 @@ Latency budget: steps 2–5 ≈ <50ms (no network). Steps 8–10 are off the cri
 
 ## 12. Distillation & LLM Usage
 
-LLM (Claude Haiku via Vercel AI Gateway) is used in exactly three non-hot-path places:
-1. **Delta summary** (post-edit): turn a structural `SymbolChange` into one human sentence. Input is the
-   before/after **signature** only — not the body.
-2. **Session summary** (Layer II, on session end): batch-summarize the session's deltas + task into 2–3
+The LLM layer is optional and non-authoritative. The current implementation uses OpenRouter's
+OpenAI-compatible endpoint over plain `fetch` with no provider SDK dependency:
+
+```env
+OPENROUTER_API_KEY=
+SYNAPSE_LLM_MODEL=anthropic/claude-haiku-4.5
+```
+
+`OPENROUTER_API_KEY` is the one place to enable the model path (`.env.example` -> `.env`, then run
+the daemon with `node --env-file=.env ...`). With no key, timeout, malformed response, or
+`SYNAPSE_LLM_EXPLAIN=0`, Synapse keeps the deterministic analysis.
+
+Allowed non-authoritative uses:
+1. **ConflictAnalysis upgrade**: compare the already-detected counterpart change with your current
+   contract and your own unpushed change, then return `{ assessment, recommendation, actions, source }`.
+2. **Session summary** (Layer II, on session end): batch-summarize the session's deltas + task into 2-3
    sentences.
 3. **Memory answers** (Layer III): RAG over pgvector with provenance.
 
-Never in the PreToolUse path. Detection is always deterministic. This keeps the hot path cheap, fast,
-and free of hallucinated contracts.
+Never for detection or compatibility classification. Detection is always deterministic, which keeps the
+hot path cheap, fast, and free of hallucinated contracts.
 
 ---
 
@@ -461,4 +492,3 @@ survives restarts and feeds Layer II/III. Once a delta's `pushed_at` is set, it'
 6. **Wire-protocol auth** — short-lived JWT per daemon connection refreshed via REST; confirm rotation
    strategy.
 ```
-

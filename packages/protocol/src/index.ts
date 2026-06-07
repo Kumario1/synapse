@@ -84,6 +84,63 @@ export interface SymbolChange {
   after: CodeSymbol | null;
 }
 
+/**
+ * Result of deterministically comparing two signatures of the same symbol.
+ *
+ * - `identical`: the two signatures match exactly.
+ * - `compatible`: the change cannot break existing callers (e.g. an added
+ *   optional parameter, a newly added symbol).
+ * - `breaking`: existing callers will break (removed/retyped parameter, a new
+ *   required parameter, a changed return type, a removed symbol).
+ * - `unknown`: a change was reported but no structured signature was available
+ *   to classify it, so we cannot prove it is safe.
+ */
+export type SignatureCompatibility = "identical" | "compatible" | "breaking" | "unknown";
+
+/**
+ * The concrete shape of a contract change, carried on a `Conflict` so a UI or
+ * agent can see *what* changed (before -> after) and whether it actually breaks
+ * the other side, instead of only a prose summary.
+ */
+export interface ContractChange {
+  changeKind: ChangeKind;
+  before: Signature | null;
+  after: Signature | null;
+  compatibility: SignatureCompatibility;
+  /** Human-readable, deterministic reasons backing the compatibility verdict. */
+  breakingReasons: string[];
+}
+
+/** How strongly an agent should react to a conflict. */
+export type ConflictRecommendation = "block" | "warn" | "info" | "proceed";
+
+/**
+ * A concrete next step, addressed to a specific side of the conflict so each
+ * agent knows exactly what *it* should do.
+ */
+export interface ConflictAction {
+  /** `you` = the agent running the check; `counterpart` = the other agent. */
+  audience: "you" | "counterpart" | "both";
+  step: string;
+}
+
+/**
+ * An actionable analysis of a conflict — the result of comparing the code diffs
+ * from *both* sides and deciding what to do, rather than a bare summary.
+ * Produced deterministically by the engine and optionally upgraded by an
+ * {@link ConflictAnalysis} provider (e.g. an LLM via OpenRouter).
+ */
+export interface ConflictAnalysis {
+  /** Plain-language analysis of both sides' diffs and how they interact. */
+  assessment: string;
+  /** The recommended reaction strength. */
+  recommendation: ConflictRecommendation;
+  /** Ordered, side-addressed steps. */
+  actions: ConflictAction[];
+  /** What produced this analysis: `"deterministic"` or a model id. */
+  source: string;
+}
+
 export type ContractDeltaSummary = Pick<
   ContractDelta,
   "id" | "symbolId" | "changeKind" | "summary" | "filePath" | "createdAt"
@@ -135,6 +192,7 @@ export interface Conflict {
   rule:
     | "same_symbol_active"
     | "same_symbol_unpushed"
+    | "contract_divergent"
     | "dependency_changed"
     | "transitive_dependency"
     | "stale_base"
@@ -147,6 +205,23 @@ export interface Conflict {
   };
   detail: string;
   suggestion: string;
+  /**
+   * The concrete contract change behind this conflict, when one is known.
+   * Lets consumers render the actual before -> after instead of prose.
+   */
+  change?: ContractChange;
+  /**
+   * A human-readable explanation of why this is (or is not) a real conflict.
+   * Always populated deterministically by the engine. Detection never depends
+   * on it. Superseded for action by `analysis`, kept for a quick one-liner.
+   */
+  explanation?: string;
+  /**
+   * Actionable, both-sides analysis: what each agent should do about this
+   * conflict. Always populated deterministically; optionally upgraded by an
+   * `AnalysisProvider` that compares the full code diffs from both sides.
+   */
+  analysis?: ConflictAnalysis;
 }
 
 export interface SynapseCheckRequest {
