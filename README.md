@@ -87,6 +87,12 @@ Verify the automatic TypeScript report path:
 npm run verify:daemon-ts-report
 ```
 
+Verify that a check with only a TypeScript file path can still find symbol-level conflicts:
+
+```bash
+npm run verify:file-only-ts-check
+```
+
 ## Decisions In Force
 
 These are already resolved in the planning docs and should guide implementation unless we explicitly revise them:

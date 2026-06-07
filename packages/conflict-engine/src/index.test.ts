@@ -9,6 +9,7 @@ import {
 } from "./index.js";
 
 const tokenValidator = id("ts:src/auth/token.ts#TokenValidator.validate");
+const token = id("ts:src/auth/token.ts#Token");
 const login = id("ts:src/auth/login.ts#login");
 
 test("warns on same-symbol unpushed contract delta", () => {
@@ -29,6 +30,37 @@ test("warns on same-symbol unpushed contract delta", () => {
   const conflicts = evaluateConflicts({
     selfSessionId: "bob",
     targets: [{ filePath: "src/auth/token.ts", symbolId: tokenValidator }],
+    state
+  });
+
+  assert.equal(verdictFor(conflicts), "warn");
+  assert.deepEqual(
+    conflicts.map((conflict) => conflict.rule),
+    ["same_symbol_unpushed"]
+  );
+});
+
+test("suppresses same-file noise when another target has a specific conflict", () => {
+  const state = teamState({
+    sessions: [
+      { ...session("alice"), filesEditing: ["src/auth/token.ts"] },
+      session("bob")
+    ],
+    unpushedDeltas: [
+      delta({
+        sessionId: "alice",
+        symbolId: tokenValidator,
+        summary: "validate now returns Result<Token, AuthError>"
+      })
+    ]
+  });
+
+  const conflicts = evaluateConflicts({
+    selfSessionId: "bob",
+    targets: [
+      { filePath: "src/auth/token.ts", symbolId: token },
+      { filePath: "src/auth/token.ts", symbolId: tokenValidator }
+    ],
     state
   });
 
