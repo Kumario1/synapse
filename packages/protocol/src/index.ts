@@ -221,6 +221,29 @@ export interface RecentPush {
   pushedAt: string;
 }
 
+/**
+ * A distilled, narrative record of what one session changed — produced on
+ * session end (Layer II). Deterministic by default (a structured list of the
+ * session's contract deltas); optionally upgraded to a 2-3 sentence prose
+ * summary by an LLM. Stored durably so teammates can catch up on recent work.
+ */
+export interface SessionSummary {
+  sessionId: string;
+  repoId: string;
+  memberLogin: string;
+  task: string | null;
+  /** Human-readable summary of the session's contract changes. */
+  summary: string;
+  /** The symbols the session changed. */
+  symbols: SymbolId[];
+  /** Number of contract deltas the session produced. */
+  deltaCount: number;
+  /** What produced the prose: `"deterministic"` or a model id. */
+  source: string;
+  startedAt: string;
+  endedAt: string;
+}
+
 export interface TeamState {
   repoId: string;
   sessions: Session[];
@@ -229,6 +252,8 @@ export interface TeamState {
   recentPushes: RecentPush[];
   /** Canonical, shared contract resolutions, keyed by symbol + inputsHash. */
   resolutions: ContractResolution[];
+  /** Narrative summaries of ended sessions (most recent first). */
+  sessionSummaries: SessionSummary[];
 }
 
 export interface Conflict {
@@ -369,6 +394,7 @@ export interface SynapseWhatsupResponse {
   editLocks: EditLock[];
   recentPushes: RecentPush[];
   resolutions: ContractResolution[];
+  sessionSummaries: SessionSummary[];
 }
 
 export interface WireEnvelope<TType extends string = string, TPayload = unknown> {
@@ -403,6 +429,7 @@ export type ClientMessage =
       "resolution.propose",
       { repoId: string; resolution: ContractResolution }
     >
+  | WireEnvelope<"session.summary", { repoId: string; summary: SessionSummary }>
   | WireEnvelope<"query.briefing", { repoId: string; since?: string }>;
 
 export type ServerMessage =
@@ -417,7 +444,8 @@ export function createEmptyTeamState(repoId: string): TeamState {
     editLocks: [],
     unpushedDeltas: [],
     recentPushes: [],
-    resolutions: []
+    resolutions: [],
+    sessionSummaries: []
   };
 }
 

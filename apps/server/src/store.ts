@@ -115,6 +115,7 @@ function normalizeTeamState(value: unknown, repoId: string): TeamState {
     editLocks: partial.editLocks ?? base.editLocks,
     unpushedDeltas: partial.unpushedDeltas ?? base.unpushedDeltas,
     recentPushes: partial.recentPushes ?? base.recentPushes,
-    resolutions: partial.resolutions ?? base.resolutions
+    resolutions: partial.resolutions ?? base.resolutions,
+    sessionSummaries: partial.sessionSummaries ?? base.sessionSummaries
   };
 }

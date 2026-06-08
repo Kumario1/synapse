@@ -19,7 +19,8 @@ The repository now has the local realtime loop in place:
    deterministic/optional-LLM contract resolution.
 4. Python contract extraction and cross-file dependency graphs via a long-lived analyzer sidecar
    (tree-sitter + jedi), routed through the same conflict engine as TypeScript.
-5. Deterministic `synapse whatsup` team-state briefing from the daemon's warm cache.
+5. Deterministic `synapse whatsup` team-state briefing from the daemon's warm cache, plus durable
+   session summaries (Layer II) distilled on session end.
 6. Stdio MCP adapter so MCP-capable agents can call the same daemon tools without shell-specific
    integration code.
 7. Durable server state via a `StateStore` (SQLite): live sessions, unpushed deltas, recent pushes,
@@ -134,8 +135,23 @@ npm run dev --workspace @synapse/cli -- whatsup --port 4012
 npm run verify:whatsup
 ```
 
-The briefing summarizes active sessions, unpushed contract deltas, edit locks, recent pushes, and
-shared contract resolutions. It is deterministic and reads from the daemon's local warm cache.
+The briefing summarizes active sessions, unpushed contract deltas, edit locks, recent pushes, shared
+contract resolutions, and ended-session summaries. It is deterministic and reads from the daemon's
+local warm cache.
+
+### Session summaries (Layer II)
+
+When a session ends (`synapse session --action end`), the daemon distills what that session changed
+into a durable `SessionSummary` — a short narrative of its contract deltas plus the task — and
+publishes it so teammates can catch up. It is deterministic by default (a structured list of the
+session's changes); with `OPENROUTER_API_KEY` set it is upgraded to 2-3 prose sentences. Summaries are
+stored in team state (so they survive a restart) and surfaced in `whatsup`. This never runs in the
+edit hot path — only on session end. Set `SYNAPSE_LLM_SUMMARY=0` to force the deterministic summary
+even with a key.
+
+```bash
+npm run verify:session-summary   # deterministic, no key required
+```
 
 Verify the automatic TypeScript report path:
 

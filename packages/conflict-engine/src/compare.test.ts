@@ -260,6 +260,7 @@ function teamState(partial: Partial<TeamState>): TeamState {
     unpushedDeltas: [],
     recentPushes: [],
     resolutions: [],
+    sessionSummaries: [],
     ...partial
   };
 }
