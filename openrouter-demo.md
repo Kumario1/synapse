@@ -8,6 +8,26 @@ The concrete IDs and timestamps in your terminal will differ from the examples b
 fields are the `rule`, `verdict`, `analysis.source`, `analysis.recommendation`, and
 `analysis.resolution`.
 
+## Manual Result Summary
+
+The manual run looks good. It proves the OpenRouter path is active and that Synapse is still keeping
+the deterministic conflict detector in control of the top-level verdict.
+
+Your run covered two important cases:
+
+- Alice changed `validate(input: string): boolean` to
+  `validate(input: string): Result<Token>`. Bob's check returned `same_symbol_unpushed` with
+  `verdict: "warn"`, `analysis.source: "anthropic/claude-haiku-4.5"`, and `degraded: false`.
+- Bob then changed the same function to `validate(input: string): Promise<Token>`. Bob's check
+  returned `contract_divergent`, OpenRouter identified the synchronous-vs-async contract split, and
+  the resolver returned `reconciled: false` with `recommendation: "block"`.
+
+The only nuance is intentional: in the divergent-contract case the top-level `verdict` stayed
+`"warn"` while `analysis.recommendation` and `analysis.resolution.recommendation` were `"block"`.
+That means the deterministic engine found a warning-level conflict, and OpenRouter added a stronger
+advisory action plan. If the product should hard-stop the command whenever OpenRouter recommends
+`block`, that is a separate behavior change to implement later.
+
 ## What This Demo Proves
 
 - Synapse detects an unpushed contract change from another agent before you edit the same symbol.
@@ -190,6 +210,16 @@ Bob's check returned a warning:
       "analysis": {
         "assessment": "Alice changed validate's return type from boolean to Result<Token>, a breaking change. Your task requires using validate before editing login flow, but you're working against the old contract. The signatures are incompatible.",
         "recommendation": "warn",
+        "actions": [
+          {
+            "audience": "you",
+            "step": "Sync with alice's branch to adopt the new contract: function validate(input: string): Result<Token>. Update your login flow code to handle Result<Token> instead of boolean."
+          },
+          {
+            "audience": "counterpart",
+            "step": "Push your changes to unblock dependent work and ensure both agents work against the same contract."
+          }
+        ],
         "source": "anthropic/claude-haiku-4.5",
         "resolution": {
           "reconciled": true,
@@ -284,6 +314,20 @@ Bob's check returned a stronger conflict:
       "analysis": {
         "assessment": "Both agents changed validate's return type from boolean to incompatible contracts: alice->Result<Token>, you->Promise<Token>. Parameter signatures match, but return types diverge fundamentally. Deterministic reconciliation impossible.",
         "recommendation": "block",
+        "actions": [
+          {
+            "audience": "both",
+            "step": "Decide: should validate return Result<Token> (synchronous, error-as-value) or Promise<Token> (async)? Document rationale."
+          },
+          {
+            "audience": "you",
+            "step": "Align your Promise<Token> contract to the agreed choice, then rebase and re-run validation."
+          },
+          {
+            "audience": "counterpart",
+            "step": "Align your Result<Token> contract to the agreed choice, then rebase and re-run validation."
+          }
+        ],
         "source": "anthropic/claude-haiku-4.5",
         "resolution": {
           "reconciled": false,
@@ -343,4 +387,3 @@ Stop the server and daemon terminals with `Ctrl-C`, then remove the demo files:
 ```bash
 rm -rf /tmp/synapse-openrouter-demo
 ```
-
