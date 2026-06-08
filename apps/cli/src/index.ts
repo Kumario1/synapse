@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { join, relative, resolve } from "node:path";
@@ -60,6 +61,16 @@ interface RuntimeConfig {
   daemonPort: number;
   serverUrl: string;
   worktreeRoot: string;
+}
+
+interface LocalConfig {
+  repoId?: string;
+  member?: string;
+  sessionId?: string;
+  agentType?: AgentType;
+  daemonPort?: number;
+  serverUrl?: string;
+  worktreeRoot?: string;
 }
 
 const args = process.argv.slice(2);
@@ -320,12 +331,12 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
 
 async function runCheck(rawArgs: string[]): Promise<void> {
   const flags = parseFlags(rawArgs);
-  const port = Number(flags.port ?? process.env.SYNAPSE_DAEMON_PORT ?? 4011);
+  const defaults = commandDefaults(flags);
   const file = requiredFlag(flags, "file");
   const symbol = flags.symbol ? { raw: flags.symbol } : undefined;
-  const response = await postJson(`http://localhost:${port}/tools/synapse_check`, {
-    repoId: flags["repo-id"] ?? process.env.SYNAPSE_REPO_ID ?? "local",
-    sessionId: flags.session ?? process.env.SYNAPSE_SESSION_ID ?? "local",
+  const response = await postJson(`http://localhost:${defaults.daemonPort}/tools/synapse_check`, {
+    repoId: defaults.repoId,
+    sessionId: defaults.sessionId,
     files: [file],
     symbols: symbol ? [symbol] : undefined,
     task: flags.task
@@ -335,12 +346,12 @@ async function runCheck(rawArgs: string[]): Promise<void> {
 
 async function runReport(rawArgs: string[]): Promise<void> {
   const flags = parseFlags(rawArgs);
-  const port = Number(flags.port ?? process.env.SYNAPSE_DAEMON_PORT ?? 4011);
+  const defaults = commandDefaults(flags);
   const file = requiredFlag(flags, "file");
   const symbol = flags.symbol ? { raw: flags.symbol } : undefined;
-  const response = await postJson(`http://localhost:${port}/tools/synapse_report`, {
-    repoId: flags["repo-id"] ?? process.env.SYNAPSE_REPO_ID ?? "local",
-    sessionId: flags.session ?? process.env.SYNAPSE_SESSION_ID ?? "local",
+  const response = await postJson(`http://localhost:${defaults.daemonPort}/tools/synapse_report`, {
+    repoId: defaults.repoId,
+    sessionId: defaults.sessionId,
     filePath: file,
     symbolId: symbol,
     summary: flags.summary,
@@ -352,7 +363,7 @@ async function runReport(rawArgs: string[]): Promise<void> {
 
 async function runPush(rawArgs: string[]): Promise<void> {
   const flags = parseFlags(rawArgs);
-  const port = Number(flags.port ?? process.env.SYNAPSE_DAEMON_PORT ?? 4011);
+  const defaults = commandDefaults(flags);
   const files = filesFromFlags(flags);
   if (files.length === 0) {
     throw new Error("--file or --files is required");
@@ -364,9 +375,9 @@ async function runPush(rawArgs: string[]): Promise<void> {
       ? [{ raw: flags.symbol }]
       : undefined;
 
-  const response = await postJson(`http://localhost:${port}/tools/synapse_push`, {
-    repoId: flags["repo-id"] ?? process.env.SYNAPSE_REPO_ID ?? "local",
-    sessionId: flags.session ?? process.env.SYNAPSE_SESSION_ID ?? "local",
+  const response = await postJson(`http://localhost:${defaults.daemonPort}/tools/synapse_push`, {
+    repoId: defaults.repoId,
+    sessionId: defaults.sessionId,
     sha: flags.sha ?? "local",
     summary: flags.summary ?? `Pushed ${files.join(", ")}`,
     files,
@@ -377,14 +388,14 @@ async function runPush(rawArgs: string[]): Promise<void> {
 
 async function runSession(rawArgs: string[]): Promise<void> {
   const flags = parseFlags(rawArgs);
-  const port = Number(flags.port ?? process.env.SYNAPSE_DAEMON_PORT ?? 4011);
+  const defaults = commandDefaults(flags);
   const action = (rawArgs.find((arg) => !arg.startsWith("--")) ?? "heartbeat") as
     | "start"
     | "end"
     | "heartbeat";
-  const response = await postJson(`http://localhost:${port}/tools/synapse_session`, {
-    repoId: flags["repo-id"] ?? process.env.SYNAPSE_REPO_ID ?? "local",
-    sessionId: flags.session ?? process.env.SYNAPSE_SESSION_ID ?? "local",
+  const response = await postJson(`http://localhost:${defaults.daemonPort}/tools/synapse_session`, {
+    repoId: defaults.repoId,
+    sessionId: defaults.sessionId,
     action,
     task: flags.task
   });
@@ -393,11 +404,11 @@ async function runSession(rawArgs: string[]): Promise<void> {
 
 async function runWhatsup(rawArgs: string[]): Promise<void> {
   const flags = parseFlags(rawArgs);
-  const port = Number(flags.port ?? process.env.SYNAPSE_DAEMON_PORT ?? 4011);
+  const defaults = commandDefaults(flags);
   const limit = flags.limit ? Number(flags.limit) : undefined;
-  const response = await postJson(`http://localhost:${port}/tools/synapse_whatsup`, {
-    repoId: flags["repo-id"] ?? process.env.SYNAPSE_REPO_ID ?? "local",
-    sessionId: flags.session ?? process.env.SYNAPSE_SESSION_ID ?? "local",
+  const response = await postJson(`http://localhost:${defaults.daemonPort}/tools/synapse_whatsup`, {
+    repoId: defaults.repoId,
+    sessionId: defaults.sessionId,
     limit: Number.isFinite(limit) ? limit : undefined
   });
   console.log(JSON.stringify(response, null, 2));
@@ -415,6 +426,7 @@ async function runJoin(rawArgs: string[]): Promise<void> {
         serverUrl: config.serverUrl,
         daemonPort: config.daemonPort,
         member: config.member,
+        sessionId: config.sessionId,
         agentType: config.agentType,
         worktreeRoot: config.worktreeRoot,
         createdAt: new Date().toISOString()
@@ -425,9 +437,7 @@ async function runJoin(rawArgs: string[]): Promise<void> {
   );
 
   console.log(`wrote ${join(dir, "config.json")}`);
-  console.log(
-    `start the daemon with: npm run dev --workspace @synapse/cli -- daemon --member ${config.member} --session ${config.sessionId} --port ${config.daemonPort}`
-  );
+  console.log(`start the daemon with: npm run dev --workspace @synapse/cli -- daemon`);
 }
 
 async function runAnalyze(rawArgs: string[]): Promise<void> {
@@ -440,18 +450,98 @@ async function runAnalyze(rawArgs: string[]): Promise<void> {
 
 function configFromArgs(rawArgs: string[]): RuntimeConfig {
   const flags = parseFlags(rawArgs);
-  const member = flags.member ?? process.env.USER ?? "local";
+  const localConfig = readLocalConfig();
+  const member =
+    flags.member ?? process.env.SYNAPSE_MEMBER ?? localConfig.member ?? process.env.USER ?? "local";
+
   return {
-    repoId: flags["repo-id"] ?? process.env.SYNAPSE_REPO_ID ?? "local",
+    repoId: flags["repo-id"] ?? process.env.SYNAPSE_REPO_ID ?? localConfig.repoId ?? "local",
     member,
-    sessionId: flags.session ?? process.env.SYNAPSE_SESSION_ID ?? `${member}-${randomUUID()}`,
-    agentType: agentType(flags.agent ?? process.env.SYNAPSE_AGENT ?? "other"),
-    daemonPort: Number(flags.port ?? process.env.SYNAPSE_DAEMON_PORT ?? 4011),
-    serverUrl: flags.server ?? process.env.SYNAPSE_SERVER_URL ?? "ws://localhost:4010",
+    sessionId:
+      flags.session ??
+      process.env.SYNAPSE_SESSION_ID ??
+      localConfig.sessionId ??
+      `${member}-${randomUUID()}`,
+    agentType: agentType(flags.agent ?? process.env.SYNAPSE_AGENT ?? localConfig.agentType ?? "other"),
+    daemonPort: numberDefault(flags.port, process.env.SYNAPSE_DAEMON_PORT, localConfig.daemonPort, 4011),
+    serverUrl:
+      flags.server ?? process.env.SYNAPSE_SERVER_URL ?? localConfig.serverUrl ?? "ws://localhost:4010",
     worktreeRoot: resolve(
-      flags["worktree-root"] ?? process.env.SYNAPSE_WORKTREE_ROOT ?? commandCwd()
+      flags["worktree-root"] ??
+        process.env.SYNAPSE_WORKTREE_ROOT ??
+        localConfig.worktreeRoot ??
+        commandCwd()
     )
   };
+}
+
+function commandDefaults(flags: Record<string, string>): {
+  repoId: string;
+  sessionId: string;
+  daemonPort: number;
+} {
+  const localConfig = readLocalConfig();
+
+  return {
+    repoId: flags["repo-id"] ?? process.env.SYNAPSE_REPO_ID ?? localConfig.repoId ?? "local",
+    sessionId: flags.session ?? process.env.SYNAPSE_SESSION_ID ?? localConfig.sessionId ?? "local",
+    daemonPort: numberDefault(flags.port, process.env.SYNAPSE_DAEMON_PORT, localConfig.daemonPort, 4011)
+  };
+}
+
+function readLocalConfig(): LocalConfig {
+  const path = join(commandCwd(), ".synapse", "config.json");
+  let parsed: Record<string, unknown>;
+
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return {};
+    }
+
+    throw error;
+  }
+
+  const rawAgentType = stringValue(parsed.agentType);
+
+  return {
+    repoId: stringValue(parsed.repoId),
+    member: stringValue(parsed.member),
+    sessionId: stringValue(parsed.sessionId),
+    agentType: rawAgentType ? agentType(rawAgentType) : undefined,
+    daemonPort: numberValue(parsed.daemonPort),
+    serverUrl: stringValue(parsed.serverUrl),
+    worktreeRoot: stringValue(parsed.worktreeRoot)
+  };
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string" && value.length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  return undefined;
+}
+
+function numberDefault(...values: Array<number | string | undefined>): number {
+  for (const value of values) {
+    const parsed = numberValue(value);
+    if (parsed !== undefined) {
+      return parsed;
+    }
+  }
+
+  throw new Error("missing numeric default");
 }
 
 function makeSession(config: RuntimeConfig, task: string | null = null): Session {
@@ -1083,11 +1173,12 @@ Commands:
   session  Start, heartbeat, or end a local session
   whatsup  Show the daemon's current team-state briefing
   mcp      Run a stdio MCP server that forwards tools to the local daemon
-  join     Write a local .synapse/config.json
+  join     Write a local .synapse/config.json used as command defaults
   analyze  Extract TypeScript contract symbols from a file
 
 Examples:
-  synapse daemon --member alice --session alice --port 4011
+  synapse join --member alice --session alice --port 4011 --server ws://localhost:4010
+  synapse daemon
   synapse mcp --port 4011
   synapse report --port 4011 --file src/auth/token.ts --symbol ts:src/auth/token.ts#TokenValidator.validate
   synapse push --port 4011 --file src/auth/token.ts --sha abc123 --summary "Pushed auth token changes"

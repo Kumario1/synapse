@@ -93,6 +93,8 @@ file-level detection and Claude-Code-only support. A **persistent local agent** 
 ### 2.1 Synapse Local Agent (CLI + daemon)
 - **`synapse join`** — one command: authenticates, links repo→team, installs Claude Code hooks,
   registers the MCP server endpoint, starts the daemon. Target: <5s, zero manual config.
+  Current local implementation writes `.synapse/config.json`; daemon and CLI commands read it as
+  defaults after explicit flags and environment variables.
 - **Daemon** — long-running local process. Responsibilities: git working-tree watch, local contract
   extraction, WSS connection to server, warm-cache of team state, hook RPC endpoint.
 - **Hook adapters** — translate each agent's hook/extension model into Synapse calls.

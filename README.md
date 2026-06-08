@@ -13,7 +13,8 @@ The planning source of truth lives in:
 The repository now has the local realtime loop in place:
 
 1. TypeScript monorepo, shared protocol types, and in-memory fanout server.
-2. Local daemon/CLI with `synapse_check`, `synapse_report`, `synapse_push`, and session tools.
+2. Local daemon/CLI with joined config defaults, `synapse_check`, `synapse_report`,
+   `synapse_push`, and session tools.
 3. TypeScript contract extraction, file-only checks, dependency checks, compatibility analysis, and
    deterministic/optional-LLM contract resolution.
 4. Deterministic `synapse whatsup` team-state briefing from the daemon's warm cache.
@@ -58,6 +59,17 @@ Start the local coordination server:
 ```bash
 npm run dev --workspace @synapse/server
 ```
+
+Write local command defaults for a repo:
+
+```bash
+npm run dev --workspace @synapse/cli -- join --member alice --session alice --port 4011 --server ws://localhost:4010
+npm run dev --workspace @synapse/cli -- daemon
+npm run verify:join-config
+```
+
+`synapse join` writes `.synapse/config.json`. Daemon and CLI commands read it as defaults, using this
+precedence: explicit flags, environment variables, `.synapse/config.json`, then built-in defaults.
 
 Start two local daemon sessions in separate terminals:
 
