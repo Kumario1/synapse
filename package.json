@@ -21,6 +21,7 @@
     "verify:resolution": "npm run build && node scripts/verify-resolution.mjs",
     "verify:mcp-adapter": "npm run build && node scripts/verify-mcp-adapter.mjs",
     "verify:github-webhook": "npm run build && node scripts/verify-github-webhook.mjs",
+    "verify:whatsup": "npm run build && node scripts/verify-whatsup.mjs",
     "verify:m0": "npm run build && node scripts/verify-milestone-0.mjs"
   },
   "devDependencies": {

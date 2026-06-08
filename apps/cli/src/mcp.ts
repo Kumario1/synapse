@@ -4,7 +4,8 @@ import type {
   SynapseCheckRequest,
   SynapsePushRequest,
   SynapseReportRequest,
-  SynapseSessionRequest
+  SynapseSessionRequest,
+  SynapseWhatsupRequest
 } from "@synapse/protocol";
 import { z } from "zod/v4";
 
@@ -178,6 +179,33 @@ export async function runMcp(rawArgs: string[]): Promise<void> {
       };
 
       return jsonResult(await daemonPost(args.port ?? defaultPort, "synapse_session", request));
+    }
+  );
+
+  server.registerTool(
+    "synapse_whatsup",
+    {
+      title: "Show Synapse Team Briefing",
+      description:
+        "Return the local Synapse daemon's current team-state briefing: active sessions, unpushed deltas, edit locks, recent pushes, and shared resolutions.",
+      inputSchema: {
+        ...commonShape,
+        limit: z.number().int().positive().max(50).optional()
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true
+      }
+    },
+    async (args) => {
+      const request: SynapseWhatsupRequest = {
+        repoId: args.repoId ?? defaultRepoId,
+        sessionId: args.sessionId ?? defaultSessionId,
+        limit: args.limit
+      };
+
+      return jsonResult(await daemonPost(args.port ?? defaultPort, "synapse_whatsup", request));
     }
   );
 

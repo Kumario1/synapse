@@ -154,7 +154,9 @@ This is what separates Synapse from a filename-collision toy.
 - On PR thread / review: candidate signal for Layer III decision capture.
 
 ### 2.7 Briefing Service (Layer II)
-- `synapse whatsup` MCP tool + proactive session-start push.
+- Current deterministic `synapse whatsup`: CLI + MCP tool that summarizes the daemon's warm cache
+  (active sessions, unpushed deltas, edit locks, recent pushes, shared resolutions).
+- Later: proactive session-start push.
 - Batch summarization (optional OpenRouter model) on session end — never in the edit hot path.
 
 ### 2.8 Memory / RAG Service (Layer III)
