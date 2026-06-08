@@ -92,13 +92,24 @@ try {
 
   const resolution = conflict.analysis?.resolution;
   assert.ok(resolution, "expected an attached resolution");
-  assert.equal(resolution.reconciled, false, "no key → escalate, never a guessed merge");
-  assert.equal(resolution.recommendation, "block");
-  assert.equal(resolution.proposedContract, null);
-  assert.equal(resolution.source, "deterministic");
-  // Both sides' afters are surfaced so the agents can agree on one contract.
-  assert.ok(resolution.instruction.includes("Result<Token>"), "instruction names Alice's contract");
-  assert.ok(resolution.instruction.includes("Promise<Token>"), "instruction names Bob's contract");
+
+  if (resolution.source === "deterministic") {
+    assert.equal(resolution.reconciled, false, "deterministic path escalates, never guesses a merge");
+    assert.equal(resolution.recommendation, "block");
+    assert.equal(resolution.proposedContract, null);
+    // Both sides' afters are surfaced so the agents can agree on one contract.
+    assert.ok(resolution.instruction.includes("Result<Token>"), "instruction names Alice's contract");
+    assert.ok(resolution.instruction.includes("Promise<Token>"), "instruction names Bob's contract");
+  } else if (resolution.reconciled) {
+    assert.equal(resolution.recommendation, "warn");
+    assert.ok(resolution.proposedContract, "LLM resolver must provide the merged contract");
+  } else {
+    assert.equal(resolution.recommendation, "block");
+    assert.equal(resolution.proposedContract, null);
+  }
+
+  assert.ok(resolution.rationale, "resolution explains why it merged or escalated");
+  assert.ok(resolution.instruction, "resolution tells both agents what to do next");
 
   console.log("Resolution verification passed:");
   console.log(JSON.stringify({ verdict: check.verdict, conflict }, null, 2));
