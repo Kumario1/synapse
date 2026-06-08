@@ -22,16 +22,19 @@ The repository now has the local realtime loop in place:
 5. Deterministic `synapse whatsup` team-state briefing from the daemon's warm cache.
 6. Stdio MCP adapter so MCP-capable agents can call the same daemon tools without shell-specific
    integration code.
+7. Durable server state via a `StateStore` (SQLite): live sessions, unpushed deltas, recent pushes,
+   edit locks, and resolutions survive a server restart.
 
-The implementation is still intentionally local and in-memory. It proves the hot loop before adding
-persistence, auth, or real hook installation.
+The server is single-process with an in-memory hot path backed by a durable store. Postgres/Redis
+(for multi-instance fan-out) can implement the same `StateStore` later without touching server logic.
+Auth and real hook installation are still ahead.
 
 ## Architecture Shape
 
 ```text
 apps/
   cli/          local daemon, CLI commands, and MCP stdio adapter
-  server/       local websocket fanout server
+  server/       websocket fanout server + durable StateStore (SQLite)
 packages/
   analyzer-ts/ TypeScript contract extraction
   analyzer-py/ Python contract extraction + dependency graph (tree-sitter +
@@ -199,6 +202,31 @@ Set `SYNAPSE_GITHUB_WEBHOOK_SECRET` to require GitHub's `X-Hub-Signature-256` HM
 npm run verify:github-webhook
 ```
 
+## Durable Server State
+
+The server holds each repo's live `TeamState` (sessions, unpushed contract deltas, recent pushes,
+edit locks, and resolutions) in an in-memory cache for the hot path and persists every mutation
+through a `StateStore` so a restart resumes where it left off. The store is selected by
+`SYNAPSE_DB_PATH`:
+
+- **unset** — in-memory SQLite. Ephemeral, identical to the pre-persistence behavior. This keeps the
+  verify scripts and tests hermetic.
+- **a file path** — file-backed SQLite (WAL). State survives a restart.
+
+```bash
+SYNAPSE_DB_PATH=.synapse-server/state.db npm run dev --workspace @synapse/server
+```
+
+The `StateStore` interface (`apps/server/src/store.ts`) is storage-agnostic: a future Postgres/Redis
+implementation for multi-instance fan-out satisfies the same contract without changing server logic.
+
+Verify that state survives a restart (creates state over HTTP, kills the server, restarts against the
+same database, and asserts the state resumed from disk):
+
+```bash
+npm run verify:persistence
+```
+
 Expose the same daemon tools to MCP-capable agents:
 
 ```bash
@@ -317,7 +345,7 @@ Before changing these, ask the project owner:
 ## Roadmap
 
 - Milestone 0: runnable skeleton and realtime stub loop.
-- Milestone 1: TS/Python contract extraction, contract delta diffing, Redis/Postgres-backed live state, severity scoring.
+- Milestone 1: TS/Python contract extraction, contract delta diffing, durable live state (SQLite now; Postgres/Redis later), severity scoring.
 - Milestone 2: dependency graph, MCP adapter, GitHub webhooks, cross-agent support.
 - Milestone 3: team briefings.
 - Milestone 4: persistent memory.

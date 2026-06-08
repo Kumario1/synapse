@@ -14,9 +14,11 @@
   "dependencies": {
     "@synapse/conflict-engine": "0.0.0",
     "@synapse/protocol": "0.0.0",
+    "better-sqlite3": "^12.10.0",
     "ws": "^8.18.2"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
     "@types/ws": "^8.18.1"
   }
 }
