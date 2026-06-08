@@ -81,6 +81,11 @@ redis:        live sessions, edit locks (TTL), pub/sub fan-out
   working tree is synced to a known commit, installs Claude Code hooks, registers the local MCP
   server, and starts the daemon. Target <5s.
 
+Current implementation: `synapse join` writes `.synapse/config.json` with `repoId`, `serverUrl`,
+`daemonPort`, `member`, `sessionId`, `agentType`, and `worktreeRoot`. The daemon and local CLI
+commands read that file as defaults, with precedence `flags > environment > .synapse/config.json >
+built-ins`.
+
 ---
 
 ## 3. The Symbol Model (language-neutral)
