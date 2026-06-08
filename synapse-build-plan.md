@@ -99,6 +99,8 @@ file-level detection and Claude-Code-only support. A **persistent local agent** 
   - Claude Code: native `PreToolUse` / `PostToolUse` hooks (shell out to the daemon over a local socket).
   - Cursor / Cline / Aider: MCP tools (`synapse_check`, `synapse_report`) the agent calls, plus
     optional editor rules that nudge the agent to call them.
+  - Current MCP adapter: `synapse mcp` runs a stdio server that forwards those tool calls to the
+    already-running local daemon, keeping daemon HTTP as the single implementation path.
 - **Distribution**: npm package (`npx @synapse/cli join`) and a standalone binary (so non-Node users
   aren't blocked). Cheap-path fallback: a thin shell script for Claude-Code-only early adopters.
 

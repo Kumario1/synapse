@@ -27,6 +27,7 @@ import {
   createOpenRouterAnalysisProvider,
   createOpenRouterResolutionProvider
 } from "./explain-openrouter.js";
+import { runMcp } from "./mcp.js";
 import {
   createEmptyTeamState,
   PROTOCOL_VERSION,
@@ -77,6 +78,9 @@ switch (command) {
     break;
   case "session":
     await runSession(args.slice(1));
+    break;
+  case "mcp":
+    await runMcp(args.slice(1));
     break;
   case "join":
     await runJoin(args.slice(1));
@@ -980,11 +984,13 @@ Commands:
   report   Call the local synapse_report endpoint
   push     Notify Synapse that files were pushed
   session  Start, heartbeat, or end a local session
+  mcp      Run a stdio MCP server that forwards tools to the local daemon
   join     Write a local .synapse/config.json
   analyze  Extract TypeScript contract symbols from a file
 
 Examples:
   synapse daemon --member alice --session alice --port 4011
+  synapse mcp --port 4011
   synapse report --port 4011 --file src/auth/token.ts --symbol ts:src/auth/token.ts#TokenValidator.validate
   synapse push --port 4011 --file src/auth/token.ts --sha abc123 --summary "Pushed auth token changes"
   synapse check --port 4012 --file src/auth/token.ts --symbol ts:src/auth/token.ts#TokenValidator.validate

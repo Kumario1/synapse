@@ -256,10 +256,17 @@ synapse_check        { files: string[], symbols?: SymbolId[], task?: string }
                      -> { verdict: "none"|"info"|"warn", conflicts: Conflict[] }
 synapse_report       { filePath: string }   // daemon reads tree+git, extracts delta locally
                      -> { ok: true, delta?: ContractDeltaSummary }
+synapse_push         { sha, summary, files[], symbols?: SymbolId[] }
+                     -> { ok: true, sha, files[] }
 synapse_whatsup      { since?: string }      -> { briefing: string }          // Layer II
 synapse_why          { question: string }    -> { answer: string, sources: [] } // Layer III
-synapse_session      { action: "start"|"end", task?: string } -> { sessionId }
+synapse_session      { action: "start"|"heartbeat"|"end", task?: string } -> { sessionId }
 ```
+
+Current implementation: `synapse mcp` starts a stdio MCP adapter for Cursor/Cline/Aider-style
+clients. The adapter does not duplicate Synapse logic; it forwards tool calls to the local daemon's
+HTTP endpoints so the daemon remains the owner of extraction, conflict detection, analysis, and
+resolution.
 
 **Claude Code hooks** (the first-class automatic path) — installed into the repo's settings:
 - `PreToolUse` on `Edit|Write|MultiEdit`: shells into the daemon's local endpoint = `synapse_check`
