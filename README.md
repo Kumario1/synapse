@@ -17,12 +17,14 @@ The repository now has the local realtime loop in place:
    `synapse_push`, and session tools.
 3. TypeScript contract extraction, file-only checks, dependency checks, compatibility analysis, and
    deterministic/optional-LLM contract resolution.
-4. Deterministic `synapse whatsup` team-state briefing from the daemon's warm cache.
-5. Stdio MCP adapter so MCP-capable agents can call the same daemon tools without shell-specific
+4. Python contract extraction and cross-file dependency graphs via a long-lived analyzer sidecar
+   (tree-sitter + jedi), routed through the same conflict engine as TypeScript.
+5. Deterministic `synapse whatsup` team-state briefing from the daemon's warm cache.
+6. Stdio MCP adapter so MCP-capable agents can call the same daemon tools without shell-specific
    integration code.
 
 The implementation is still intentionally local and in-memory. It proves the hot loop before adding
-persistence, auth, Python analysis, or real hook installation.
+persistence, auth, or real hook installation.
 
 ## Architecture Shape
 
@@ -32,6 +34,8 @@ apps/
   server/       local websocket fanout server
 packages/
   analyzer-ts/ TypeScript contract extraction
+  analyzer-py/ Python contract extraction + dependency graph (tree-sitter +
+               jedi sidecar, driven over JSON-RPC/stdio)
   protocol/     shared wire, state, and symbol types
   conflict-engine/
                 pure conflict evaluator
@@ -39,7 +43,8 @@ packages/
 
 ## Local Development
 
-Prerequisite: Node.js 20+ and npm.
+Prerequisites: Node.js 20+ and npm. Python 3.10+ is required only for analyzing
+`.py` files; without it, Python files degrade gracefully to file-level detection.
 
 ```bash
 npm install
@@ -122,6 +127,52 @@ change:
 
 ```bash
 npm run verify:dependency-ts-check
+```
+
+## Python Analysis (tree-sitter + jedi sidecar)
+
+Python files are analyzed by a long-lived sidecar process that the daemon drives
+over newline-delimited JSON-RPC on stdio. It uses **tree-sitter** for
+deterministic contract extraction (module functions, classes, public methods,
+dataclass/annotated fields, and annotated module constants) and **jedi** for
+accurate cross-file reference resolution in the dependency graph. The sidecar
+emits the same language-neutral `CodeSymbol` shapes (`py:path#name` ids) the
+TypeScript analyzer does, so Python changes flow through the identical conflict
+engine, compatibility classifier, and resolver. Detection is never the LLM.
+
+The sidecar runs in a per-package virtualenv with pinned dependencies. Create or
+refresh it (idempotent — a stamp file skips reinstalls until `requirements.txt`
+changes):
+
+```bash
+npm run setup:analyzer-py
+```
+
+`synapse join` runs this automatically. The base interpreter can be overridden
+with `SYNAPSE_PYTHON_BASE`, and the daemon can be pointed at a specific
+interpreter with `SYNAPSE_PYTHON`. If no Python is found, Python files fall back
+to file-level detection instead of breaking the daemon.
+
+Inspect Python contracts from a file:
+
+```bash
+npm run dev --workspace @synapse/cli -- analyze --file packages/analyzer-py/python/synapse_analyzer/extract.py
+```
+
+Run the analyzer-py unit tests (contract extraction, stable sigHash, signature
+diffing, and jedi cross-file edges):
+
+```bash
+npm run verify:analyzer-py
+```
+
+Verify the full realtime Python loop — two daemons in separate worktrees rewrite
+the same Python symbol to incompatible return types, and the daemon detects the
+`contract_divergent` conflict and attaches a resolution (fully deterministic, no
+API key):
+
+```bash
+npm run verify:python-check
 ```
 
 Run the recorded conflict eval suite:
@@ -241,10 +292,13 @@ These are already resolved in the planning docs and should guide implementation 
 
 - Single repo first.
 - Self-hosted first.
-- TypeScript server/daemon with polyglot analyzers later.
+- TypeScript server/daemon with polyglot analyzers (TypeScript in-process,
+  Python in a tree-sitter + jedi sidecar).
 - Local daemon keeps raw code local.
 - Agents query; agents decide. Synapse warns inline, never auto-blocks.
 - TypeScript/JS and Python analyzers are the first language targets.
+- Python analysis runs in a long-lived sidecar over JSON-RPC/stdio, parsing with
+  tree-sitter and resolving cross-file references with jedi, in a pinned venv.
 - Dependency-graph-grade conflict detection is the moat.
 
 ## Open Decisions
@@ -253,9 +307,11 @@ Before changing these, ask the project owner:
 
 - Exact session lifecycle and idle timeout.
 - Edit lock granularity for v1: symbol-level only, file-level fallback, or both.
-- Python resolver packaging: pyright, jedi, or both behind the sidecar.
 - Graph cache format and acceptable initial index time.
-- Self-host packaging strategy for the Python sidecar.
+- Self-host packaging of the Python sidecar venv (shipped venv, container, or
+  on-join `pip install` — currently on-join install).
+- Whether to keep the sidecar warm across the hot path or accept jedi's cost only
+  on the post-edit report path.
 - Wire-protocol auth and token rotation.
 
 ## Roadmap
