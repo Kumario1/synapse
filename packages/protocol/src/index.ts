@@ -137,8 +137,50 @@ export interface ConflictAnalysis {
   recommendation: ConflictRecommendation;
   /** Ordered, side-addressed steps. */
   actions: ConflictAction[];
+  /**
+   * A concrete merged-contract resolution both agents adopt, when one applies
+   * (the `contract_divergent` and `same_symbol_unpushed` "same code" rules).
+   * Always populated deterministically by the engine; optionally upgraded by a
+   * `ResolutionProvider`.
+   */
+  resolution?: ProposedResolution;
   /** What produced this analysis: `"deterministic"` or a model id. */
   source: string;
+}
+
+/**
+ * A concrete *resolution* of a contract conflict: one merged signature that
+ * both agents adopt so their edits converge, rather than the side-addressed
+ * advice carried by {@link ConflictAnalysis}. Produced deterministically by the
+ * engine and optionally upgraded by a {@link ResolutionProvider} (an LLM) for
+ * the narrow `contract_divergent` case where both sides rewrote one symbol.
+ */
+export interface ProposedResolution {
+  /** `true` when one merged contract was synthesized; `false` = escalate. */
+  reconciled: boolean;
+  /** The signature both sides adopt verbatim. `null` when escalating. */
+  proposedContract: string | null;
+  /** Why this merge (or escalation) is correct. */
+  rationale: string;
+  /** `"warn"` once merged; `"block"` when escalated and one side must yield. */
+  recommendation: ConflictRecommendation;
+  /** Identical for both sides ("write exactly this"). */
+  instruction: string;
+  /** What produced it: a model id or `"deterministic"`. */
+  source: string;
+}
+
+/**
+ * Server-side canonical record of a {@link ProposedResolution}, stored in
+ * {@link TeamState} so both agents read the *same* object. Keyed by the symbol
+ * plus a hash of the two contributing diffs; first writer wins.
+ */
+export interface ContractResolution extends ProposedResolution {
+  repoId: string;
+  symbol: SymbolId;
+  /** Hash of the two contributing side diffs; symmetric across agents. */
+  inputsHash: string;
+  createdAt: string;
 }
 
 export type ContractDeltaSummary = Pick<
@@ -185,6 +227,8 @@ export interface TeamState {
   editLocks: EditLock[];
   unpushedDeltas: ContractDelta[];
   recentPushes: RecentPush[];
+  /** Canonical, shared contract resolutions, keyed by symbol + inputsHash. */
+  resolutions: ContractResolution[];
 }
 
 export interface Conflict {
@@ -207,9 +251,18 @@ export interface Conflict {
   suggestion: string;
   /**
    * The concrete contract change behind this conflict, when one is known.
-   * Lets consumers render the actual before -> after instead of prose.
+   * For symbol-level conflicts this is the *counterpart's* change. Lets
+   * consumers render the actual before -> after instead of prose.
    */
   change?: ContractChange;
+  /**
+   * For `contract_divergent`: the *checking* side's own competing change to the
+   * same symbol (the counterpart's is in `change`). Together they let a resolver
+   * synthesize one merged contract and a symmetric inputs hash.
+   */
+  selfChange?: ContractChange;
+  /** The checking agent's session id; pairs with `counterpart.sessionId`. */
+  selfSessionId?: string;
   /**
    * A human-readable explanation of why this is (or is not) a real conflict.
    * Always populated deterministically by the engine. Detection never depends
@@ -309,6 +362,10 @@ export type ClientMessage =
         symbols?: SymbolId[];
       }
     >
+  | WireEnvelope<
+      "resolution.propose",
+      { repoId: string; resolution: ContractResolution }
+    >
   | WireEnvelope<"query.briefing", { repoId: string; since?: string }>;
 
 export type ServerMessage =
@@ -322,7 +379,8 @@ export function createEmptyTeamState(repoId: string): TeamState {
     sessions: [],
     editLocks: [],
     unpushedDeltas: [],
-    recentPushes: []
+    recentPushes: [],
+    resolutions: []
   };
 }
 
