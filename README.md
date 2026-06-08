@@ -126,6 +126,27 @@ actual `before`/`after` signatures and classifies whether the change is really a
 npm run verify:contract-compat
 ```
 
+## Contract Resolution (converging two agents on one contract)
+
+Beyond *advice*, a `contract_divergent` conflict carries a `resolution` (`ProposedResolution`) — a
+concrete merged contract both agents adopt so their edits converge:
+
+- **Deterministic baseline (always present, no key).** `contract_divergent` resolves to an
+  *escalate* (`reconciled:false`, `recommendation:"block"`) naming both sides' contracts — it never
+  guesses a merge. `same_symbol_unpushed` resolves to *adopt-the-counterpart* (`reconciled:true`),
+  since only one side changed the symbol.
+- **Canonical & converged.** A computed resolution is stored once in the server's `TeamState`, keyed
+  by `symbol + inputsHash` (a symmetric hash of both diffs), first-writer-wins, and broadcast — so
+  both agents read the *same* object. Any new delta or push for the symbol invalidates it.
+- **Optional LLM resolver (with a key).** For `contract_divergent` only, the daemon asks the model
+  (temperature 0, symmetric A/B prompt, caller-aware via the file + dependency-graph neighbors) to
+  synthesize one signature. The proposed contract must parse via the real analyzer or it falls back
+  to the deterministic escalate. Unreconcilable intents return `block` with a reason.
+
+```bash
+npm run verify:resolution   # fully deterministic, no key required
+```
+
 ### Optional LLM analysis (OpenRouter)
 
 Detection stays fully deterministic. An optional layer turns the conflict — including the **code
@@ -142,7 +163,9 @@ node --env-file=.env apps/cli/dist/index.js daemon --member bob --session bob --
 ```
 
 The model defaults to `anthropic/claude-haiku-4.5` (per the build plan) and is overridable via
-`SYNAPSE_LLM_MODEL`. With no key set, the daemon runs fully offline on the deterministic analysis.
+`SYNAPSE_LLM_MODEL`. The same key enables the contract resolver (above); `SYNAPSE_LLM_EXPLAIN=0` and
+`SYNAPSE_LLM_RESOLVE=0` disable each layer independently. With no key set, the daemon runs fully
+offline on the deterministic analysis and resolution.
 
 ## Decisions In Force
 

@@ -1,8 +1,15 @@
 import type {
   AnalysisProvider,
-  ConflictAnalysisInput
+  ConflictAnalysisInput,
+  ResolutionProvider,
+  ResolutionRequest
 } from "@synapse/conflict-engine";
-import type { ConflictAction, ConflictAnalysis, ConflictRecommendation } from "@synapse/protocol";
+import type {
+  ConflictAction,
+  ConflictAnalysis,
+  ConflictRecommendation,
+  ProposedResolution
+} from "@synapse/protocol";
 
 /**
  * Optional LLM analysis provider backed by OpenRouter (Rung 5).
@@ -192,4 +199,181 @@ function cacheKey(input: ConflictAnalysisInput): string {
     input.selfSignature?.raw ?? "",
     input.selfChange?.after?.raw ?? ""
   ].join("|");
+}
+
+/**
+ * Optional LLM *resolution* provider backed by OpenRouter. Where the analysis
+ * provider produces advice, this synthesizes ONE merged contract both agents
+ * adopt — used only for the narrow `contract_divergent` case.
+ *
+ * Determinism is required for convergence (two machines may both generate), so:
+ *   - temperature is 0 (vs 0.2 for analysis),
+ *   - the prompt is symmetric: sides are labelled A/B by their pre-sorted order,
+ *     never "you"/"counterpart", so it is identical on both machines,
+ *   - results are cached by `inputsHash`.
+ *
+ * Configuration mirrors the analysis provider; `SYNAPSE_LLM_RESOLVE=0`
+ * force-disables it even when a key is present. Returns `null` on any failure
+ * (missing key, bad response, timeout, parse failure) so the daemon falls back
+ * to the deterministic resolution and never breaks a `synapse_check`.
+ */
+export function createOpenRouterResolutionProvider(): ResolutionProvider | null {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey || process.env.SYNAPSE_LLM_RESOLVE === "0") {
+    return null;
+  }
+
+  const baseUrl = (process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1").replace(/\/$/, "");
+  const model = process.env.SYNAPSE_LLM_MODEL ?? "anthropic/claude-haiku-4.5";
+  const timeoutMs = Number(process.env.SYNAPSE_LLM_TIMEOUT_MS ?? 8000);
+  const cache = new Map<string, ProposedResolution>();
+
+  return {
+    async proposeResolution(req: ResolutionRequest): Promise<ProposedResolution | null> {
+      const cached = cache.get(req.inputsHash);
+      if (cached) {
+        return cached;
+      }
+
+      // Retry once: a strict-JSON contract is brittle, and a single retry
+      // recovers most malformed first responses without affecting the verdict.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const content = await requestCompletion(baseUrl, apiKey, model, timeoutMs, req);
+        const resolution = parseResolution(content, model);
+        if (resolution) {
+          cache.set(req.inputsHash, resolution);
+          return resolution;
+        }
+      }
+
+      return null;
+    }
+  };
+}
+
+async function requestCompletion(
+  baseUrl: string,
+  apiKey: string,
+  model: string,
+  timeoutMs: number,
+  req: ResolutionRequest
+): Promise<string | undefined> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${apiKey}`,
+        "x-title": "Synapse"
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 700,
+        temperature: 0,
+        messages: [
+          { role: "system", content: RESOLUTION_SYSTEM_PROMPT },
+          { role: "user", content: buildResolutionPrompt(req) }
+        ]
+      })
+    });
+
+    if (!response.ok) {
+      return undefined;
+    }
+
+    const data = (await response.json()) as { choices?: { message?: { content?: string } }[] };
+    return data.choices?.[0]?.message?.content;
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const RESOLUTION_SYSTEM_PROMPT = [
+  "You reconcile two AI coding agents that have each rewritten the SAME symbol to a different, incompatible contract.",
+  "You are given both sides labelled A and B (order is fixed; never assume one is the reader), the computing agent's file, and dependency-graph neighbors.",
+  "Synthesize ONE merged signature that BOTH sides can adopt verbatim so their edits converge. Consider the neighbors so callers still type-check.",
+  "If the two intents cannot be safely reconciled into one signature, DO NOT guess: set reconciled=false and explain why one side must yield.",
+  "Reply with STRICT JSON only (no markdown, no prose outside the object) of the shape:",
+  '{"reconciled": boolean, "proposedContract": string|null, "rationale": string,',
+  '"recommendation": "warn"|"block", "instruction": string}',
+  "proposedContract must be a complete TypeScript declaration (so it parses standalone) when reconciled=true, else null.",
+  "instruction is identical for both sides ('write exactly this'). Use recommendation 'warn' when merged, 'block' when escalating."
+].join(" ");
+
+function buildResolutionPrompt(req: ResolutionRequest): string {
+  const [a, b] = req.sides;
+  return JSON.stringify(
+    {
+      symbol: req.symbol,
+      sideA: a ? { before: a.before, after: a.after } : null,
+      sideB: b ? { before: b.before, after: b.after } : null,
+      computingAgentFile: req.fileContext ?? null,
+      neighbors: req.neighbors ?? []
+    },
+    null,
+    2
+  );
+}
+
+function parseResolution(content: string | undefined, model: string): ProposedResolution | null {
+  if (!content) {
+    return null;
+  }
+
+  const start = content.indexOf("{");
+  const end = content.lastIndexOf("}");
+  if (start === -1 || end <= start) {
+    return null;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+
+  if (typeof parsed !== "object" || parsed === null) {
+    return null;
+  }
+
+  const record = parsed as Record<string, unknown>;
+  const reconciled = record.reconciled === true;
+  const rationale = typeof record.rationale === "string" ? record.rationale.trim() : "";
+  const instruction = typeof record.instruction === "string" ? record.instruction.trim() : "";
+  const proposedContract =
+    typeof record.proposedContract === "string" && record.proposedContract.trim()
+      ? record.proposedContract.trim()
+      : null;
+  const recommendation =
+    record.recommendation === "block" || record.recommendation === "warn"
+      ? record.recommendation
+      : reconciled
+        ? "warn"
+        : "block";
+
+  if (!rationale || !instruction) {
+    return null;
+  }
+
+  // A reconciled result with no contract is self-contradictory; reject so the
+  // caller falls back to the deterministic escalate.
+  if (reconciled && !proposedContract) {
+    return null;
+  }
+
+  return {
+    reconciled,
+    proposedContract: reconciled ? proposedContract : null,
+    rationale,
+    recommendation,
+    instruction,
+    source: model
+  };
 }
