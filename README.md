@@ -112,6 +112,15 @@ change:
 npm run verify:dependency-ts-check
 ```
 
+Run the recorded conflict eval suite:
+
+```bash
+npm run eval:conflicts
+```
+
+The eval fixtures cover the current warning/no-warning contract: no overlap, same-symbol breaking,
+same-symbol compatible, direct dependency, divergent contracts, stale base, and same-file low-noise.
+
 Notify Synapse that pushed files should leave live unpushed state:
 
 ```bash
