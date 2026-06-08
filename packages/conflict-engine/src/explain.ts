@@ -60,6 +60,13 @@ const recommendationByRule: Record<Conflict["rule"], ConflictAnalysis["recommend
   same_file_no_overlap: "info"
 };
 
+const recommendationRank: Record<ConflictAnalysis["recommendation"], number> = {
+  proceed: 0,
+  info: 1,
+  warn: 2,
+  block: 3
+};
+
 /**
  * Deterministic, dependency-free actionable analysis. Always available, always
  * the fallback. Reads from the structured `change` so it states *what* changed,
@@ -342,7 +349,14 @@ export async function enrichConflicts(
         // The analysis provider only upgrades the prose/steps; carry the
         // deterministic merged-contract resolution across so it is not lost.
         const analysis = enriched
-          ? { ...enriched, resolution: enriched.resolution ?? deterministic.resolution }
+          ? {
+              ...enriched,
+              recommendation: strongestRecommendation(
+                deterministic.recommendation,
+                enriched.recommendation
+              ),
+              resolution: enriched.resolution ?? deterministic.resolution
+            }
           : deterministic;
 
         return { ...conflict, analysis };
@@ -351,4 +365,13 @@ export async function enrichConflicts(
       }
     })
   );
+}
+
+function strongestRecommendation(
+  deterministic: ConflictAnalysis["recommendation"],
+  enriched: ConflictAnalysis["recommendation"]
+): ConflictAnalysis["recommendation"] {
+  return recommendationRank[enriched] >= recommendationRank[deterministic]
+    ? enriched
+    : deterministic;
 }

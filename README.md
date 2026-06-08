@@ -188,6 +188,21 @@ The model defaults to `anthropic/claude-haiku-4.5` (per the build plan) and is o
 `SYNAPSE_LLM_RESOLVE=0` disable each layer independently. With no key set, the daemon runs fully
 offline on the deterministic analysis and resolution.
 
+To verify the OpenRouter path locally:
+
+```bash
+set -a
+source .env
+set +a
+
+npm run verify:contract-compat
+npm run verify:resolution
+```
+
+When OpenRouter is used, the output's `analysis.source` or `analysis.resolution.source` is the model
+slug. If the model fails or times out, Synapse falls back to `source:"deterministic"`. The model can
+raise a recommendation, but it cannot downgrade a deterministic warning into `info` or `proceed`.
+
 ## Decisions In Force
 
 These are already resolved in the planning docs and should guide implementation unless we explicitly revise them:
