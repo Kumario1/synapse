@@ -24,10 +24,12 @@ The repository now has the local realtime loop in place:
    integration code.
 7. Durable server state via a `StateStore` (SQLite): live sessions, unpushed deltas, recent pushes,
    edit locks, and resolutions survive a server restart.
+8. Automatic Claude Code hooks installed by `synapse join`: `PreToolUse` checks before an edit and
+   `PostToolUse` reports after, via the `synapse hook` entrypoint.
 
 The server is single-process with an in-memory hot path backed by a durable store. Postgres/Redis
 (for multi-instance fan-out) can implement the same `StateStore` later without touching server logic.
-Auth and real hook installation are still ahead.
+Auth is still ahead.
 
 ## Architecture Shape
 
@@ -78,6 +80,28 @@ npm run verify:join-config
 
 `synapse join` writes `.synapse/config.json`. Daemon and CLI commands read it as defaults, using this
 precedence: explicit flags, environment variables, `.synapse/config.json`, then built-in defaults.
+
+## Claude Code Hooks (automatic checks)
+
+`synapse join` also installs Claude Code hooks into the repo's `.claude/settings.json`, so Synapse
+fires automatically — no manual tool calls. It merges into existing settings idempotently and never
+disturbs hooks you already have:
+
+- **`PreToolUse`** on `Edit|Write|MultiEdit` → `synapse hook pre`: runs `synapse_check` for the target
+  file. On a conflict it returns a Claude Code `ask` decision so the developer sees the heads-up and
+  decides (proceed / adjust / coordinate) — "agents query, humans decide," never an auto-block.
+- **`PostToolUse`** on `Edit|Write|MultiEdit` → `synapse hook post`: runs `synapse_report` for the
+  changed file so the contract delta fans out to the team.
+
+The `synapse hook` entrypoint reads Claude Code's hook JSON on stdin, maps the edited file to a
+repo-relative path, and talks to the local daemon. It is defensive by design: a missing daemon, an
+out-of-tree file, or any error exits cleanly without ever interrupting or failing the edit. Set
+`SYNAPSE_HOOK_NONBLOCKING=1` to inject the heads-up as context and proceed without a prompt instead of
+asking.
+
+```bash
+npm run verify:hooks   # dogfoods join + `hook pre`/`hook post` exactly as Claude Code invokes them
+```
 
 Start two local daemon sessions in separate terminals:
 
