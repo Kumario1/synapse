@@ -93,6 +93,9 @@ disturbs hooks you already have:
   decides (proceed / adjust / coordinate) — "agents query, humans decide," never an auto-block.
 - **`PostToolUse`** on `Edit|Write|MultiEdit` → `synapse hook post`: runs `synapse_report` for the
   changed file so the contract delta fans out to the team.
+- **`SessionStart`** (`startup|resume|clear`) → `synapse hook session-start`: injects a Layer II
+  catch-up — recent pushes, teammates' unpushed contract changes, and recent session summaries —
+  as context, excluding your own work. Silent when there is nothing new.
 
 The `synapse hook` entrypoint reads Claude Code's hook JSON on stdin, maps the edited file to a
 repo-relative path, and talks to the local daemon. It is defensive by design: a missing daemon, an
@@ -151,6 +154,15 @@ even with a key.
 
 ```bash
 npm run verify:session-summary   # deterministic, no key required
+```
+
+On the other end, a starting session gets a **catch-up briefing**: the `SessionStart` hook
+(`synapse hook session-start`) digests recent pushes, teammates' unpushed contract changes, and recent
+session summaries from `whatsup` and injects them as context — your own work filtered out — so an agent
+resumes with the team's current picture. It is silent when nothing has changed.
+
+```bash
+npm run verify:session-start     # deterministic, no key required
 ```
 
 Verify the automatic TypeScript report path:
