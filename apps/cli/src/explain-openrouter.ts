@@ -377,3 +377,102 @@ function parseResolution(content: string | undefined, model: string): ProposedRe
     source: model
   };
 }
+
+/** One contract change a session produced, as input to summarization. */
+export interface SessionSummaryDelta {
+  symbol: string;
+  changeKind: string;
+  before: string | null;
+  after: string | null;
+  summary: string;
+}
+
+export interface SessionSummaryInput {
+  member: string;
+  task: string | null;
+  deltas: SessionSummaryDelta[];
+}
+
+/**
+ * Optional LLM session summarizer (Layer II). Distills a session's contract
+ * deltas into 2-3 teammate-facing sentences. Like the other providers it is
+ * fully optional: `null` without a key (or with `SYNAPSE_LLM_SUMMARY=0`), and a
+ * timeout/bad response yields `null` so the daemon keeps its deterministic
+ * summary. It never runs in the edit hot path — only on session end.
+ */
+export interface SummaryProvider {
+  readonly model: string;
+  summarizeSession(input: SessionSummaryInput): Promise<string | null>;
+}
+
+export function createOpenRouterSummaryProvider(): SummaryProvider | null {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey || process.env.SYNAPSE_LLM_SUMMARY === "0") {
+    return null;
+  }
+
+  const baseUrl = (process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1").replace(/\/$/, "");
+  const model = process.env.SYNAPSE_LLM_MODEL ?? "anthropic/claude-haiku-4.5";
+  const timeoutMs = Number(process.env.SYNAPSE_LLM_TIMEOUT_MS ?? 8000);
+
+  return {
+    model,
+    async summarizeSession(input: SessionSummaryInput): Promise<string | null> {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        const response = await fetch(`${baseUrl}/chat/completions`, {
+          method: "POST",
+          signal: controller.signal,
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${apiKey}`,
+            "x-title": "Synapse"
+          },
+          body: JSON.stringify({
+            model,
+            max_tokens: 220,
+            temperature: 0.3,
+            messages: [
+              { role: "system", content: SUMMARY_SYSTEM_PROMPT },
+              { role: "user", content: buildSummaryPrompt(input) }
+            ]
+          })
+        });
+
+        if (!response.ok) {
+          return null;
+        }
+
+        const data = (await response.json()) as { choices?: { message?: { content?: string } }[] };
+        const content = data.choices?.[0]?.message?.content?.trim();
+        return content && content.length > 0 ? content : null;
+      } catch {
+        return null;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+  };
+}
+
+const SUMMARY_SYSTEM_PROMPT = [
+  "You summarize one coding session's contract changes for teammates catching up.",
+  "Write 2-3 plain sentences: what the session changed at the contract level and why it might matter to others.",
+  "Be concrete about signatures that changed (before -> after). No preamble, no markdown, no bullet list — just the prose."
+].join(" ");
+
+function buildSummaryPrompt(input: SessionSummaryInput): string {
+  const lines = input.deltas.map((delta) => {
+    const shape = delta.before && delta.after ? `${delta.before} -> ${delta.after}` : delta.after ?? delta.before ?? "";
+    return `- ${delta.symbol} (${delta.changeKind})${shape ? `: ${shape}` : ""}`;
+  });
+
+  return [
+    `Member: ${input.member}`,
+    `Task: ${input.task ?? "(none stated)"}`,
+    `Contract changes (${input.deltas.length}):`,
+    lines.length > 0 ? lines.join("\n") : "(none)"
+  ].join("\n");
+}

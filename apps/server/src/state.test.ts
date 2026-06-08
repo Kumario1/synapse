@@ -94,6 +94,20 @@ test("a push for the symbol clears its resolution", () => {
   assert.equal(state.resolutions.length, 0);
 });
 
+test("session.summary stores most-recent-first and replaces a session's prior summary", () => {
+  const state = createEmptyTeamState("local");
+
+  applyMessage(state, "local", summaryMessage("alice", "alice's first summary"));
+  applyMessage(state, "local", summaryMessage("bob", "bob's summary"));
+  // Re-ending alice replaces her entry rather than adding a second.
+  applyMessage(state, "local", summaryMessage("alice", "alice's revised summary"));
+
+  assert.equal(state.sessionSummaries.length, 2);
+  assert.equal(state.sessionSummaries[0].sessionId, "alice", "most recent is first");
+  assert.equal(state.sessionSummaries[0].summary, "alice's revised summary");
+  assert.equal(state.sessionSummaries.filter((s) => s.sessionId === "alice").length, 1);
+});
+
 const now = "2026-06-07T00:00:00.000Z";
 
 function withDivergentDeltas(): TeamState {
@@ -164,4 +178,28 @@ function delta(input: { id: string; sessionId: string; after: Signature }): Cont
 
 function sig(raw: string): Signature {
   return { params: [], returns: null, raw };
+}
+
+function summaryMessage(sessionId: string, summary: string): ClientMessage {
+  return {
+    v: PROTOCOL_VERSION,
+    type: "session.summary",
+    id: `s-${sessionId}`,
+    ts: now,
+    payload: {
+      repoId: "local",
+      summary: {
+        sessionId,
+        repoId: "local",
+        memberLogin: sessionId,
+        task: null,
+        summary,
+        symbols: [{ raw: symbol }],
+        deltaCount: 1,
+        source: "deterministic",
+        startedAt: now,
+        endedAt: now
+      }
+    }
+  };
 }

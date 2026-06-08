@@ -35,7 +35,10 @@ import {
 } from "@synapse/conflict-engine";
 import {
   createOpenRouterAnalysisProvider,
-  createOpenRouterResolutionProvider
+  createOpenRouterResolutionProvider,
+  createOpenRouterSummaryProvider,
+  type SessionSummaryDelta,
+  type SummaryProvider
 } from "./explain-openrouter.js";
 import { runMcp } from "./mcp.js";
 import {
@@ -51,6 +54,7 @@ import {
   type ProposedResolution,
   type ServerMessage,
   type Session,
+  type SessionSummary,
   type Signature,
   type SynapseCheckRequest,
   type SynapseCheckResponse,
@@ -133,6 +137,9 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
   // Optional LLM resolver: synthesizes one merged contract for the narrow
   // `contract_divergent` case. Null without a key → deterministic escalate.
   const resolutionProvider = createOpenRouterResolutionProvider();
+  // Optional LLM session summarizer (Layer II). Null without a key → the
+  // deterministic, structured summary. Never runs in the edit hot path.
+  const summaryProvider = createOpenRouterSummaryProvider();
 
   const sendToServer = (type: ClientMessage["type"], payload: unknown): void => {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
@@ -311,6 +318,10 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
         const action = body.action ?? "heartbeat";
 
         if (action === "end") {
+          // Layer II: distill what this session changed into a durable summary
+          // before tearing it down, so teammates can catch up later.
+          const summary = await buildSessionSummary(config, teamState, summaryProvider, body.task);
+          sendToServer("session.summary", { repoId: config.repoId, summary });
           sendToServer("session.end", {
             repoId: config.repoId,
             sessionId: config.sessionId
@@ -820,6 +831,93 @@ function makeSession(config: RuntimeConfig, task: string | null = null): Session
   };
 }
 
+/**
+ * Distill the ending session's contract changes into a {@link SessionSummary}.
+ * Deterministic by default (a structured list of the session's deltas); upgraded
+ * to prose by the LLM summarizer when one is configured. Reads the session's own
+ * unpushed deltas from the warm cache — never raw code.
+ */
+async function buildSessionSummary(
+  config: RuntimeConfig,
+  state: TeamState,
+  provider: SummaryProvider | null,
+  task: string | undefined
+): Promise<SessionSummary> {
+  const now = new Date().toISOString();
+  const session = state.sessions.find((candidate) => candidate.id === config.sessionId);
+  const resolvedTask = task ?? session?.lastTask ?? null;
+  const myDeltas = state.unpushedDeltas.filter(
+    (delta) => delta.sessionId === config.sessionId && delta.pushedAt === null
+  );
+  const symbols = [...new Map(myDeltas.map((delta) => [delta.symbolId.raw, delta.symbolId])).values()];
+
+  let summary = deterministicSessionSummary(config.member, resolvedTask, myDeltas);
+  let source = "deterministic";
+
+  if (provider && myDeltas.length > 0) {
+    const llm = await provider
+      .summarizeSession({
+        member: config.member,
+        task: resolvedTask,
+        deltas: myDeltas.map(summaryDeltaFor)
+      })
+      .catch(() => null);
+    if (llm) {
+      summary = llm;
+      source = provider.model;
+    }
+  }
+
+  return {
+    sessionId: config.sessionId,
+    repoId: config.repoId,
+    memberLogin: config.member,
+    task: resolvedTask,
+    summary,
+    symbols,
+    deltaCount: myDeltas.length,
+    source,
+    startedAt: session?.startedAt ?? now,
+    endedAt: now
+  };
+}
+
+function summaryDeltaFor(delta: ContractDelta): SessionSummaryDelta {
+  return {
+    symbol: delta.symbolId.raw,
+    changeKind: delta.changeKind,
+    before: delta.before?.raw ?? null,
+    after: delta.after?.raw ?? null,
+    summary: delta.summary
+  };
+}
+
+/** A structured, no-LLM summary of a session's contract changes. */
+function deterministicSessionSummary(
+  member: string,
+  task: string | null,
+  deltas: ContractDelta[]
+): string {
+  const taskSuffix = task ? ` Task: ${task}.` : "";
+  if (deltas.length === 0) {
+    return `${member}'s session ended with no contract changes.${taskSuffix}`;
+  }
+
+  const fileCount = new Set(deltas.map((delta) => delta.filePath)).size;
+  const items = deltas.slice(0, 5).map((delta) => {
+    const name = delta.symbolId.raw.split("#").pop() ?? delta.symbolId.raw;
+    const shape =
+      delta.before?.raw && delta.after?.raw ? `: ${delta.before.raw} -> ${delta.after.raw}` : "";
+    return `${name} (${delta.changeKind}${shape})`;
+  });
+  const more = deltas.length > items.length ? `, +${deltas.length - items.length} more` : "";
+
+  return (
+    `${member}'s session changed ${deltas.length} contract${deltas.length === 1 ? "" : "s"} ` +
+    `across ${fileCount} file${fileCount === 1 ? "" : "s"}: ${items.join(", ")}${more}.${taskSuffix}`
+  );
+}
+
 function buildWhatsupResponse(
   state: TeamState,
   options: { degraded: boolean; limit?: number }
@@ -839,6 +937,9 @@ function buildWhatsupResponse(
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const recentPushes = [...state.recentPushes].sort((a, b) => b.pushedAt.localeCompare(a.pushedAt));
   const resolutions = [...state.resolutions].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const sessionSummaries = [...state.sessionSummaries].sort((a, b) =>
+    b.endedAt.localeCompare(a.endedAt)
+  );
 
   return {
     repoId: state.repoId,
@@ -849,7 +950,8 @@ function buildWhatsupResponse(
       `${unpushedDeltas.length} unpushed contract delta${unpushedDeltas.length === 1 ? "" : "s"}`,
       `${state.editLocks.length} active edit lock${state.editLocks.length === 1 ? "" : "s"}`,
       `${recentPushes.length} recent push${recentPushes.length === 1 ? "" : "es"}`,
-      `${resolutions.length} shared resolution${resolutions.length === 1 ? "" : "s"}`
+      `${resolutions.length} shared resolution${resolutions.length === 1 ? "" : "s"}`,
+      `${sessionSummaries.length} session summar${sessionSummaries.length === 1 ? "y" : "ies"}`
     ],
     sessions: activeSessions.slice(0, limit).map((session) => ({
       id: session.id,
@@ -875,7 +977,8 @@ function buildWhatsupResponse(
     })),
     editLocks: state.editLocks.slice(0, limit),
     recentPushes: recentPushes.slice(0, limit),
-    resolutions: resolutions.slice(0, limit)
+    resolutions: resolutions.slice(0, limit),
+    sessionSummaries: sessionSummaries.slice(0, limit)
   };
 }
 
