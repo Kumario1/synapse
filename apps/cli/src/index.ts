@@ -489,7 +489,7 @@ function cliEntrypoint(): string {
 }
 
 /** The shell command Claude Code runs for a given hook stage. */
-function hookCommand(stage: "pre" | "post"): string {
+function hookCommand(stage: "pre" | "post" | "session-start"): string {
   return `node "${cliEntrypoint()}" hook ${stage}`;
 }
 
@@ -514,12 +514,19 @@ async function installClaudeCodeHooks(repoDir: string): Promise<void> {
   }
 
   const hooks = isRecord(settings.hooks) ? settings.hooks : {};
-  const matcher = "Edit|Write|MultiEdit";
+  const editMatcher = "Edit|Write|MultiEdit";
+  const startMatcher = "startup|resume|clear";
 
   settings.hooks = {
     ...hooks,
-    PreToolUse: withSynapseHook(hooks.PreToolUse, matcher, hookCommand("pre")),
-    PostToolUse: withSynapseHook(hooks.PostToolUse, matcher, hookCommand("post"))
+    PreToolUse: withSynapseHook(hooks.PreToolUse, editMatcher, hookCommand("pre"), "pre"),
+    PostToolUse: withSynapseHook(hooks.PostToolUse, editMatcher, hookCommand("post"), "post"),
+    SessionStart: withSynapseHook(
+      hooks.SessionStart,
+      startMatcher,
+      hookCommand("session-start"),
+      "session-start"
+    )
   };
 
   await writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
@@ -535,13 +542,16 @@ interface HookEntry {
  * Return the event's matcher groups with our `synapse hook` command ensured
  * present exactly once under `matcher`, preserving any other groups/commands.
  */
-function withSynapseHook(existing: unknown, matcher: string, command: string): HookEntry[] {
+function withSynapseHook(
+  existing: unknown,
+  matcher: string,
+  command: string,
+  stage: "pre" | "post" | "session-start"
+): HookEntry[] {
   const groups: HookEntry[] = Array.isArray(existing) ? (existing as HookEntry[]).map(cloneEntry) : [];
 
-  // A stable identity for our command regardless of the embedded absolute path.
-  const isSynapseCommand = (value: string): boolean => /\bhook (pre|post)\b/u.test(value);
-  const stage = command.includes("hook pre") ? "pre" : "post";
-  const sameStage = (value: string): boolean => value.includes(`hook ${stage}`);
+  // Identify our command for this stage regardless of the embedded absolute path.
+  const isOurStage = (value: string): boolean => new RegExp(`\\bhook ${stage}\\b`, "u").test(value);
 
   let group = groups.find((entry) => entry.matcher === matcher);
   if (!group) {
@@ -552,7 +562,7 @@ function withSynapseHook(existing: unknown, matcher: string, command: string): H
 
   // Drop any prior Synapse command for this stage (handles a moved CLI path),
   // then add the current one. Non-Synapse hooks are untouched.
-  group.hooks = group.hooks.filter((hook) => !(isSynapseCommand(hook.command) && sameStage(hook.command)));
+  group.hooks = group.hooks.filter((hook) => !isOurStage(hook.command));
   group.hooks.push({ type: "command", command });
 
   return groups;
@@ -598,16 +608,21 @@ async function runAnalyze(rawArgs: string[]): Promise<void> {
  * out-of-tree file exits 0 with no decision.
  */
 async function runHook(rawArgs: string[]): Promise<void> {
-  const stage = rawArgs[0] === "post" ? "post" : "pre";
+  const stage = hookStage(rawArgs[0]);
   try {
     const input = parseHookInput(await readStdin());
+    const defaults = commandDefaults({});
+    const baseUrl = `http://localhost:${defaults.daemonPort}`;
+
+    if (stage === "session-start") {
+      await runSessionStartHook(baseUrl, defaults);
+      return;
+    }
+
     const filePath = hookRelativePath(input);
     if (!filePath) {
       return; // Not a file edit we can map — stay silent.
     }
-
-    const defaults = commandDefaults({});
-    const baseUrl = `http://localhost:${defaults.daemonPort}`;
 
     if (stage === "post") {
       await postJson(`${baseUrl}/tools/synapse_report`, {
@@ -630,6 +645,86 @@ async function runHook(rawArgs: string[]): Promise<void> {
   } catch {
     // Swallow everything — a hook must not interrupt or fail the edit.
   }
+}
+
+function hookStage(value: string | undefined): "pre" | "post" | "session-start" {
+  if (value === "post") {
+    return "post";
+  }
+  if (value === "session-start") {
+    return "session-start";
+  }
+  return "pre";
+}
+
+/**
+ * SessionStart hook: greet a starting session with a catch-up on what changed
+ * while it was away — recent pushes, teammates' unpushed contract changes, and
+ * recent session summaries — injected as Claude Code context. Silent when there
+ * is nothing new or the daemon is unreachable.
+ */
+async function runSessionStartHook(
+  baseUrl: string,
+  defaults: { repoId: string; sessionId: string }
+): Promise<void> {
+  const briefing = (await postJson(`${baseUrl}/tools/synapse_whatsup`, {
+    repoId: defaults.repoId,
+    sessionId: defaults.sessionId
+  }).catch(() => null)) as SynapseWhatsupResponse | null;
+  if (!briefing) {
+    return;
+  }
+
+  const context = sessionStartBriefing(briefing, defaults.sessionId);
+  if (!context) {
+    return; // All caught up — stay silent.
+  }
+
+  process.stdout.write(
+    `${JSON.stringify({
+      hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: context }
+    })}\n`
+  );
+}
+
+/** Build the catch-up text from a whatsup briefing, excluding the reader's own work. */
+function sessionStartBriefing(briefing: SynapseWhatsupResponse, selfSessionId: string): string | null {
+  const sections: string[] = [];
+
+  const pushes = briefing.recentPushes.slice(0, 5);
+  if (pushes.length > 0) {
+    sections.push(
+      `Recent pushes:\n${pushes
+        .map((push) => `  • ${push.memberId}: ${push.summary} (${push.filesAffected.length} file(s))`)
+        .join("\n")}`
+    );
+  }
+
+  const othersDeltas = briefing.unpushedDeltas.filter((delta) => delta.sessionId !== selfSessionId);
+  if (othersDeltas.length > 0) {
+    sections.push(
+      `Teammates' unpushed contract changes:\n${othersDeltas
+        .slice(0, 5)
+        .map((delta) => `  • ${delta.memberLogin}: ${delta.symbolId.raw} (${delta.changeKind})`)
+        .join("\n")}`
+    );
+  }
+
+  const summaries = briefing.sessionSummaries.filter((summary) => summary.sessionId !== selfSessionId);
+  if (summaries.length > 0) {
+    sections.push(
+      `Recent session summaries:\n${summaries
+        .slice(0, 3)
+        .map((summary) => `  • ${summary.summary}`)
+        .join("\n")}`
+    );
+  }
+
+  if (sections.length === 0) {
+    return null;
+  }
+
+  return `📋 Synapse catch-up for ${briefing.repoId}:\n${sections.join("\n\n")}`;
 }
 
 /**
