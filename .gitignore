@@ -11,6 +11,10 @@ coverage/
 .venv/
 __pycache__/
 *.pyc
+.synapse-server/
+*.db
+*.db-shm
+*.db-wal
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

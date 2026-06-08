@@ -24,6 +24,7 @@
     "verify:resolution": "npm run build && node scripts/verify-resolution.mjs",
     "verify:mcp-adapter": "npm run build && node scripts/verify-mcp-adapter.mjs",
     "verify:github-webhook": "npm run build && node scripts/verify-github-webhook.mjs",
+    "verify:persistence": "npm run build && node scripts/verify-persistence.mjs",
     "verify:whatsup": "npm run build && node scripts/verify-whatsup.mjs",
     "verify:join-config": "npm run build && node scripts/verify-join-config.mjs",
     "eval:conflicts": "npm run build && node scripts/eval-conflicts.mjs",

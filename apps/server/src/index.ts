@@ -12,8 +12,13 @@ import {
 import { WebSocket, WebSocketServer } from "ws";
 import { gitHubPushToNotify } from "./github.js";
 import { applyMessage, pruneExpiredLocks, repoIdFor } from "./state.js";
+import { createStateStore } from "./store.js";
 
 const port = Number(process.env.SYNAPSE_SERVER_PORT ?? 4010);
+// Durable per-repo state. In-memory cache is the hot-path working copy; the
+// store persists every mutation so a restart resumes live state. With no
+// SYNAPSE_DB_PATH the store is in-memory and behavior is identical to before.
+const store = createStateStore();
 const states = new Map<string, TeamState>();
 const roomClients = new Map<string, Set<WebSocket>>();
 
@@ -63,6 +68,19 @@ httpServer.listen(port, () => {
   console.log(`synapse server listening on http://localhost:${port}`);
 });
 
+// Flush every cached repo and close the store cleanly on shutdown so a restart
+// resumes from a consistent snapshot.
+const shutdown = (): void => {
+  for (const repoId of states.keys()) {
+    persist(repoId);
+  }
+  store.close();
+  httpServer.close();
+  process.exit(0);
+};
+process.once("SIGINT", shutdown);
+process.once("SIGTERM", shutdown);
+
 async function handleMessage(socket: WebSocket, fallbackRepoId: string, raw: string): Promise<void> {
   let message: ClientMessage;
 
@@ -76,6 +94,7 @@ async function handleMessage(socket: WebSocket, fallbackRepoId: string, raw: str
   try {
     const repoId = repoIdFor(message) ?? fallbackRepoId;
     applyMessage(getState(repoId), repoId, message);
+    persist(repoId);
     send(socket, envelope("ack", { forId: message.id, ok: true }));
     broadcast(repoId, envelope("state.snapshot", { teamState: getState(repoId) }));
   } catch (error) {
@@ -117,6 +136,7 @@ async function handleGitHubWebhook(
       push.repoId,
       clientEnvelope("push.notify", push.payload)
     );
+    persist(push.repoId);
     broadcast(push.repoId, envelope("state.snapshot", { teamState: getState(push.repoId) }));
     writeJson(response, 202, {
       ok: true,
@@ -133,12 +153,21 @@ async function handleGitHubWebhook(
 function getState(repoId: string): TeamState {
   let state = states.get(repoId);
   if (!state) {
-    state = createEmptyTeamState(repoId);
+    // Cache miss: resume the persisted snapshot if one exists, else start fresh.
+    state = store.load(repoId) ?? createEmptyTeamState(repoId);
     states.set(repoId, state);
   }
 
   pruneExpiredLocks(state);
   return state;
+}
+
+/** Persist a repo's state after a mutation so it survives a restart. */
+function persist(repoId: string): void {
+  const state = states.get(repoId);
+  if (state) {
+    store.save(repoId, state);
+  }
 }
 
 function joinRoom(repoId: string, socket: WebSocket): void {
