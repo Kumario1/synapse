@@ -5,6 +5,7 @@ import {
   type EditLock,
   type RecentPush,
   type Session,
+  type SessionSummary,
   type TeamState
 } from "@synapse/protocol";
 import { resolutionInputsHash, resolutionSidesForSymbol } from "@synapse/conflict-engine";
@@ -71,6 +72,9 @@ export function applyMessage(
     case "resolution.propose":
       storeResolution(state, message.payload.resolution);
       break;
+    case "session.summary":
+      storeSessionSummary(state, message.payload.summary);
+      break;
     case "query.briefing":
       break;
     default:
@@ -92,6 +96,8 @@ export function repoIdFor(message: ClientMessage): string | null {
     case "push.notify":
       return message.payload.repoId;
     case "resolution.propose":
+      return message.payload.repoId;
+    case "session.summary":
       return message.payload.repoId;
     default:
       assertNever(message);
@@ -249,6 +255,18 @@ function invalidateResolutionsForSymbol(state: TeamState, symbolRaw: string): vo
     (resolution) =>
       resolution.symbol.raw !== symbolRaw || resolution.inputsHash === liveHash
   );
+}
+
+/**
+ * Record a session's narrative summary, most-recent-first. Re-ending the same
+ * session replaces its prior summary so a session has at most one entry.
+ */
+function storeSessionSummary(state: TeamState, summary: SessionSummary): void {
+  state.sessionSummaries = state.sessionSummaries.filter(
+    (candidate) => candidate.sessionId !== summary.sessionId
+  );
+  state.sessionSummaries.unshift(summary);
+  state.sessionSummaries = state.sessionSummaries.slice(0, 50);
 }
 
 function unique(values: string[]): string[] {
