@@ -8,6 +8,9 @@
   "references": [
     {
       "path": "../../packages/protocol"
+    },
+    {
+      "path": "../../packages/conflict-engine"
     }
   ],
   "include": [

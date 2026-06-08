@@ -1,7 +1,10 @@
+import { createHash } from "node:crypto";
 import type {
   Conflict,
   ConflictAnalysis,
   ContractChange,
+  ContractDelta,
+  ProposedResolution,
   Signature
 } from "@synapse/protocol";
 import { renderSignature } from "./compare.js";
@@ -85,7 +88,8 @@ export function deterministicAnalysis(conflict: Conflict): ConflictAnalysis {
           { audience: "both", step: `Agree on the final signature of ${symbol} before either side continues.` },
           { audience: "you", step: `Rebase your change onto the agreed contract, then re-run your checks.` },
           { audience: "counterpart", step: `Share or push your intended contract for ${symbol} so it can be reconciled.` }
-        ]
+        ],
+        resolution: deterministicResolution(conflict)
       };
 
     case "same_symbol_unpushed": {
@@ -99,7 +103,8 @@ export function deterministicAnalysis(conflict: Conflict): ConflictAnalysis {
               step: `Pull or inspect ${counterpart}'s branch and build against the new contract${change?.after ? ` ${renderSignature(change.after)}` : ""}.`
             },
             { audience: "counterpart", step: `Push the change or broadcast the new contract so others can adapt.` }
-          ]
+          ],
+          resolution: deterministicResolution(conflict)
         };
       }
       if (change?.compatibility === "compatible" || change?.compatibility === "identical") {
@@ -109,7 +114,8 @@ export function deterministicAnalysis(conflict: Conflict): ConflictAnalysis {
           assessment: `${counterpart} has an unpushed but backward-compatible change to ${symbol}${reasonText}. It should not break your edit.`,
           actions: [
             { audience: "you", step: `Proceed; no action required, but keep ${counterpart}'s change in mind.` }
-          ]
+          ],
+          resolution: deterministicResolution(conflict)
         };
       }
       return {
@@ -117,7 +123,8 @@ export function deterministicAnalysis(conflict: Conflict): ConflictAnalysis {
         assessment: `${counterpart} has an unpushed change to ${symbol} that could not be classified automatically.`,
         actions: [
           { audience: "you", step: `Inspect ${counterpart}'s change to ${symbol} before editing the same contract.` }
-        ]
+        ],
+        resolution: deterministicResolution(conflict)
       };
     }
 
@@ -162,6 +169,141 @@ export function deterministicAnalysis(conflict: Conflict): ConflictAnalysis {
 }
 
 /**
+ * One contributing side of a contract resolution: a single agent's competing
+ * change to the symbol. Sides are sorted by `sessionId` so the inputs hash and
+ * the "side A / side B" ordering are identical on every machine, regardless of
+ * which agent is the "self".
+ */
+export interface ResolutionSide {
+  sessionId: string;
+  member: string;
+  before: string | null;
+  after: string | null;
+}
+
+/**
+ * Deterministic, dependency-free resolution for the two "same code" rules.
+ * Always available, always the fallback when no `ResolutionProvider` is wired:
+ *
+ * - `contract_divergent` → escalate (`reconciled:false`, `recommendation:"block"`):
+ *   both sides rewrote the symbol, so no merge can be derived without an LLM.
+ * - `same_symbol_unpushed` → adopt the counterpart's contract (`reconciled:true`):
+ *   only one side changed it, so the other simply conforms — no round-trip.
+ *
+ * Returns `undefined` for every other rule.
+ */
+export function deterministicResolution(conflict: Conflict): ProposedResolution | undefined {
+  const symbol = conflict.targetSymbol.raw;
+  const counterpart = conflict.counterpart.memberLogin;
+
+  if (conflict.rule === "contract_divergent") {
+    const sides = [
+      { sessionId: conflict.selfSessionId ?? "self", after: conflict.selfChange?.after ?? null },
+      { sessionId: conflict.counterpart.sessionId, after: conflict.change?.after ?? null }
+    ].sort((a, b) => a.sessionId.localeCompare(b.sessionId));
+    const sideA = renderSignature(sides[0].after);
+    const sideB = renderSignature(sides[1].after);
+
+    return {
+      reconciled: false,
+      proposedContract: null,
+      rationale: `Both sides rewrote ${symbol} to different contracts; a safe merge cannot be derived deterministically.`,
+      recommendation: "block",
+      instruction: `Agree on one signature for ${symbol}: side A = ${sideA} vs side B = ${sideB}.`,
+      source: "deterministic"
+    };
+  }
+
+  if (conflict.rule === "same_symbol_unpushed") {
+    const after = conflict.change?.after ?? null;
+    return {
+      reconciled: after?.raw != null,
+      proposedContract: after?.raw ?? null,
+      rationale: `Only ${counterpart} changed ${symbol}; conform to their contract so both sides match.`,
+      recommendation: "warn",
+      instruction: `Adopt the counterpart's contract: ${renderSignature(after)}.`,
+      source: "deterministic"
+    };
+  }
+
+  return undefined;
+}
+
+/**
+ * Build the canonical, side-ordered inputs for a symbol's resolution from the
+ * shared unpushed deltas. Keeps only the latest unpushed delta per session and
+ * sorts by `sessionId`, so the daemon (building a request) and the server
+ * (invalidating stale resolutions) derive exactly the same sides — and thus the
+ * same {@link resolutionInputsHash}.
+ */
+export function resolutionSidesForSymbol(
+  deltas: ContractDelta[],
+  symbolRaw: string
+): ResolutionSide[] {
+  const latestBySession = new Map<string, ContractDelta>();
+
+  for (const delta of deltas) {
+    if (delta.symbolId.raw !== symbolRaw || delta.pushedAt !== null) {
+      continue;
+    }
+
+    const existing = latestBySession.get(delta.sessionId);
+    if (!existing || delta.createdAt >= existing.createdAt) {
+      latestBySession.set(delta.sessionId, delta);
+    }
+  }
+
+  return [...latestBySession.values()]
+    .map((delta) => ({
+      sessionId: delta.sessionId,
+      member: delta.sessionId,
+      before: delta.before?.raw ?? null,
+      after: delta.after?.raw ?? null
+    }))
+    .sort((a, b) => a.sessionId.localeCompare(b.sessionId));
+}
+
+/**
+ * Canonical, symmetric hash of the two contributing diffs behind a resolution.
+ * Sides are sorted by `sessionId` before hashing, so Alice and Bob compute the
+ * same value for the same pair of changes. Lives in the engine so both daemons
+ * (and the server's invalidation logic) derive it identically.
+ */
+export function resolutionInputsHash(symbol: string, sides: ResolutionSide[]): string {
+  const ordered = [...sides]
+    .sort((a, b) => a.sessionId.localeCompare(b.sessionId))
+    .map((side) => ({ sessionId: side.sessionId, before: side.before, after: side.after }));
+
+  return createHash("sha256").update(JSON.stringify({ symbol, sides: ordered })).digest("hex");
+}
+
+/**
+ * Input handed to a {@link ResolutionProvider}. Carries the deterministically
+ * derived, side-ordered facts plus optional code context for the computing
+ * agent's file and its dependency-graph neighbors.
+ */
+export interface ResolutionRequest {
+  symbol: string;
+  inputsHash: string;
+  /** Both sides, already sorted by `sessionId` (symmetric across machines). */
+  sides: ResolutionSide[];
+  /** The computing agent's full file, for a caller-aware merge. */
+  fileContext?: string;
+  /** Dependency-graph neighbors (callers/types) and their signatures. */
+  neighbors?: { symbol: string; signature: string }[];
+}
+
+/**
+ * Pluggable, OPTIONAL resolution layer. Like {@link AnalysisProvider}, it never
+ * affects correctness: a thrown error or `null` keeps the engine's deterministic
+ * resolution. Used only for the narrow `contract_divergent` case where a merged
+ * contract must be synthesized.
+ */
+export interface ResolutionProvider {
+  proposeResolution(req: ResolutionRequest): Promise<ProposedResolution | null>;
+}
+
+/**
  * A short, deterministic one-liner kept on `conflict.explanation` for backward
  * compatibility and quick display. The richer, actionable output is `analysis`.
  */
@@ -197,7 +339,13 @@ export async function enrichConflicts(
           deterministic
         });
 
-        return { ...conflict, analysis: enriched ?? deterministic };
+        // The analysis provider only upgrades the prose/steps; carry the
+        // deterministic merged-contract resolution across so it is not lost.
+        const analysis = enriched
+          ? { ...enriched, resolution: enriched.resolution ?? deterministic.resolution }
+          : deterministic;
+
+        return { ...conflict, analysis };
       } catch {
         return { ...conflict, analysis: deterministic };
       }

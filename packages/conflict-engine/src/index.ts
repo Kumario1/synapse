@@ -112,7 +112,9 @@ export function evaluateConflicts(context: ConflictCheckContext): Conflict[] {
               `${counterpart.memberLogin} and you both changed ${targetSymbol.raw} to different contracts: ` +
               `theirs ${renderSignature(delta.after)} vs yours ${renderSignature(selfDelta.after)}.`,
             suggestion: "Your changes are incompatible — agree on one final contract before continuing.",
-            change
+            change,
+            selfChange: contractChangeFor(selfDelta),
+            selfSessionId: context.selfSessionId
           });
           continue;
         }
@@ -331,11 +333,17 @@ export {
 } from "./compare.js";
 export {
   deterministicAnalysis,
+  deterministicResolution,
   enrichConflicts,
+  resolutionInputsHash,
+  resolutionSidesForSymbol,
   templateExplanation,
   type AnalysisContext,
   type AnalysisProvider,
-  type ConflictAnalysisInput
+  type ConflictAnalysisInput,
+  type ResolutionProvider,
+  type ResolutionRequest,
+  type ResolutionSide
 } from "./explain.js";
 
 export type { Conflict };

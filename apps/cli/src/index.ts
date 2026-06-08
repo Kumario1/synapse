@@ -13,12 +13,20 @@ import {
   emptyDependencyGraph,
   enrichConflicts,
   evaluateConflicts,
+  resolutionInputsHash,
+  resolutionSidesForSymbol,
   symbolForFile,
+  type Conflict,
   type DependencyGraph,
   type DependencyHop,
+  type ResolutionProvider,
+  type ResolutionSide,
   verdictFor
 } from "@synapse/conflict-engine";
-import { createOpenRouterAnalysisProvider } from "./explain-openrouter.js";
+import {
+  createOpenRouterAnalysisProvider,
+  createOpenRouterResolutionProvider
+} from "./explain-openrouter.js";
 import {
   createEmptyTeamState,
   PROTOCOL_VERSION,
@@ -28,6 +36,8 @@ import {
   type ContractChange,
   type ContractDelta,
   type ContractDeltaSummary,
+  type ContractResolution,
+  type ProposedResolution,
   type ServerMessage,
   type Session,
   type Signature,
@@ -87,6 +97,9 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
   // Optional LLM analysis layer (Rung 5). Null unless OPENROUTER_API_KEY is
   // set; detection stays deterministic either way.
   const analysisProvider = createOpenRouterAnalysisProvider();
+  // Optional LLM resolver: synthesizes one merged contract for the narrow
+  // `contract_divergent` case. Null without a key → deterministic escalate.
+  const resolutionProvider = createOpenRouterResolutionProvider();
 
   const sendToServer = (type: ClientMessage["type"], payload: unknown): void => {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
@@ -162,7 +175,7 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
           });
         }
 
-        const graph = await buildDependencyGraph(config);
+        const { graph, neighborsOf } = await buildDependencyGraph(config);
         const conflicts = evaluateConflicts({
           selfSessionId: config.sessionId,
           targets,
@@ -180,9 +193,22 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
             })
           : conflicts;
 
+        // Resolve `contract_divergent` conflicts to one shared merged contract:
+        // read the canonical store first (convergence), otherwise generate via
+        // the optional LLM resolver, publish, and attach. Falls back to the
+        // engine's deterministic escalate when no provider/resolution exists.
+        const resolved = await attachResolutions(
+          config,
+          explained,
+          teamState,
+          resolutionProvider,
+          neighborsOf,
+          sendToServer
+        );
+
         writeJson(response, 200, {
           verdict: verdictFor(conflicts),
-          conflicts: explained,
+          conflicts: resolved,
           degraded: socket?.readyState !== WebSocket.OPEN
         });
         return;
@@ -483,14 +509,26 @@ function selfChanges(state: TeamState, selfSessionId: string): Map<string, Contr
   return changes;
 }
 
-async function buildDependencyGraph(config: RuntimeConfig): Promise<DependencyGraph> {
+interface DaemonGraph {
+  graph: DependencyGraph;
+  /** A symbol's dependency-graph neighbors (it imports / is imported by) and
+   * their signatures, for caller-aware resolution context. */
+  neighborsOf(symbolRaw: string): { symbol: string; signature: string }[];
+}
+
+async function buildDependencyGraph(config: RuntimeConfig): Promise<DaemonGraph> {
   const files = await readTypeScriptFiles(config.worktreeRoot);
   if (files.length === 0) {
-    return emptyDependencyGraph;
+    return { graph: emptyDependencyGraph, neighborsOf: () => [] };
   }
 
   const graph = extractTypeScriptDependencyGraph({ files });
   const adjacency = new Map<string, ContractDelta["symbolId"][]>();
+  const signatureBySymbol = new Map<string, string>();
+
+  for (const symbol of graph.symbols) {
+    signatureBySymbol.set(symbol.id.raw, symbol.signature?.raw ?? symbol.name);
+  }
 
   for (const edge of graph.edges) {
     const dependencies = adjacency.get(edge.from.raw) ?? [];
@@ -498,7 +536,23 @@ async function buildDependencyGraph(config: RuntimeConfig): Promise<DependencyGr
     adjacency.set(edge.from.raw, dependencies);
   }
 
-  return {
+  const neighborsOf = (symbolRaw: string): { symbol: string; signature: string }[] => {
+    const related = new Set<string>();
+    for (const edge of graph.edges) {
+      if (edge.from.raw === symbolRaw) {
+        related.add(edge.to.raw);
+      } else if (edge.to.raw === symbolRaw) {
+        related.add(edge.from.raw);
+      }
+    }
+
+    return [...related].map((raw) => ({
+      symbol: raw,
+      signature: signatureBySymbol.get(raw) ?? raw
+    }));
+  };
+
+  const dependencyGraph: DependencyGraph = {
     dependenciesOf(symbolId, maxHops): DependencyHop[] {
       const result: DependencyHop[] = [];
       const seen = new Set<string>([symbolId.raw]);
@@ -527,6 +581,149 @@ async function buildDependencyGraph(config: RuntimeConfig): Promise<DependencyGr
       return result;
     }
   };
+
+  return { graph: dependencyGraph, neighborsOf };
+}
+
+/**
+ * Attach a converged merged-contract resolution to every `contract_divergent`
+ * conflict. Order of preference: (1) the server-canonical resolution already
+ * stored for this exact `(symbol, inputsHash)` — so both agents read the same
+ * object; (2) a freshly generated one from the LLM resolver, validated and then
+ * published so it becomes canonical; (3) the engine's deterministic escalate,
+ * which is already on `conflict.analysis.resolution`.
+ */
+async function attachResolutions(
+  config: RuntimeConfig,
+  conflicts: Conflict[],
+  teamState: TeamState,
+  resolutionProvider: ResolutionProvider | null,
+  neighborsOf: (symbolRaw: string) => { symbol: string; signature: string }[],
+  sendToServer: (type: ClientMessage["type"], payload: unknown) => void
+): Promise<Conflict[]> {
+  return Promise.all(
+    conflicts.map(async (conflict) => {
+      if (conflict.rule !== "contract_divergent" || !conflict.analysis) {
+        return conflict;
+      }
+
+      const symbol = conflict.targetSymbol.raw;
+      const sides = labelSides(resolutionSidesForSymbol(teamState.unpushedDeltas, symbol), teamState);
+      const inputsHash = resolutionInputsHash(symbol, sides);
+
+      // (1) Convergence: a resolution for this exact pair already exists.
+      const stored = teamState.resolutions.find(
+        (resolution) => resolution.symbol.raw === symbol && resolution.inputsHash === inputsHash
+      );
+      if (stored) {
+        return withResolution(conflict, toProposed(stored));
+      }
+
+      if (!resolutionProvider) {
+        return conflict; // (3) keep the deterministic escalate.
+      }
+
+      // (2) Generate, validate, publish.
+      const filePath = teamState.unpushedDeltas.find(
+        (delta) => delta.symbolId.raw === symbol
+      )?.filePath;
+      const fileContext = filePath ? await readFileContext(config, filePath) : undefined;
+
+      let proposed: ProposedResolution | null = null;
+      try {
+        proposed = await resolutionProvider.proposeResolution({
+          symbol,
+          inputsHash,
+          sides,
+          fileContext,
+          neighbors: neighborsOf(symbol)
+        });
+      } catch {
+        proposed = null;
+      }
+
+      if (!proposed) {
+        return conflict; // resolver failed → deterministic escalate stands.
+      }
+
+      // A reconciled contract that does not parse cannot be trusted; fall back
+      // to the deterministic escalate rather than handing agents broken code.
+      if (proposed.reconciled && !contractParses(proposed.proposedContract)) {
+        return conflict;
+      }
+
+      const record: ContractResolution = {
+        ...proposed,
+        repoId: config.repoId,
+        symbol: conflict.targetSymbol,
+        inputsHash,
+        createdAt: new Date().toISOString()
+      };
+      sendToServer("resolution.propose", { repoId: config.repoId, resolution: record });
+
+      return withResolution(conflict, proposed);
+    })
+  );
+}
+
+/** Replace `member` on each side with its session's display login, if known. */
+function labelSides(sides: ResolutionSide[], state: TeamState): ResolutionSide[] {
+  return sides.map((side) => {
+    const session = state.sessions.find((candidate) => candidate.id === side.sessionId);
+    return { ...side, member: session?.memberLogin ?? session?.memberId ?? side.member };
+  });
+}
+
+function withResolution(conflict: Conflict, resolution: ProposedResolution): Conflict {
+  return {
+    ...conflict,
+    analysis: conflict.analysis
+      ? { ...conflict.analysis, resolution }
+      : conflict.analysis
+  };
+}
+
+function toProposed(resolution: ContractResolution): ProposedResolution {
+  return {
+    reconciled: resolution.reconciled,
+    proposedContract: resolution.proposedContract,
+    rationale: resolution.rationale,
+    recommendation: resolution.recommendation,
+    instruction: resolution.instruction,
+    source: resolution.source
+  };
+}
+
+async function readFileContext(config: RuntimeConfig, filePath: string): Promise<string | undefined> {
+  try {
+    return await readFile(resolve(config.worktreeRoot, filePath), "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A proposed merged contract is trusted only if the real analyzer can parse it.
+ * We probe leniently: a full declaration is extracted directly; anything else
+ * is wrapped as a type alias so a bare signature still has a chance to parse.
+ */
+function contractParses(proposedContract: string | null): boolean {
+  if (!proposedContract) {
+    return false;
+  }
+
+  const isDeclaration = /^\s*(export\s+)?(declare\s+)?(function|class|interface|type|enum|const)\b/u.test(
+    proposedContract
+  );
+  const source = isDeclaration
+    ? proposedContract.replace(/^\s*(export\s+)?/u, "export ")
+    : `export type __Resolution = ${proposedContract};`;
+
+  try {
+    return extractTypeScriptContracts({ filePath: "__resolution.ts", source }).symbols.length > 0;
+  } catch {
+    return false;
+  }
 }
 
 async function reportContractChanges(

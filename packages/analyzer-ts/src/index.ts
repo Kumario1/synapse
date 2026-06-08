@@ -522,8 +522,12 @@ function symbolName(declaration: FunctionDeclaration | ClassDeclaration): string
 }
 
 function spanFor(filePath: string, sourceFile: SourceFile, node: Node): CodeSymbol["span"] {
-  const start = sourceFile.getLineAndColumnAtPos(node.getStart());
-  const end = sourceFile.getLineAndColumnAtPos(node.getEnd());
+  // `getExportedDeclarations()` follows re-exports, so `node` can live in a
+  // different file than the one being scanned. Positions must be resolved
+  // against the node's own source file or they fall outside its length.
+  const owner = node.getSourceFile() ?? sourceFile;
+  const start = owner.getLineAndColumnAtPos(node.getStart());
+  const end = owner.getLineAndColumnAtPos(node.getEnd());
 
   return {
     path: normalizePath(filePath),

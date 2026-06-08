@@ -8,10 +8,11 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "node --test",
+    "test": "node --test dist/*.test.js",
     "dev": "node dist/index.js"
   },
   "dependencies": {
+    "@synapse/conflict-engine": "0.0.0",
     "@synapse/protocol": "0.0.0",
     "ws": "^8.18.2"
   },
