@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { createServer, type ServerResponse } from "node:http";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { URL } from "node:url";
 import {
   createEmptyTeamState,
@@ -10,6 +10,7 @@ import {
   type WireEnvelope
 } from "@synapse/protocol";
 import { WebSocket, WebSocketServer } from "ws";
+import { gitHubPushToNotify } from "./github.js";
 import { applyMessage, pruneExpiredLocks, repoIdFor } from "./state.js";
 
 const port = Number(process.env.SYNAPSE_SERVER_PORT ?? 4010);
@@ -17,6 +18,10 @@ const states = new Map<string, TeamState>();
 const roomClients = new Map<string, Set<WebSocket>>();
 
 const httpServer = createServer((request, response) => {
+  void handleHttp(request, response);
+});
+
+async function handleHttp(request: IncomingMessage, response: ServerResponse): Promise<void> {
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
 
   if (request.method === "GET" && url.pathname === "/health") {
@@ -29,8 +34,13 @@ const httpServer = createServer((request, response) => {
     return;
   }
 
+  if (request.method === "POST" && url.pathname === "/webhooks/github") {
+    await handleGitHubWebhook(request, response, url);
+    return;
+  }
+
   writeJson(response, 404, { error: "not_found" });
-});
+}
 
 const wsServer = new WebSocketServer({ server: httpServer });
 
@@ -71,6 +81,52 @@ async function handleMessage(socket: WebSocket, fallbackRepoId: string, raw: str
   } catch (error) {
     const reason = error instanceof Error ? error.message : "unknown_error";
     send(socket, envelope("ack", { forId: message.id, ok: false, error: reason }));
+  }
+}
+
+async function handleGitHubWebhook(
+  request: IncomingMessage,
+  response: ServerResponse,
+  url: URL
+): Promise<void> {
+  const raw = await readBody(request);
+  const secret = process.env.SYNAPSE_GITHUB_WEBHOOK_SECRET;
+  if (secret && !validGitHubSignature(raw, headerValue(request, "x-hub-signature-256"), secret)) {
+    writeJson(response, 401, { ok: false, error: "invalid_signature" });
+    return;
+  }
+
+  const event = headerValue(request, "x-github-event") ?? "unknown";
+  if (event !== "push") {
+    writeJson(response, 202, { ok: true, ignored: true, event });
+    return;
+  }
+
+  let payload: unknown;
+  try {
+    payload = raw ? JSON.parse(raw) : {};
+  } catch {
+    writeJson(response, 400, { ok: false, error: "invalid_json" });
+    return;
+  }
+
+  try {
+    const push = gitHubPushToNotify(payload, url.searchParams.get("repoId"));
+    applyMessage(
+      getState(push.repoId),
+      push.repoId,
+      clientEnvelope("push.notify", push.payload)
+    );
+    broadcast(push.repoId, envelope("state.snapshot", { teamState: getState(push.repoId) }));
+    writeJson(response, 202, {
+      ok: true,
+      repoId: push.repoId,
+      sha: push.payload.sha,
+      files: push.payload.files
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "unknown_error";
+    writeJson(response, 400, { ok: false, error: reason });
   }
 }
 
@@ -125,6 +181,51 @@ function envelope<TType extends ServerMessage["type"]>(
     ts: new Date().toISOString(),
     payload
   } as Extract<ServerMessage, WireEnvelope<TType>>;
+}
+
+function clientEnvelope<TType extends ClientMessage["type"]>(
+  type: TType,
+  payload: Extract<ClientMessage, WireEnvelope<TType>>["payload"]
+): Extract<ClientMessage, WireEnvelope<TType>> {
+  return {
+    v: PROTOCOL_VERSION,
+    type,
+    id: randomUUID(),
+    ts: new Date().toISOString(),
+    payload
+  } as Extract<ClientMessage, WireEnvelope<TType>>;
+}
+
+async function readBody(request: IncomingMessage): Promise<string> {
+  let body = "";
+  for await (const chunk of request) {
+    body += chunk;
+  }
+
+  return body;
+}
+
+function validGitHubSignature(rawBody: string, signature: string | null, secret: string): boolean {
+  if (!signature?.startsWith("sha256=")) {
+    return false;
+  }
+
+  const expected = `sha256=${createHmac("sha256", secret).update(rawBody).digest("hex")}`;
+  const actualBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+  return (
+    actualBuffer.length === expectedBuffer.length &&
+    timingSafeEqual(actualBuffer, expectedBuffer)
+  );
+}
+
+function headerValue(request: IncomingMessage, name: string): string | null {
+  const value = request.headers[name];
+  if (Array.isArray(value)) {
+    return value[0] ?? null;
+  }
+
+  return value ?? null;
 }
 
 function writeJson(response: ServerResponse, statusCode: number, body: unknown): void {
