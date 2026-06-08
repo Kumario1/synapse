@@ -297,6 +297,14 @@ ack                  { forId, ok, error? }
 The warm cache means `synapse_check` is normally answered **locally** against the replica + local
 graph. The server is the fan-out hub + source of truth, not in the hot path.
 
+### 8c. GitHub → Server Webhook
+
+Current implementation accepts GitHub `push` events at `POST /webhooks/github`. It converts the
+payload's changed files into the existing `push.notify` state mutation, records a `RecentPush`, clears
+matching live deltas/locks, and broadcasts a fresh `state.snapshot`. Local/dev verification may pass
+`?repoId=local`; production defaults to `repository.full_name`. When
+`SYNAPSE_GITHUB_WEBHOOK_SECRET` is set, the route requires a valid `X-Hub-Signature-256` HMAC.
+
 ---
 
 ## 9. The Conflict Engine (severity algorithm)
@@ -382,7 +390,8 @@ interface Conflict {
 8. Daemon: re-extract contract for the file (TS analyzer), diff vs. previous, compute ContractDelta
 9. If sigHash changed -> daemon emits a deterministic contract.delta over WSS
 10. Server fans out state.delta to every other daemon in the repo room -> their warm caches update
-11. On `git push`: daemon detects, sends push.notify -> server clears matching unpushedDeltas
+11. On `git push`: daemon sends push.notify or GitHub sends a push webhook -> server clears matching
+    unpushedDeltas
 ```
 
 Latency budget: steps 2–5 ≈ <50ms (no network). Steps 8–10 are off the critical path (post-edit).

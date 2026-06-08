@@ -108,6 +108,14 @@ npm run dev --workspace @synapse/cli -- push --port 4011 --file src/auth/token.t
 npm run verify:push-state-reset
 ```
 
+The server also accepts GitHub `push` webhooks at `POST /webhooks/github`. For local/dev repos,
+pass `?repoId=local`; otherwise the webhook uses `repository.full_name` as the Synapse repo id.
+Set `SYNAPSE_GITHUB_WEBHOOK_SECRET` to require GitHub's `X-Hub-Signature-256` HMAC check.
+
+```bash
+npm run verify:github-webhook
+```
+
 Expose the same daemon tools to MCP-capable agents:
 
 ```bash

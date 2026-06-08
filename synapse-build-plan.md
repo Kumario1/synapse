@@ -149,6 +149,8 @@ This is what separates Synapse from a filename-collision toy.
 ### 2.6 GitHub Integration
 - GitHub App with webhooks: `push`, `pull_request`, `pull_request_review`, `issue_comment`.
 - On push/merge: clear the corresponding in-flight contract deltas (state reset).
+- Current push webhook path: `POST /webhooks/github` ingests GitHub `push` payloads, optionally
+  verifies `X-Hub-Signature-256`, and reuses the same `push.notify` state mutation as the daemon.
 - On PR thread / review: candidate signal for Layer III decision capture.
 
 ### 2.7 Briefing Service (Layer II)
