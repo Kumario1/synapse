@@ -16,11 +16,12 @@ The repository now has the local realtime loop in place:
 2. Local daemon/CLI with `synapse_check`, `synapse_report`, `synapse_push`, and session tools.
 3. TypeScript contract extraction, file-only checks, dependency checks, compatibility analysis, and
    deterministic/optional-LLM contract resolution.
-4. Stdio MCP adapter so MCP-capable agents can call the same daemon tools without shell-specific
+4. Deterministic `synapse whatsup` team-state briefing from the daemon's warm cache.
+5. Stdio MCP adapter so MCP-capable agents can call the same daemon tools without shell-specific
    integration code.
 
 The implementation is still intentionally local and in-memory. It proves the hot loop before adding
-persistence, auth, GitHub webhooks, Python analysis, or real hook installation.
+persistence, auth, Python analysis, or real hook installation.
 
 ## Architecture Shape
 
@@ -82,6 +83,16 @@ npm run dev --workspace @synapse/cli -- check --port 4012 --file src/auth/token.
 
 Expected result: Bob receives a `warn` verdict for `same_symbol_unpushed`.
 
+Ask Bob's daemon for the current team-state briefing:
+
+```bash
+npm run dev --workspace @synapse/cli -- whatsup --port 4012
+npm run verify:whatsup
+```
+
+The briefing summarizes active sessions, unpushed contract deltas, edit locks, recent pushes, and
+shared contract resolutions. It is deterministic and reads from the daemon's local warm cache.
+
 Verify the automatic TypeScript report path:
 
 ```bash
@@ -124,9 +135,9 @@ npm run verify:mcp-adapter
 ```
 
 The MCP adapter is intentionally thin. It runs over stdio, registers `synapse_check`,
-`synapse_report`, `synapse_push`, and `synapse_session`, then forwards each call to the local daemon.
-The daemon remains the single place that owns contract extraction, conflict detection, LLM analysis,
-and resolution.
+`synapse_report`, `synapse_push`, `synapse_session`, and `synapse_whatsup`, then forwards each call
+to the local daemon. The daemon remains the single place that owns contract extraction, conflict
+detection, LLM analysis, resolution, and briefing.
 
 ## Contract-Level Conflict Classification
 

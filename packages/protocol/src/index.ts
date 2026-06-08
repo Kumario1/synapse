@@ -334,6 +334,43 @@ export interface SynapsePushResponse {
   files: string[];
 }
 
+export interface SynapseWhatsupRequest {
+  repoId: string;
+  sessionId: string;
+  /** Max rows per repeated section. Defaults to 10. */
+  limit?: number;
+}
+
+export interface WhatsupSessionSummary {
+  id: string;
+  memberLogin: string;
+  agentType: AgentType;
+  status: Session["status"];
+  lastTask: string | null;
+  filesEditing: string[];
+  lastSeen: string;
+}
+
+export interface WhatsupDeltaSummary extends ContractDeltaSummary {
+  sessionId: string;
+  memberLogin: string;
+  before: string | null;
+  after: string | null;
+  baseSha: string;
+}
+
+export interface SynapseWhatsupResponse {
+  repoId: string;
+  generatedAt: string;
+  degraded: boolean;
+  summary: string[];
+  sessions: WhatsupSessionSummary[];
+  unpushedDeltas: WhatsupDeltaSummary[];
+  editLocks: EditLock[];
+  recentPushes: RecentPush[];
+  resolutions: ContractResolution[];
+}
+
 export interface WireEnvelope<TType extends string = string, TPayload = unknown> {
   v: typeof PROTOCOL_VERSION;
   type: TType;
