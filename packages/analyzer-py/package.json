@@ -1,0 +1,29 @@
+{
+  "name": "@synapse/analyzer-py",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "python",
+    "requirements.txt"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "setup:venv": "node scripts/setup-venv.mjs",
+    "test": "node scripts/setup-venv.mjs && node --test dist/*.test.js"
+  },
+  "dependencies": {
+    "@synapse/protocol": "0.0.0"
+  }
+}

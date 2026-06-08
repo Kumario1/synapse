@@ -1,14 +1,22 @@
 #!/usr/bin/env node
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { join, relative, resolve } from "node:path";
+import { createRequire } from "node:module";
+import { dirname, join, relative, resolve } from "node:path";
 import {
   diffTypeScriptContracts,
   extractTypeScriptContracts,
   extractTypeScriptDependencyGraph
 } from "@synapse/analyzer-ts";
+import {
+  closePythonAnalyzer,
+  diffPythonContracts,
+  extractPythonContracts,
+  extractPythonDependencyGraph
+} from "@synapse/analyzer-py";
 import {
   contractChangeFor,
   emptyDependencyGraph,
@@ -327,6 +335,16 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
       `synapse daemon ${config.sessionId} listening on http://localhost:${config.daemonPort}`
     );
   });
+
+  // Tear the Python sidecar down with the daemon so it never lingers.
+  const shutdown = (): void => {
+    closePythonAnalyzer();
+    localServer.close();
+    socket?.close();
+    process.exit(0);
+  };
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
 }
 
 async function runCheck(rawArgs: string[]): Promise<void> {
@@ -437,14 +455,39 @@ async function runJoin(rawArgs: string[]): Promise<void> {
   );
 
   console.log(`wrote ${join(dir, "config.json")}`);
+
+  // Best-effort: prepare the Python analyzer venv so `.py` files are analyzed on
+  // first run. Never fails the join — missing Python just degrades to file-level.
+  setupPythonAnalyzerVenv();
+
   console.log(`start the daemon with: npm run dev --workspace @synapse/cli -- daemon`);
+}
+
+/** Run the analyzer-py venv setup script, resolved from the installed package. */
+function setupPythonAnalyzerVenv(): void {
+  try {
+    const require = createRequire(import.meta.url);
+    const packageJson = require.resolve("@synapse/analyzer-py/package.json");
+    const script = join(dirname(packageJson), "scripts", "setup-venv.mjs");
+    const result = spawnSync(process.execPath, [script], { stdio: "inherit" });
+    if (result.status !== 0) {
+      console.warn("synapse: Python analyzer setup skipped; .py files will use file-level detection.");
+    }
+  } catch {
+    console.warn("synapse: Python analyzer package not found; .py files will use file-level detection.");
+  }
 }
 
 async function runAnalyze(rawArgs: string[]): Promise<void> {
   const flags = parseFlags(rawArgs);
   const filePath = requiredFlag(flags, "file");
   const source = await readFile(resolve(commandCwd(), filePath), "utf8");
-  const result = extractTypeScriptContracts({ filePath, source });
+  const result = isPythonLike(filePath)
+    ? await extractPythonContracts({ filePath, source })
+    : extractTypeScriptContracts({ filePath, source });
+  if (isPythonLike(filePath)) {
+    closePythonAnalyzer();
+  }
   console.log(JSON.stringify(result, null, 2));
 }
 
@@ -659,7 +702,7 @@ async function resolveCheckTargets(
       continue;
     }
 
-    if (!isTypeScriptLike(filePath)) {
+    if (!isAnalyzable(filePath)) {
       targets.push({ filePath, symbolId: symbolForFile(filePath) });
       continue;
     }
@@ -708,20 +751,43 @@ interface DaemonGraph {
 }
 
 async function buildDependencyGraph(config: RuntimeConfig): Promise<DaemonGraph> {
-  const files = await readTypeScriptFiles(config.worktreeRoot);
-  if (files.length === 0) {
+  // Build each language's graph locally, then merge. Symbol ids are
+  // language-prefixed (`ts:` / `py:`), so the union never collides and the
+  // conflict engine sees one graph spanning both.
+  const tsFiles = await readSourceFiles(config.worktreeRoot, isTypeScriptLike);
+  const pyFiles = await readSourceFiles(config.worktreeRoot, isPythonLike);
+
+  const symbols: CodeSymbol[] = [];
+  const edges: { from: ContractDelta["symbolId"]; to: ContractDelta["symbolId"] }[] = [];
+
+  if (tsFiles.length > 0) {
+    const tsGraph = extractTypeScriptDependencyGraph({ files: tsFiles });
+    symbols.push(...tsGraph.symbols);
+    edges.push(...tsGraph.edges);
+  }
+
+  if (pyFiles.length > 0) {
+    try {
+      const pyGraph = await extractPythonDependencyGraph({ files: pyFiles });
+      symbols.push(...pyGraph.symbols);
+      edges.push(...pyGraph.edges);
+    } catch (error) {
+      warnAnalyzerDegraded("python", "dependency graph", error);
+    }
+  }
+
+  if (symbols.length === 0 && edges.length === 0) {
     return { graph: emptyDependencyGraph, neighborsOf: () => [] };
   }
 
-  const graph = extractTypeScriptDependencyGraph({ files });
   const adjacency = new Map<string, ContractDelta["symbolId"][]>();
   const signatureBySymbol = new Map<string, string>();
 
-  for (const symbol of graph.symbols) {
+  for (const symbol of symbols) {
     signatureBySymbol.set(symbol.id.raw, symbol.signature?.raw ?? symbol.name);
   }
 
-  for (const edge of graph.edges) {
+  for (const edge of edges) {
     const dependencies = adjacency.get(edge.from.raw) ?? [];
     dependencies.push(edge.to);
     adjacency.set(edge.from.raw, dependencies);
@@ -729,7 +795,7 @@ async function buildDependencyGraph(config: RuntimeConfig): Promise<DaemonGraph>
 
   const neighborsOf = (symbolRaw: string): { symbol: string; signature: string }[] => {
     const related = new Set<string>();
-    for (const edge of graph.edges) {
+    for (const edge of edges) {
       if (edge.from.raw === symbolRaw) {
         related.add(edge.to.raw);
       } else if (edge.to.raw === symbolRaw) {
@@ -928,7 +994,7 @@ async function reportContractChanges(
 
   const filePath = body.filePath;
 
-  if (body.symbolId || !isTypeScriptLike(filePath)) {
+  if (body.symbolId || !isAnalyzable(filePath)) {
     const symbolId = body.symbolId ?? symbolForFile(filePath);
     return [
       createContractDelta(config, {
@@ -952,7 +1018,8 @@ async function reportContractChanges(
     return [];
   }
 
-  return diffTypeScriptContracts(previous, current).map((change) =>
+  const diff = isPythonLike(filePath) ? diffPythonContracts : diffTypeScriptContracts;
+  return diff(previous, current).map((change) =>
     createContractDelta(config, {
       symbolId: change.symbolId,
       filePath,
@@ -1026,16 +1093,53 @@ function isTypeScriptLike(filePath: string): boolean {
   return /\.(cts|mts|tsx?|jsx?)$/u.test(filePath);
 }
 
-async function extractSymbolsForFile(config: RuntimeConfig, filePath: string): Promise<CodeSymbol[]> {
-  const source = await readFile(resolve(config.worktreeRoot, filePath), "utf8");
-  return extractTypeScriptContracts({
-    filePath,
-    source
-  }).symbols;
+function isPythonLike(filePath: string): boolean {
+  return /\.pyi?$/u.test(filePath);
 }
 
-async function readTypeScriptFiles(
+/** A file Synapse can extract a contract from (any supported analyzer). */
+function isAnalyzable(filePath: string): boolean {
+  return isTypeScriptLike(filePath) || isPythonLike(filePath);
+}
+
+/**
+ * Extract a file's contract symbols with the right per-language analyzer.
+ * Python runs in the sidecar (tree-sitter + jedi); if it is unavailable
+ * (no venv/deps) the call returns `[]`, so callers degrade to file-level
+ * detection exactly as they do for an unsupported language.
+ */
+async function extractSymbolsForFile(config: RuntimeConfig, filePath: string): Promise<CodeSymbol[]> {
+  const source = await readFile(resolve(config.worktreeRoot, filePath), "utf8");
+
+  if (isPythonLike(filePath)) {
+    try {
+      return (await extractPythonContracts({ filePath, source })).symbols;
+    } catch (error) {
+      warnAnalyzerDegraded("python", filePath, error);
+      return [];
+    }
+  }
+
+  return extractTypeScriptContracts({ filePath, source }).symbols;
+}
+
+let pythonDegradedWarned = false;
+
+/** Warn once that the Python analyzer is degraded — keeps logs quiet on repeat. */
+function warnAnalyzerDegraded(lang: string, filePath: string, error: unknown): void {
+  if (lang === "python" && pythonDegradedWarned) {
+    return;
+  }
+  pythonDegradedWarned = lang === "python" || pythonDegradedWarned;
+  const reason = error instanceof Error ? error.message : String(error);
+  console.warn(
+    `synapse: ${lang} analyzer unavailable (${reason}); falling back to file-level detection for ${filePath}`
+  );
+}
+
+async function readSourceFiles(
   root: string,
+  matches: (filePath: string) => boolean,
   currentDir: string = root
 ): Promise<{ filePath: string; source: string }[]> {
   const entries = await readdir(currentDir, { withFileTypes: true });
@@ -1048,7 +1152,7 @@ async function readTypeScriptFiles(
         continue;
       }
 
-      files.push(...(await readTypeScriptFiles(root, fullPath)));
+      files.push(...(await readSourceFiles(root, matches, fullPath)));
       continue;
     }
 
@@ -1057,7 +1161,7 @@ async function readTypeScriptFiles(
     }
 
     const filePath = normalizePath(relative(root, fullPath));
-    if (!isTypeScriptLike(filePath)) {
+    if (!matches(filePath)) {
       continue;
     }
 
@@ -1071,7 +1175,24 @@ async function readTypeScriptFiles(
 }
 
 function ignoredDirectory(name: string): boolean {
-  return new Set([".git", ".turbo", ".synapse", "dist", "node_modules", "coverage"]).has(name);
+  return new Set([
+    ".git",
+    ".turbo",
+    ".synapse",
+    "dist",
+    "node_modules",
+    "coverage",
+    // Python: never index virtualenvs, caches, or build output — a venv's
+    // site-packages is tens of thousands of files and is not the user's code.
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".tox",
+    "site-packages",
+    "build"
+  ]).has(name);
 }
 
 function normalizePath(filePath: string): string {
