@@ -236,6 +236,8 @@ pgvector decision store; `synapse_why` RAG query; Slack ingestion; onboarding mo
 
 **Cross-cutting (start early):** auth/multi-tenancy, self-host packaging (Docker compose), telemetry,
 and a tiny eval harness for "did we correctly flag/ignore this conflict?" on recorded scenarios.
+Current eval harness: `npm run eval:conflicts` runs recorded JSON scenarios through the deterministic
+conflict engine and asserts verdicts, rules, recommendations, compatibility, and resolutions.
 
 ---
 

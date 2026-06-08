@@ -1,0 +1,262 @@
+[
+  {
+    "name": "no_overlap_stays_silent",
+    "description": "Bob checks login with no active sessions, deltas, pushes, or locks touching it.",
+    "selfSessionId": "bob",
+    "sessions": ["bob"],
+    "targets": [
+      { "filePath": "src/auth/login.ts", "symbol": "ts:src/auth/login.ts#login" }
+    ],
+    "expected": {
+      "verdict": "none",
+      "rules": []
+    }
+  },
+  {
+    "name": "same_symbol_breaking_warns",
+    "description": "Alice changes validate from boolean to Result<Token>; Bob checks the same symbol.",
+    "selfSessionId": "bob",
+    "sessions": ["alice", "bob"],
+    "targets": [
+      { "filePath": "src/auth/token.ts", "symbol": "ts:src/auth/token.ts#validate" }
+    ],
+    "deltas": [
+      {
+        "sessionId": "alice",
+        "symbol": "ts:src/auth/token.ts#validate",
+        "filePath": "src/auth/token.ts",
+        "summary": "validate now returns Result<Token>",
+        "before": {
+          "raw": "function validate(input: string): boolean",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "boolean"
+        },
+        "after": {
+          "raw": "function validate(input: string): Result<Token>",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "Result<Token>"
+        }
+      }
+    ],
+    "expected": {
+      "verdict": "warn",
+      "rules": ["same_symbol_unpushed"],
+      "conflicts": [
+        {
+          "rule": "same_symbol_unpushed",
+          "severity": "warn",
+          "compatibility": "breaking",
+          "recommendation": "warn",
+          "resolution": {
+            "reconciled": true,
+            "recommendation": "warn",
+            "proposedContract": "function validate(input: string): Result<Token>"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "same_symbol_compatible_is_info",
+    "description": "Alice adds an optional parameter; Bob checks the same symbol.",
+    "selfSessionId": "bob",
+    "sessions": ["alice", "bob"],
+    "targets": [
+      { "filePath": "src/auth/token.ts", "symbol": "ts:src/auth/token.ts#validate" }
+    ],
+    "deltas": [
+      {
+        "sessionId": "alice",
+        "symbol": "ts:src/auth/token.ts#validate",
+        "filePath": "src/auth/token.ts",
+        "summary": "validate accepts optional options",
+        "before": {
+          "raw": "function validate(input: string): Token | null",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "Token | null"
+        },
+        "after": {
+          "raw": "function validate(input: string, opts?: Options): Token | null",
+          "params": [
+            { "name": "input", "type": "string", "optional": false },
+            { "name": "opts", "type": "Options", "optional": true }
+          ],
+          "returns": "Token | null"
+        }
+      }
+    ],
+    "expected": {
+      "verdict": "info",
+      "rules": ["same_symbol_unpushed"],
+      "conflicts": [
+        {
+          "rule": "same_symbol_unpushed",
+          "severity": "info",
+          "compatibility": "compatible",
+          "recommendation": "proceed",
+          "resolution": {
+            "reconciled": true,
+            "recommendation": "warn",
+            "proposedContract": "function validate(input: string, opts?: Options): Token | null"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "direct_dependency_change_warns",
+    "description": "Bob checks login, which depends on Alice's changed validate contract.",
+    "selfSessionId": "bob",
+    "sessions": ["alice", "bob"],
+    "targets": [
+      { "filePath": "src/auth/login.ts", "symbol": "ts:src/auth/login.ts#login" }
+    ],
+    "dependencies": {
+      "ts:src/auth/login.ts#login": [
+        { "symbol": "ts:src/auth/token.ts#validate", "hops": 1 }
+      ]
+    },
+    "deltas": [
+      {
+        "sessionId": "alice",
+        "symbol": "ts:src/auth/token.ts#validate",
+        "filePath": "src/auth/token.ts",
+        "summary": "validate now returns Result<Token>",
+        "before": {
+          "raw": "function validate(input: string): boolean",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "boolean"
+        },
+        "after": {
+          "raw": "function validate(input: string): Result<Token>",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "Result<Token>"
+        }
+      }
+    ],
+    "expected": {
+      "verdict": "warn",
+      "rules": ["dependency_changed"],
+      "conflicts": [
+        {
+          "rule": "dependency_changed",
+          "severity": "warn",
+          "compatibility": "breaking",
+          "recommendation": "warn"
+        }
+      ]
+    }
+  },
+  {
+    "name": "same_symbol_divergent_warns_and_blocks_resolution",
+    "description": "Alice and Bob both changed validate to incompatible contracts.",
+    "selfSessionId": "bob",
+    "sessions": ["alice", "bob"],
+    "targets": [
+      { "filePath": "src/auth/token.ts", "symbol": "ts:src/auth/token.ts#validate" }
+    ],
+    "deltas": [
+      {
+        "sessionId": "alice",
+        "symbol": "ts:src/auth/token.ts#validate",
+        "filePath": "src/auth/token.ts",
+        "summary": "validate now returns Result<Token>",
+        "before": {
+          "raw": "function validate(input: string): boolean",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "boolean"
+        },
+        "after": {
+          "raw": "function validate(input: string): Result<Token>",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "Result<Token>"
+        }
+      },
+      {
+        "sessionId": "bob",
+        "symbol": "ts:src/auth/token.ts#validate",
+        "filePath": "src/auth/token.ts",
+        "summary": "validate is async",
+        "before": {
+          "raw": "function validate(input: string): boolean",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "boolean"
+        },
+        "after": {
+          "raw": "function validate(input: string): Promise<Token>",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "Promise<Token>"
+        }
+      }
+    ],
+    "expected": {
+      "verdict": "warn",
+      "rules": ["contract_divergent"],
+      "conflicts": [
+        {
+          "rule": "contract_divergent",
+          "severity": "warn",
+          "compatibility": "breaking",
+          "recommendation": "warn",
+          "selfAfter": "function validate(input: string): Promise<Token>",
+          "resolution": {
+            "reconciled": false,
+            "recommendation": "block",
+            "proposedContract": null
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "recent_push_marks_stale_base",
+    "description": "A recent push touched the file Bob is checking.",
+    "selfSessionId": "bob",
+    "sessions": ["alice", "bob"],
+    "targets": [
+      { "filePath": "src/auth/token.ts", "symbol": "ts:src/auth/token.ts#validate" }
+    ],
+    "recentPushes": [
+      {
+        "memberId": "alice",
+        "summary": "Pushed auth token changes",
+        "filesAffected": ["src/auth/token.ts"],
+        "sha": "abc123"
+      }
+    ],
+    "expected": {
+      "verdict": "warn",
+      "rules": ["stale_base"],
+      "conflicts": [
+        {
+          "rule": "stale_base",
+          "severity": "warn",
+          "recommendation": "warn"
+        }
+      ]
+    }
+  },
+  {
+    "name": "same_file_without_symbol_overlap_is_info",
+    "description": "Alice is editing the same file but not the symbol Bob is checking.",
+    "selfSessionId": "bob",
+    "sessions": [
+      { "id": "alice", "filesEditing": ["src/auth/token.ts"] },
+      "bob"
+    ],
+    "targets": [
+      { "filePath": "src/auth/token.ts", "symbol": "ts:src/auth/token.ts#Token" }
+    ],
+    "expected": {
+      "verdict": "info",
+      "rules": ["same_file_no_overlap"],
+      "conflicts": [
+        {
+          "rule": "same_file_no_overlap",
+          "severity": "info",
+          "recommendation": "info"
+        }
+      ]
+    }
+  }
+]
