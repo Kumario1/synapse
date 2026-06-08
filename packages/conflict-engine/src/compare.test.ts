@@ -167,6 +167,41 @@ test("enrichConflicts replaces explanation and falls back when the provider retu
   assert.equal(fallback[0]?.analysis?.source, "deterministic");
 });
 
+test("enrichConflicts keeps the deterministic recommendation floor", async () => {
+  const state = teamState({
+    sessions: [session("alice"), session("bob")],
+    unpushedDeltas: [
+      delta({
+        sessionId: "alice",
+        before: sig("(token: string) => Token", [param("token", "string")], "Token"),
+        after: sig("(token: string) => Result<Token, AuthError>", [param("token", "string")], "Result<Token, AuthError>")
+      })
+    ]
+  });
+
+  const conflicts = evaluateConflicts({
+    selfSessionId: "bob",
+    targets: [{ filePath: "src/auth/token.ts", symbolId: validate }],
+    state
+  });
+
+  const provider: AnalysisProvider = {
+    async analyzeConflict() {
+      return {
+        assessment: "LLM marked the breaking change as informational.",
+        recommendation: "info",
+        actions: [{ audience: "you", step: "inspect the change" }],
+        source: "test-model"
+      };
+    }
+  };
+
+  const enriched = await enrichConflicts(conflicts, provider);
+  assert.equal(enriched[0]?.analysis?.source, "test-model");
+  assert.equal(enriched[0]?.analysis?.recommendation, "warn");
+  assert.equal(enriched[0]?.analysis?.assessment, "LLM marked the breaking change as informational.");
+});
+
 function id(raw: string): SymbolId {
   return { raw };
 }
