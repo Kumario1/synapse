@@ -10,22 +10,23 @@ The planning source of truth lives in:
 
 ## Current Build Track
 
-We are starting with Milestone 0 from the build plan:
+The repository now has the local realtime loop in place:
 
-1. Create the repository and README.
-2. Scaffold a TypeScript monorepo.
-3. Define shared protocol types.
-4. Add a stub server that shares live state between daemon sessions.
-5. Add a local daemon/CLI exposing `synapse_check` and `synapse_report`.
-6. Verify one session can report an edit and a second session can see the conflict.
+1. TypeScript monorepo, shared protocol types, and in-memory fanout server.
+2. Local daemon/CLI with `synapse_check`, `synapse_report`, `synapse_push`, and session tools.
+3. TypeScript contract extraction, file-only checks, dependency checks, compatibility analysis, and
+   deterministic/optional-LLM contract resolution.
+4. Stdio MCP adapter so MCP-capable agents can call the same daemon tools without shell-specific
+   integration code.
 
-The first implementation is intentionally in-memory and local-only. It proves the hot loop before we add persistence, auth, analyzers, GitHub webhooks, or real hook installation.
+The implementation is still intentionally local and in-memory. It proves the hot loop before adding
+persistence, auth, GitHub webhooks, Python analysis, or real hook installation.
 
 ## Architecture Shape
 
 ```text
 apps/
-  cli/          local daemon plus CLI commands
+  cli/          local daemon, CLI commands, and MCP stdio adapter
   server/       local websocket fanout server
 packages/
   analyzer-ts/ TypeScript contract extraction
@@ -106,6 +107,18 @@ Notify Synapse that pushed files should leave live unpushed state:
 npm run dev --workspace @synapse/cli -- push --port 4011 --file src/auth/token.ts --sha abc123 --summary "Pushed auth token changes"
 npm run verify:push-state-reset
 ```
+
+Expose the same daemon tools to MCP-capable agents:
+
+```bash
+npm run dev --workspace @synapse/cli -- mcp --port 4012
+npm run verify:mcp-adapter
+```
+
+The MCP adapter is intentionally thin. It runs over stdio, registers `synapse_check`,
+`synapse_report`, `synapse_push`, and `synapse_session`, then forwards each call to the local daemon.
+The daemon remains the single place that owns contract extraction, conflict detection, LLM analysis,
+and resolution.
 
 ## Contract-Level Conflict Classification
 

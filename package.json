@@ -19,6 +19,7 @@
     "verify:push-state-reset": "npm run build && node scripts/verify-push-state-reset.mjs",
     "verify:contract-compat": "npm run build && node scripts/verify-contract-compat.mjs",
     "verify:resolution": "npm run build && node scripts/verify-resolution.mjs",
+    "verify:mcp-adapter": "npm run build && node scripts/verify-mcp-adapter.mjs",
     "verify:m0": "npm run build && node scripts/verify-milestone-0.mjs"
   },
   "devDependencies": {
