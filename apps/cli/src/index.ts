@@ -46,7 +46,9 @@ import {
   type TeamState,
   type SynapsePushRequest,
   type SynapseReportRequest,
-  type SynapseSessionRequest
+  type SynapseSessionRequest,
+  type SynapseWhatsupRequest,
+  type SynapseWhatsupResponse
 } from "@synapse/protocol";
 import { WebSocket } from "ws";
 
@@ -78,6 +80,9 @@ switch (command) {
     break;
   case "session":
     await runSession(args.slice(1));
+    break;
+  case "whatsup":
+    await runWhatsup(args.slice(1));
     break;
   case "mcp":
     await runMcp(args.slice(1));
@@ -163,6 +168,19 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
 
       if (request.method === "GET" && url.pathname === "/state") {
         writeJson(response, 200, teamState);
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/tools/synapse_whatsup") {
+        const body = (await readJson(request)) as Partial<SynapseWhatsupRequest>;
+        writeJson(
+          response,
+          200,
+          buildWhatsupResponse(teamState, {
+            degraded: socket?.readyState !== WebSocket.OPEN,
+            limit: body.limit
+          })
+        );
         return;
       }
 
@@ -373,6 +391,18 @@ async function runSession(rawArgs: string[]): Promise<void> {
   console.log(JSON.stringify(response, null, 2));
 }
 
+async function runWhatsup(rawArgs: string[]): Promise<void> {
+  const flags = parseFlags(rawArgs);
+  const port = Number(flags.port ?? process.env.SYNAPSE_DAEMON_PORT ?? 4011);
+  const limit = flags.limit ? Number(flags.limit) : undefined;
+  const response = await postJson(`http://localhost:${port}/tools/synapse_whatsup`, {
+    repoId: flags["repo-id"] ?? process.env.SYNAPSE_REPO_ID ?? "local",
+    sessionId: flags.session ?? process.env.SYNAPSE_SESSION_ID ?? "local",
+    limit: Number.isFinite(limit) ? limit : undefined
+  });
+  console.log(JSON.stringify(response, null, 2));
+}
+
 async function runJoin(rawArgs: string[]): Promise<void> {
   const config = configFromArgs(rawArgs);
   const dir = join(commandCwd(), ".synapse");
@@ -439,6 +469,73 @@ function makeSession(config: RuntimeConfig, task: string | null = null): Session
     lastSeen: now,
     status: "active"
   };
+}
+
+function buildWhatsupResponse(
+  state: TeamState,
+  options: { degraded: boolean; limit?: number }
+): SynapseWhatsupResponse {
+  const limit = clampLimit(options.limit);
+  const memberBySession = new Map(
+    state.sessions.map((session) => [
+      session.id,
+      session.memberLogin ?? session.memberId ?? session.id
+    ])
+  );
+  const activeSessions = state.sessions
+    .filter((session) => session.status !== "ended")
+    .sort((a, b) => b.lastSeen.localeCompare(a.lastSeen));
+  const unpushedDeltas = [...state.unpushedDeltas]
+    .filter((delta) => delta.pushedAt === null)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const recentPushes = [...state.recentPushes].sort((a, b) => b.pushedAt.localeCompare(a.pushedAt));
+  const resolutions = [...state.resolutions].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+  return {
+    repoId: state.repoId,
+    generatedAt: new Date().toISOString(),
+    degraded: options.degraded,
+    summary: [
+      `${activeSessions.length} active session${activeSessions.length === 1 ? "" : "s"}`,
+      `${unpushedDeltas.length} unpushed contract delta${unpushedDeltas.length === 1 ? "" : "s"}`,
+      `${state.editLocks.length} active edit lock${state.editLocks.length === 1 ? "" : "s"}`,
+      `${recentPushes.length} recent push${recentPushes.length === 1 ? "" : "es"}`,
+      `${resolutions.length} shared resolution${resolutions.length === 1 ? "" : "s"}`
+    ],
+    sessions: activeSessions.slice(0, limit).map((session) => ({
+      id: session.id,
+      memberLogin: session.memberLogin ?? session.memberId,
+      agentType: session.agentType,
+      status: session.status,
+      lastTask: session.lastTask,
+      filesEditing: session.filesEditing,
+      lastSeen: session.lastSeen
+    })),
+    unpushedDeltas: unpushedDeltas.slice(0, limit).map((delta) => ({
+      id: delta.id,
+      sessionId: delta.sessionId,
+      memberLogin: memberBySession.get(delta.sessionId) ?? delta.sessionId,
+      symbolId: delta.symbolId,
+      changeKind: delta.changeKind,
+      summary: delta.summary,
+      filePath: delta.filePath,
+      before: delta.before?.raw ?? null,
+      after: delta.after?.raw ?? null,
+      baseSha: delta.baseSha,
+      createdAt: delta.createdAt
+    })),
+    editLocks: state.editLocks.slice(0, limit),
+    recentPushes: recentPushes.slice(0, limit),
+    resolutions: resolutions.slice(0, limit)
+  };
+}
+
+function clampLimit(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return 10;
+  }
+
+  return Math.max(1, Math.min(50, Math.trunc(value)));
 }
 
 function envelope(type: ClientMessage["type"], payload: unknown): ClientMessage {
@@ -984,6 +1081,7 @@ Commands:
   report   Call the local synapse_report endpoint
   push     Notify Synapse that files were pushed
   session  Start, heartbeat, or end a local session
+  whatsup  Show the daemon's current team-state briefing
   mcp      Run a stdio MCP server that forwards tools to the local daemon
   join     Write a local .synapse/config.json
   analyze  Extract TypeScript contract symbols from a file
@@ -994,6 +1092,7 @@ Examples:
   synapse report --port 4011 --file src/auth/token.ts --symbol ts:src/auth/token.ts#TokenValidator.validate
   synapse push --port 4011 --file src/auth/token.ts --sha abc123 --summary "Pushed auth token changes"
   synapse check --port 4012 --file src/auth/token.ts --symbol ts:src/auth/token.ts#TokenValidator.validate
+  synapse whatsup --port 4012
   synapse analyze --file packages/analyzer-ts/src/index.ts
 `);
 }

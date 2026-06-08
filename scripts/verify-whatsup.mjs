@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const children = [];
@@ -16,112 +14,74 @@ const bobPort = await freePort();
 const filePath = "src/auth/token.ts";
 const symbol = "ts:src/auth/token.ts#TokenValidator.validate";
 
-let client = null;
-
 try {
   const server = startProcess("server", ["apps/server/dist/index.js"], {
     SYNAPSE_SERVER_PORT: String(serverPort)
   });
-
   await waitForHttp(`http://localhost:${serverPort}/health`);
 
   const alice = startDaemon("alice", alicePort);
   const bob = startDaemon("bob", bobPort);
-
   await Promise.all([
     waitForHttp(`http://localhost:${alicePort}/health`),
     waitForHttp(`http://localhost:${bobPort}/health`)
   ]);
   await waitForState(serverPort, (state) => state.sessions.length === 2);
 
-  client = new Client({ name: "synapse-mcp-verifier", version: "0.0.0" });
-  const transport = new StdioClientTransport({
-    command: process.execPath,
-    args: ["apps/cli/dist/index.js", "mcp", "--port", String(bobPort)],
-    cwd: rootDir,
-    env: process.env,
-    stderr: "pipe"
-  });
-  transport.stderr?.on("data", (chunk) => {
-    process.stderr.write(`[mcp] ${chunk}`);
-  });
-  await client.connect(transport);
+  const emptyBriefing = await whatsup(bobPort);
+  assert.equal(emptyBriefing.degraded, false);
+  assert.equal(emptyBriefing.sessions.length, 2);
+  assert.equal(emptyBriefing.unpushedDeltas.length, 0);
+  assert.ok(emptyBriefing.summary.some((line) => line.includes("2 active sessions")));
 
-  const tools = await client.listTools();
-  assert.deepEqual(
-    tools.tools.map((tool) => tool.name).sort(),
-    ["synapse_check", "synapse_push", "synapse_report", "synapse_session", "synapse_whatsup"]
-  );
-
-  const session = await callJson(client, "synapse_session", {
-    port: bobPort,
-    sessionId: "bob",
-    action: "heartbeat"
-  });
-  assert.deepEqual(session, { sessionId: "bob" });
-
-  const report = await callJson(client, "synapse_report", {
-    port: alicePort,
+  await postJson(`http://localhost:${alicePort}/tools/synapse_report`, {
+    repoId: "local",
     sessionId: "alice",
     filePath,
-    symbol,
+    symbolId: { raw: symbol },
     summary: "TokenValidator.validate now returns Result<Token, AuthError>"
   });
-  assert.equal(report.ok, true);
-  assert.equal(report.delta.symbolId.raw, symbol);
-
   await waitForState(serverPort, (state) => state.unpushedDeltas.length === 1);
 
-  const briefing = await callJson(client, "synapse_whatsup", {
-    port: bobPort,
-    sessionId: "bob"
-  });
-  assert.equal(briefing.degraded, false);
-  assert.equal(briefing.unpushedDeltas.length, 1);
-  assert.equal(briefing.unpushedDeltas[0].symbolId.raw, symbol);
+  const activeBriefing = await whatsup(bobPort);
+  assert.equal(activeBriefing.degraded, false);
+  assert.equal(activeBriefing.unpushedDeltas.length, 1);
+  assert.equal(activeBriefing.unpushedDeltas[0].memberLogin, "alice");
+  assert.equal(activeBriefing.unpushedDeltas[0].symbolId.raw, symbol);
+  assert.ok(activeBriefing.summary.some((line) => line.includes("1 unpushed contract delta")));
 
-  const check = await callJson(client, "synapse_check", {
-    port: bobPort,
-    sessionId: "bob",
-    file: filePath,
-    symbol
-  });
-  assert.equal(check.verdict, "warn");
-  assert.deepEqual(
-    check.conflicts.map((conflict) => conflict.rule),
-    ["same_symbol_unpushed"]
-  );
+  const cliBriefing = runCliJson(["whatsup", "--port", String(bobPort), "--limit", "1"]);
+  assert.equal(cliBriefing.degraded, false);
+  assert.equal(cliBriefing.sessions.length, 1);
+  assert.equal(cliBriefing.unpushedDeltas.length, 1);
+  assert.equal(cliBriefing.unpushedDeltas[0].symbolId.raw, symbol);
 
-  const push = await callJson(client, "synapse_push", {
-    port: alicePort,
+  await postJson(`http://localhost:${alicePort}/tools/synapse_push`, {
+    repoId: "local",
     sessionId: "alice",
-    sha: "mcp123",
-    summary: "Pushed auth token changes through MCP",
-    file: filePath,
-    symbol
+    sha: "brief123",
+    summary: "Pushed auth token changes",
+    files: [filePath],
+    symbols: [{ raw: symbol }]
   });
-  assert.deepEqual(push, { ok: true, sha: "mcp123", files: [filePath] });
-
-  const stateAfterPush = await waitForState(
+  await waitForState(
     serverPort,
-    (state) =>
-      state.unpushedDeltas.length === 0 &&
-      state.editLocks.length === 0 &&
-      state.recentPushes.length === 1
+    (state) => state.unpushedDeltas.length === 0 && state.recentPushes.length === 1
   );
 
-  console.log("MCP adapter verification passed:");
-  console.log(JSON.stringify({ tools: tools.tools.map((tool) => tool.name), briefing, check, stateAfterPush }, null, 2));
+  const postPushBriefing = await whatsup(bobPort);
+  assert.equal(postPushBriefing.unpushedDeltas.length, 0);
+  assert.equal(postPushBriefing.recentPushes.length, 1);
+  assert.equal(postPushBriefing.recentPushes[0].sha, "brief123");
+  assert.ok(postPushBriefing.summary.some((line) => line.includes("1 recent push")));
 
-  await client.close();
-  client = null;
+  console.log("Whatsup briefing verification passed:");
+  console.log(JSON.stringify({ emptyBriefing, activeBriefing, postPushBriefing }, null, 2));
+
   server.kill();
   alice.kill();
   bob.kill();
 } finally {
-  if (client) {
-    await client.close().catch(() => {});
-  }
   await stopChildren();
 }
 
@@ -144,12 +104,22 @@ function startDaemon(member, port) {
   );
 }
 
-async function callJson(mcpClient, name, args) {
-  const result = await mcpClient.callTool({ name, arguments: args });
-  assert.equal(result.isError, undefined, `${name} returned MCP error`);
-  assert.equal(result.content.length, 1);
-  assert.equal(result.content[0].type, "text");
-  return JSON.parse(result.content[0].text);
+async function whatsup(port) {
+  return postJson(`http://localhost:${port}/tools/synapse_whatsup`, {
+    repoId: "local",
+    sessionId: "bob"
+  });
+}
+
+function runCliJson(args) {
+  const result = spawnSync(process.execPath, ["apps/cli/dist/index.js", ...args], {
+    cwd: rootDir,
+    env: process.env,
+    encoding: "utf8"
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout);
 }
 
 function startProcess(label, args, env) {
@@ -175,6 +145,20 @@ function startProcess(label, args, env) {
   });
 
   return child;
+}
+
+async function postJson(url, body) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(JSON.stringify(payload));
+  }
+
+  return payload;
 }
 
 async function waitForHttp(url, timeoutMs = 5000) {
