@@ -257,12 +257,14 @@ interface TeamState {           // what a daemon's warm cache replicates
   recentRepoEvents: RecentRepoEvent[];// PR/review/comment activity for Layer II
   resolutions: ContractResolution[]; // shared merged contracts (implemented)
   sessionSummaries: SessionSummary[];// Layer II, on session end (implemented)
+  conflictFeedback: ConflictFeedback[];// explicit acted/dismissed warning feedback
 }
 ```
 
 > Current implementation: `TeamState` also carries `resolutions` (shared contract resolutions, keyed
-> by `symbol + inputsHash`) and `sessionSummaries` (Layer II narratives produced on session end). The
-> server holds it in memory and persists it through a `StateStore` (SQLite) so a restart resumes it.
+> by `symbol + inputsHash`), `sessionSummaries` (Layer II narratives produced on session end), and
+> `conflictFeedback` (explicit acted/dismissed telemetry). The server holds it in memory and persists
+> it through a `StateStore` (SQLite) so a restart resumes it.
 
 ---
 
@@ -278,6 +280,8 @@ synapse_report       { filePath: string }   // daemon reads tree+git, extracts d
                      -> { ok: true, delta?: ContractDeltaSummary }
 synapse_push         { sha, summary, files[], symbols?: SymbolId[] }
                      -> { ok: true, sha, files[] }
+synapse_feedback     { conflictId, outcome: "acted"|"dismissed", note?, rule?, targetSymbol? }
+                     -> { ok: true, feedback }
 synapse_whatsup      { limit?: number }      -> SynapseWhatsupResponse        // Layer II
 synapse_why          { question: string, limit?: number } -> SynapseWhyResponse // Layer III seed
 synapse_session      { action: "start"|"heartbeat"|"end", task?: string } -> { sessionId }
@@ -286,11 +290,12 @@ synapse_session      { action: "start"|"heartbeat"|"end", task?: string } -> { s
 Current implementation: `synapse mcp` starts a stdio MCP adapter for Cursor/Cline/Aider-style
 clients. The adapter does not duplicate Synapse logic; it forwards tool calls to the local daemon's
 HTTP endpoints so the daemon remains the owner of extraction, conflict detection, analysis, and
-resolution. `synapse_whatsup` is deterministic today: it reads the daemon's warm cache and returns
-active sessions, unpushed deltas, edit locks, recent pushes, and shared resolutions. `synapse_why` is
-also deterministic today: it ranks matching session summaries, repo events, pushes, resolutions,
-unpushed deltas, and active sessions by question terms, then returns a source-cited answer. pgvector
-RAG remains the Layer III backend target.
+resolution. `synapse_feedback` records explicit acted/dismissed telemetry for a surfaced conflict but
+does not change verdicts. `synapse_whatsup` is deterministic today: it reads the daemon's warm cache
+and returns active sessions, unpushed deltas, edit locks, recent pushes, shared resolutions, and
+recent feedback. `synapse_why` is also deterministic today: it ranks matching session summaries, repo
+events, pushes, resolutions, unpushed deltas, and active sessions by question terms, then returns a
+source-cited answer. pgvector RAG remains the Layer III backend target.
 
 **Claude Code hooks** (the first-class automatic path) — installed into the repo's settings:
 - `PreToolUse` on `Edit|Write|MultiEdit`: shells into the daemon's local endpoint = `synapse_check`
@@ -311,6 +316,7 @@ push.notify          { sha, summary, files[] }    // local detected a git push
 repo.event           { kind, action, actor, title, number?, url?, summary }
 resolution.propose   { resolution }               // shared merged contract (implemented)
 session.summary      { summary: SessionSummary }   // Layer II, on session end (implemented)
+conflict.feedback    { feedback: ConflictFeedback }// explicit acted/dismissed telemetry
 query.briefing       { since? }
 ```
 Server → Client (implemented subset):
@@ -380,12 +386,15 @@ function evaluate(target: {symbolId, filePath}, state: TeamState, graph): Confli
 ### Fatigue controls
 - Dedup key: `(targetSymbol, counterpartSession, deltaHash)` — don't re-warn within a session unless it
   changes.
-- Telemetry: record whether a surfaced `warn` was *acted on* (dev adjusted/pinged) vs. dismissed. Use
-  this to tune thresholds (e.g. demote chronically-dismissed rules to `info`).
+- Current telemetry: every emitted conflict carries a deterministic `id`, and `synapse_feedback`
+  records whether a surfaced `warn` was *acted on* (dev adjusted/pinged) vs. dismissed. It is stored
+  only as telemetry today; threshold tuning (e.g. demoting chronically-dismissed rules to `info`) is a
+  later policy step.
 
 ### `Conflict` payload
 ```ts
 interface Conflict {
+  id: string;                           // deterministic feedback key
   severity: "info" | "warn";
   rule: string;                        // e.g. "dependency_changed"
   targetSymbol: SymbolId;

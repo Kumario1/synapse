@@ -262,6 +262,7 @@ function teamState(partial: Partial<TeamState>): TeamState {
     recentRepoEvents: [],
     resolutions: [],
     sessionSummaries: [],
+    conflictFeedback: [],
     ...partial
   };
 }

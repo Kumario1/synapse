@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   AgentType,
   Conflict,
@@ -44,6 +45,8 @@ const severityRank = {
   info: 1,
   warn: 2
 } as const;
+
+type ConflictDraft = Omit<Conflict, "id"> & { id?: string };
 
 export function verdictFor(conflicts: Conflict[]): "none" | "info" | "warn" {
   if (conflicts.some((conflict) => conflict.severity === "warn")) {
@@ -258,7 +261,7 @@ function suppressSameFileNoise(conflicts: Conflict[]): Conflict[] {
   );
 }
 
-function addConflict(conflicts: Map<string, Conflict>, conflict: Conflict): void {
+function addConflict(conflicts: Map<string, Conflict>, conflict: ConflictDraft): void {
   const key = [
     conflict.rule,
     conflict.targetSymbol.raw,
@@ -268,8 +271,15 @@ function addConflict(conflicts: Map<string, Conflict>, conflict: Conflict): void
   const existing = conflicts.get(key);
 
   if (!existing || severityRank[conflict.severity] > severityRank[existing.severity]) {
-    conflicts.set(key, conflict);
+    conflicts.set(key, {
+      ...conflict,
+      id: conflict.id ?? conflictId(key)
+    });
   }
+}
+
+function conflictId(key: string): string {
+  return `conflict:${createHash("sha256").update(key).digest("hex").slice(0, 16)}`;
 }
 
 function dependencyHopMap(hops: DependencyHop[]): Map<string, number> {

@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type {
   SynapseCheckRequest,
+  SynapseFeedbackRequest,
   SynapsePushRequest,
   SynapseReportRequest,
   SynapseSessionRequest,
@@ -112,6 +113,52 @@ export async function runMcp(rawArgs: string[]): Promise<void> {
       };
 
       return jsonResult(await daemonPost(args.port ?? defaultPort, "synapse_report", request));
+    }
+  );
+
+  server.registerTool(
+    "synapse_feedback",
+    {
+      title: "Record Synapse Conflict Feedback",
+      description:
+        "Record explicit acted/dismissed feedback for a surfaced Synapse conflict warning. This is telemetry only and does not change verdicts.",
+      inputSchema: {
+        ...commonShape,
+        conflictId: z.string().min(1),
+        outcome: z.enum(["acted", "dismissed"]),
+        note: z.string().optional(),
+        rule: z
+          .enum([
+            "same_symbol_active",
+            "same_symbol_unpushed",
+            "contract_divergent",
+            "dependency_changed",
+            "transitive_dependency",
+            "stale_base",
+            "same_file_no_overlap"
+          ])
+          .optional(),
+        targetSymbol: symbol.optional(),
+        symbol: z.string().min(1).optional()
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false
+      }
+    },
+    async (args) => {
+      const request: SynapseFeedbackRequest = {
+        repoId: args.repoId ?? defaultRepoId,
+        sessionId: args.sessionId ?? defaultSessionId,
+        conflictId: args.conflictId,
+        outcome: args.outcome,
+        note: args.note,
+        rule: args.rule,
+        targetSymbol: args.targetSymbol ?? (args.symbol ? { raw: args.symbol } : undefined)
+      };
+
+      return jsonResult(await daemonPost(args.port ?? defaultPort, "synapse_feedback", request));
     }
   );
 

@@ -111,7 +111,10 @@ function stateFor(scenario) {
       sha: push.sha,
       pushedAt: push.pushedAt ?? timestamp(index)
     })),
-    resolutions: []
+    recentRepoEvents: [],
+    resolutions: [],
+    sessionSummaries: [],
+    conflictFeedback: []
   };
 }
 

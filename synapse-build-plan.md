@@ -32,9 +32,10 @@ The core agent-coordination loop is implemented and runs as an installed tool. S
 | **GitHub OAuth + per-connection JWT** | ⬜ Planned | shared-token is the interim |
 | PR / review ingestion into briefings | ✅ Done | `pull_request`, `pull_request_review`, and `issue_comment` webhooks |
 | Memory Layer III — `synapse_why` + pgvector target | 🟡 Partial | deterministic state search now; vector memory later |
-| Go analyzer; SCIP-grade indexing; telemetry/acted-on tuning | ⬜ Not started | — |
+| Telemetry / acted-on feedback | 🟡 Partial | explicit `synapse_feedback` capture now; threshold tuning later |
+| Go analyzer; SCIP-grade indexing | ⬜ Not started | — |
 
-Verification: every implemented area has a `npm run verify:*` script (24 total) plus unit tests and
+Verification: every implemented area has a `npm run verify:*` script (25 total) plus unit tests and
 `npm run eval:conflicts`; all green. See the README for the per-feature commands.
 
 ---
@@ -258,9 +259,9 @@ the installed `PreToolUse` hook. *Exit test:* the "Contract Collision" scenario 
 login feature) is caught **before** the second agent starts — see `verify:resolution` / `verify:hooks`.
 
 **Milestone 2 — Dependency graph & multi-agent (weeks 4–6)** — ✅ **Done**
-(telemetry/acted-on tuning deferred)
 Symbol/import graph for transitive conflicts (TS + Python); Cursor/Cline support via MCP tools; GitHub
-push webhook for state reset on push. Severity tuning + acted-on telemetry still ahead.
+push webhook for state reset on push. Explicit acted/dismissed feedback capture is in place; severity
+tuning from that telemetry remains ahead.
 
 **Milestone 3 — Briefings (Layer II) (weeks 6–9)** — ✅ **Done for current local scope**
 Session-end summarization (deterministic + optional OpenRouter) ✅; `synapse whatsup` ✅; morning push
@@ -271,8 +272,9 @@ Deterministic `synapse_why` over existing team state ✅; pgvector decision stor
 ingestion, and onboarding mode remain ahead.
 
 **Cross-cutting (start early):** auth/multi-tenancy (✅ optional shared-token auth, PR #21; GitHub
-OAuth + JWT still ahead), self-host packaging (Docker compose — not yet), telemetry (not yet), and a
-tiny eval harness for "did we correctly flag/ignore this conflict?" on recorded scenarios.
+OAuth + JWT still ahead), self-host packaging (Docker compose — not yet), explicit feedback telemetry
+capture ✅, and a tiny eval harness for "did we correctly flag/ignore this conflict?" on recorded
+scenarios.
 Current eval harness: `npm run eval:conflicts` runs recorded JSON scenarios through the deterministic
 conflict engine and asserts verdicts, rules, recommendations, compatibility, and resolutions.
 Current latency harnesses: `npm run verify:hot-path-latency` measures the file-only PreToolUse path
@@ -297,8 +299,9 @@ also record cold first-check time.
    machine. The one relaxation (LLM resolver sends a file for context) is opt-in and documented.
 5. Self-hosted vs. SaaS — ✅ self-hosted first: SQLite persistence (no infra), optional shared-token
    auth, runs with zero external services. SaaS/multi-instance (Postgres/Redis) is a later swap.
-6. Alarm fatigue — severity model (none/info/warn) and non-blocking `ask` hook in place; acted-on
-   telemetry to tune thresholds is still TODO.
+6. Alarm fatigue — severity model (none/info/warn), non-blocking `ask` hook, and explicit
+   acted/dismissed feedback capture are in place; using that telemetry to tune thresholds is still
+   TODO.
 
 (Open product questions from the context doc — conflict granularity, friction point, session
 definition, multi-repo, pricing, name — are tracked in `synapse-context.md` §13.)

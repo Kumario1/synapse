@@ -332,9 +332,10 @@ npm run verify:mcp-adapter
 ```
 
 The MCP adapter is intentionally thin. It runs over stdio, registers `synapse_check`,
-`synapse_report`, `synapse_push`, `synapse_session`, `synapse_whatsup`, and `synapse_why`, then
-forwards each call to the local daemon. The daemon remains the single place that owns contract
-extraction, conflict detection, LLM analysis, resolution, briefing, and memory search.
+`synapse_report`, `synapse_feedback`, `synapse_push`, `synapse_session`, `synapse_whatsup`, and
+`synapse_why`, then forwards each call to the local daemon. The daemon remains the single place that
+owns contract extraction, conflict detection, LLM analysis, resolution, briefing, feedback, and memory
+search.
 
 ## Memory Search (Layer III seed)
 
@@ -365,6 +366,18 @@ actual `before`/`after` signatures and classifies whether the change is really a
 
 ```bash
 npm run verify:contract-compat
+```
+
+## Conflict Feedback Telemetry
+
+Every emitted `Conflict` carries a deterministic `id`, so an agent or developer can record whether a
+surfaced warning was acted on or dismissed. This is telemetry only: it does not change verdicts or
+auto-tune thresholds yet. Feedback is stored in the durable team state, surfaced in `whatsup`, and
+available through the CLI/daemon/MCP path.
+
+```bash
+npm run dev --workspace @synapse/cli -- feedback --port 4012 --conflict-id conflict:abc123 --outcome acted --note "Adjusted caller"
+npm run verify:feedback
 ```
 
 ## Contract Resolution (converging two agents on one contract)
