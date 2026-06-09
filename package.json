@@ -20,6 +20,7 @@
     "verify:dependency-ts-check": "npm run build && node scripts/verify-dependency-ts-check.mjs",
     "verify:file-only-ts-check": "npm run build && node scripts/verify-file-only-ts-check.mjs",
     "verify:hot-path-latency": "npm run build && node scripts/verify-hot-path-latency.mjs",
+    "verify:large-repo-latency": "npm run build && node scripts/verify-large-repo-latency.mjs",
     "verify:push-state-reset": "npm run build && node scripts/verify-push-state-reset.mjs",
     "verify:contract-compat": "npm run build && node scripts/verify-contract-compat.mjs",
     "verify:resolution": "npm run build && node scripts/verify-resolution.mjs",
