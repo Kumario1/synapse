@@ -44,6 +44,7 @@ import {
   type SummaryProvider
 } from "./explain-openrouter.js";
 import { runMcp } from "./mcp.js";
+import { connectAgents, integrationIds, type ConnectResult } from "./connect.js";
 import {
   createEmptyTeamState,
   createLogger,
@@ -167,6 +168,9 @@ switch (command) {
     break;
   case "join":
     await runJoin(args.slice(1));
+    break;
+  case "connect":
+    await runConnect(args.slice(1));
     break;
   case "up":
     await runUp(args.slice(1));
@@ -715,6 +719,62 @@ async function runJoin(rawArgs: string[]): Promise<void> {
 }
 
 /**
+ * Wire non-Claude-Code agents (Cursor, VS Code/Copilot, Gemini CLI, Windsurf, and
+ * any MCP client) up to the local Synapse MCP server in one shot: register the
+ * stdio server in each client's config and drop rules files carrying the same
+ * before/after-edit guidance the Claude Code hooks encode. `--agent a,b` limits
+ * the set; default writes them all. Idempotent — safe to re-run.
+ */
+async function runConnect(rawArgs: string[]): Promise<void> {
+  const flags = parseFlags(rawArgs);
+  const only = (flags.agent ?? flags.agents)
+    ?.split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  if (only?.length) {
+    const known = new Set(integrationIds());
+    const unknown = only.filter((id) => !known.has(id));
+    if (unknown.length) {
+      throw new Error(
+        `unknown agent(s): ${unknown.join(", ")}. Known agents: ${integrationIds().join(", ")}`
+      );
+    }
+  }
+
+  const results = await connectAgents({
+    repoDir: commandCwd(),
+    cliEntrypoint: cliEntrypoint(),
+    only
+  });
+  reportConnectResults(results);
+}
+
+/**
+ * Shared by `connect`, `join`, and `up`: wire every agent up and print a summary.
+ * Never throws — wiring up other agents must not break a join.
+ */
+async function connectAllAgents(repoDir: string): Promise<void> {
+  try {
+    const results = await connectAgents({ repoDir, cliEntrypoint: cliEntrypoint() });
+    reportConnectResults(results);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`synapse: could not wire up other agents (${message}); continuing.`);
+  }
+}
+
+function reportConnectResults(results: ConnectResult[]): void {
+  for (const result of results) {
+    const verb = result.status === "unchanged" ? "up to date" : result.status;
+    console.log(`  ${result.path} — ${result.label} (${verb})`);
+  }
+  console.log(
+    "connected other agents to the Synapse MCP server (check before edits, report after)."
+  );
+}
+
+/**
  * Write `.synapse/config.json`, install the Claude Code hooks, and prepare the
  * Python analyzer venv. Idempotent — safe to re-run. Shared by `join` and `up`.
  */
@@ -744,6 +804,11 @@ async function performJoin(config: RuntimeConfig): Promise<void> {
   // Install the Claude Code hooks so synapse_check/synapse_report fire
   // automatically before/after every Edit, Write, and MultiEdit.
   await installClaudeCodeHooks(commandCwd());
+
+  // Do the same for every other agent: register the MCP server in their configs
+  // and drop rules files so check-before-edit / report-after-edit is automatic
+  // for Cursor, VS Code, Gemini, Windsurf, and any MCP client — not just Claude.
+  await connectAllAgents(commandCwd());
 
   // Best-effort: prepare the Python analyzer venv so `.py` files are analyzed on
   // first run. Never fails the join — missing Python just degrades to file-level.
@@ -2959,7 +3024,8 @@ Commands:
   whatsup  Show the daemon's current team-state briefing
   why      Search Synapse memory with source citations
   mcp      Run a stdio MCP server that forwards tools to the local daemon
-  join     Write .synapse/config.json and install Claude Code hooks
+  join     Write .synapse/config.json, install Claude Code hooks, and connect other agents
+  connect  Wire other agents (Cursor, VS Code, Gemini, Windsurf, any MCP client) to the MCP server
   up       One command: join + preflight + start daemon (--serve / --tunnel for the host)
   keygen   Mint a project-scoped key for this repo (needs SYNAPSE_MASTER_SECRET)
   doctor   Preflight a setup: identity, server reachability, auth, and live peers
@@ -2973,6 +3039,8 @@ Examples:
   SYNAPSE_PROJECT_KEY=… synapse up             # teammate: connect with the project key
   synapse doctor                               # diagnose why two machines aren't coordinating
   synapse join --member alice --session alice --port 4011 --server ws://localhost:4010
+  synapse connect                              # wire every other agent to the MCP server
+  synapse connect --agent cursor,vscode        # only specific agents
   synapse daemon
   synapse mcp --port 4011
   synapse report --port 4011 --file src/auth/token.ts --symbol ts:src/auth/token.ts#TokenValidator.validate
