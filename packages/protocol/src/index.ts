@@ -221,6 +221,21 @@ export interface RecentPush {
   pushedAt: string;
 }
 
+export type RepoEventKind = "pull_request" | "pull_request_review" | "issue_comment";
+
+export interface RecentRepoEvent {
+  id: string;
+  repoId: string;
+  kind: RepoEventKind;
+  action: string;
+  actor: string;
+  title: string;
+  number?: number;
+  url?: string;
+  summary: string;
+  createdAt: string;
+}
+
 /**
  * A distilled, narrative record of what one session changed — produced on
  * session end (Layer II). Deterministic by default (a structured list of the
@@ -250,6 +265,7 @@ export interface TeamState {
   editLocks: EditLock[];
   unpushedDeltas: ContractDelta[];
   recentPushes: RecentPush[];
+  recentRepoEvents: RecentRepoEvent[];
   /** Canonical, shared contract resolutions, keyed by symbol + inputsHash. */
   resolutions: ContractResolution[];
   /** Narrative summaries of ended sessions (most recent first). */
@@ -393,6 +409,7 @@ export interface SynapseWhatsupResponse {
   unpushedDeltas: WhatsupDeltaSummary[];
   editLocks: EditLock[];
   recentPushes: RecentPush[];
+  recentRepoEvents: RecentRepoEvent[];
   resolutions: ContractResolution[];
   sessionSummaries: SessionSummary[];
 }
@@ -426,6 +443,19 @@ export type ClientMessage =
       }
     >
   | WireEnvelope<
+      "repo.event",
+      {
+        repoId: string;
+        kind: RepoEventKind;
+        action: string;
+        actor: string;
+        title: string;
+        number?: number;
+        url?: string;
+        summary: string;
+      }
+    >
+  | WireEnvelope<
       "resolution.propose",
       { repoId: string; resolution: ContractResolution }
     >
@@ -444,6 +474,7 @@ export function createEmptyTeamState(repoId: string): TeamState {
     editLocks: [],
     unpushedDeltas: [],
     recentPushes: [],
+    recentRepoEvents: [],
     resolutions: [],
     sessionSummaries: []
   };

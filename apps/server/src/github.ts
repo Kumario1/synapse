@@ -1,5 +1,7 @@
 import type { ClientMessage } from "@synapse/protocol";
 
+type RepoEventPayload = Extract<ClientMessage, { type: "repo.event" }>["payload"];
+
 interface GitHubPushPayload {
   after?: unknown;
   repository?: { full_name?: unknown };
@@ -14,9 +16,56 @@ interface GitHubPushPayload {
   head_commit?: { message?: unknown };
 }
 
+interface GitHubPullRequestPayload {
+  action?: unknown;
+  repository?: { full_name?: unknown };
+  sender?: { login?: unknown };
+  pull_request?: {
+    number?: unknown;
+    title?: unknown;
+    html_url?: unknown;
+    merged?: unknown;
+  };
+}
+
+interface GitHubPullRequestReviewPayload {
+  action?: unknown;
+  repository?: { full_name?: unknown };
+  sender?: { login?: unknown };
+  pull_request?: {
+    number?: unknown;
+    title?: unknown;
+    html_url?: unknown;
+  };
+  review?: {
+    state?: unknown;
+    html_url?: unknown;
+  };
+}
+
+interface GitHubIssueCommentPayload {
+  action?: unknown;
+  repository?: { full_name?: unknown };
+  sender?: { login?: unknown };
+  issue?: {
+    number?: unknown;
+    title?: unknown;
+    html_url?: unknown;
+    pull_request?: unknown;
+  };
+  comment?: {
+    html_url?: unknown;
+  };
+}
+
 export interface GitHubPushNotify {
   repoId: string;
   payload: Extract<ClientMessage, { type: "push.notify" }>["payload"];
+}
+
+export interface GitHubRepoEventNotify {
+  repoId: string;
+  payload: RepoEventPayload;
 }
 
 /**
@@ -55,6 +104,122 @@ export function gitHubPushToNotify(
       sha,
       summary,
       files
+    }
+  };
+}
+
+export function gitHubRepoEventToNotify(
+  event: string,
+  payload: unknown,
+  repoIdOverride?: string | null
+): GitHubRepoEventNotify {
+  switch (event) {
+    case "pull_request":
+      return pullRequestToNotify(payload, repoIdOverride);
+    case "pull_request_review":
+      return pullRequestReviewToNotify(payload, repoIdOverride);
+    case "issue_comment":
+      return issueCommentToNotify(payload, repoIdOverride);
+    default:
+      throw new Error(`Unsupported GitHub repo event: ${event}.`);
+  }
+}
+
+function pullRequestToNotify(
+  payload: unknown,
+  repoIdOverride?: string | null
+): GitHubRepoEventNotify {
+  if (!isRecord(payload)) {
+    throw new Error("GitHub pull_request payload must be an object.");
+  }
+
+  const pr = payload as GitHubPullRequestPayload;
+  const repoId = repoIdOverride || stringAt(pr.repository, "full_name") || "local";
+  const action = stringValue(pr.action) ?? "unknown";
+  const actor = stringAt(pr.sender, "login") ?? "github";
+  const number = numberAt(pr.pull_request, "number");
+  const title = stringAt(pr.pull_request, "title") ?? "untitled pull request";
+  const url = stringAt(pr.pull_request, "html_url") ?? undefined;
+  const normalizedAction =
+    action === "closed" && booleanAt(pr.pull_request, "merged") === true ? "merged" : action;
+
+  return {
+    repoId,
+    payload: {
+      repoId,
+      kind: "pull_request",
+      action: normalizedAction,
+      actor,
+      title,
+      number,
+      url,
+      summary: `GitHub PR #${number ?? "?"} ${normalizedAction}: ${title}`
+    }
+  };
+}
+
+function pullRequestReviewToNotify(
+  payload: unknown,
+  repoIdOverride?: string | null
+): GitHubRepoEventNotify {
+  if (!isRecord(payload)) {
+    throw new Error("GitHub pull_request_review payload must be an object.");
+  }
+
+  const review = payload as GitHubPullRequestReviewPayload;
+  const repoId = repoIdOverride || stringAt(review.repository, "full_name") || "local";
+  const action = stringValue(review.action) ?? "unknown";
+  const actor = stringAt(review.sender, "login") ?? "github";
+  const number = numberAt(review.pull_request, "number");
+  const title = stringAt(review.pull_request, "title") ?? "untitled pull request";
+  const state = stringAt(review.review, "state") ?? action;
+  const url =
+    stringAt(review.review, "html_url") ?? stringAt(review.pull_request, "html_url") ?? undefined;
+
+  return {
+    repoId,
+    payload: {
+      repoId,
+      kind: "pull_request_review",
+      action: state,
+      actor,
+      title,
+      number,
+      url,
+      summary: `GitHub review ${state} on PR #${number ?? "?"}: ${title}`
+    }
+  };
+}
+
+function issueCommentToNotify(
+  payload: unknown,
+  repoIdOverride?: string | null
+): GitHubRepoEventNotify {
+  if (!isRecord(payload)) {
+    throw new Error("GitHub issue_comment payload must be an object.");
+  }
+
+  const comment = payload as GitHubIssueCommentPayload;
+  const repoId = repoIdOverride || stringAt(comment.repository, "full_name") || "local";
+  const action = stringValue(comment.action) ?? "unknown";
+  const actor = stringAt(comment.sender, "login") ?? "github";
+  const number = numberAt(comment.issue, "number");
+  const title = stringAt(comment.issue, "title") ?? "untitled thread";
+  const isPr = isRecord(comment.issue) && isRecord(comment.issue.pull_request);
+  const subject = isPr ? "PR" : "issue";
+  const url = stringAt(comment.comment, "html_url") ?? stringAt(comment.issue, "html_url") ?? undefined;
+
+  return {
+    repoId,
+    payload: {
+      repoId,
+      kind: "issue_comment",
+      action,
+      actor,
+      title,
+      number,
+      url,
+      summary: `GitHub comment ${action} on ${subject} #${number ?? "?"}: ${title}`
     }
   };
 }
@@ -106,6 +271,28 @@ function stringAt(value: unknown, key: string): string | null {
 
   const result = value[key];
   return typeof result === "string" && result ? result : null;
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value ? value : null;
+}
+
+function numberAt(value: unknown, key: string): number | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const result = value[key];
+  return typeof result === "number" && Number.isFinite(result) ? result : undefined;
+}
+
+function booleanAt(value: unknown, key: string): boolean | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const result = value[key];
+  return typeof result === "boolean" ? result : undefined;
 }
 
 function strings(value: unknown): string[] {

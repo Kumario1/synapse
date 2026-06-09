@@ -259,6 +259,7 @@ function teamState(partial: Partial<TeamState>): TeamState {
     editLocks: [],
     unpushedDeltas: [],
     recentPushes: [],
+    recentRepoEvents: [],
     resolutions: [],
     sessionSummaries: [],
     ...partial
