@@ -10,6 +10,34 @@
 
 ---
 
+## Build Status (updated 2026-06-08)
+
+The core agent-coordination loop is implemented and runs as an installed tool. Status by area:
+
+| Area | Status | Notes / PRs |
+|------|--------|-------------|
+| Skeleton, wire protocol, daemon↔server realtime loop | ✅ Done | M0 |
+| TS contract extraction + delta diffing + conflict engine (severity, compatibility) | ✅ Done | M1, ts-morph |
+| LLM analysis upgrade + contract resolver (OpenRouter, deterministic fallback) | ✅ Done | optional, gated |
+| Dependency graph (TS) + transitive conflicts | ✅ Done | M2 |
+| Python analyzer (tree-sitter + jedi sidecar) — same engine | ✅ Done | PR #16 |
+| MCP adapter (Cursor/Cline/Aider) + GitHub push webhook | ✅ Done | M2 |
+| Durable server state — SQLite `StateStore` (survives restart) | ✅ Done | PR #17 |
+| Claude Code hooks installed by `join` (Pre/PostToolUse, SessionStart) | ✅ Done | PR #18, #20 |
+| Briefings Layer II — `whatsup`, session-end summaries, session-start catch-up | ✅ Done | PR #19, #20 |
+| Daemon↔server auth — optional shared token (constant-time) | ✅ Done | PR #21 |
+| **Redis** live state + pub/sub (multi-instance fan-out) | ⬜ Deferred | in-memory + SQLite today; `StateStore` is the swap seam |
+| **Postgres** durable store (multi-instance) | ⬜ Deferred | SQLite implements the same `StateStore` interface |
+| **GitHub OAuth + per-connection JWT** | ⬜ Planned | shared-token is the interim |
+| PR / review ingestion into briefings | ⬜ Planned | push webhook done; `pull_request` events next |
+| Memory Layer III — pgvector + `synapse_why` | ⬜ Not started | "when validated" |
+| Go analyzer; SCIP-grade indexing; telemetry/acted-on tuning | ⬜ Not started | — |
+
+Verification: every implemented area has a `npm run verify:*` script (19 total) plus unit tests and
+`npm run eval:conflicts`; all green. See the README for the per-feature commands.
+
+---
+
 ## 0. The One Sentence
 
 > A real-time coordination substrate that every coding agent plugs into, so before an agent edits
@@ -214,30 +242,33 @@ DecisionMemory(id, repo_id, kind, text, embedding, source_url, created_at)  # La
 
 ## 5. Phased Roadmap (engineering milestones, mapped to product layers)
 
-**Milestone 0 — Skeleton & protocol (week 1)**
+**Milestone 0 — Skeleton & protocol (week 1)** — ✅ **Done**
 Turborepo scaffold; shared wire-protocol types; MCP server with stub `synapse_check`/`synapse_report`;
 local daemon connects over WSS; `synapse join` installs a Claude Code hook that pings the daemon.
 *Exit test:* one machine reports an edit, a second machine sees it in `synapse_check`.
 
-**Milestone 1 — Contract-level conflict prevention (Layer I) (weeks 2–4)**
-tree-sitter contract extraction (TS + Python first); contract-delta diffing; Redis live state +
-pub/sub warm cache; conflict engine with severity scoring; inline warning surfaced in Claude Code.
-*Exit test:* the "Contract Collision" scenario (auth refactor vs. login feature) is caught **before**
-the second agent starts, on two real machines.
+**Milestone 1 — Contract-level conflict prevention (Layer I) (weeks 2–4)** — ✅ **Done**
+(except Redis warm cache — single-process in-memory + SQLite for now)
+tree-sitter contract extraction (TS + Python first); contract-delta diffing; ~~Redis live state +
+pub/sub warm cache~~; conflict engine with severity scoring; inline warning surfaced in Claude Code via
+the installed `PreToolUse` hook. *Exit test:* the "Contract Collision" scenario (auth refactor vs.
+login feature) is caught **before** the second agent starts — see `verify:resolution` / `verify:hooks`.
 
-**Milestone 2 — Dependency graph & multi-agent (weeks 4–6)**
-Symbol/import graph for transitive conflicts; Cursor/Cline support via MCP tools; GitHub App +
-webhooks for state reset on push; severity tuning + acted-on telemetry.
+**Milestone 2 — Dependency graph & multi-agent (weeks 4–6)** — ✅ **Done**
+(telemetry/acted-on tuning deferred)
+Symbol/import graph for transitive conflicts (TS + Python); Cursor/Cline support via MCP tools; GitHub
+push webhook for state reset on push. Severity tuning + acted-on telemetry still ahead.
 
-**Milestone 3 — Briefings (Layer II) (weeks 6–9)**
-Session-end summarization (optional OpenRouter model); `synapse whatsup`; morning push on session start;
-PR ingestion into briefings.
+**Milestone 3 — Briefings (Layer II) (weeks 6–9)** — 🟡 **Mostly done**
+Session-end summarization (deterministic + optional OpenRouter) ✅; `synapse whatsup` ✅; morning push
+on session start (`SessionStart` hook) ✅. PR ingestion into briefings still ahead.
 
-**Milestone 4 — Memory (Layer III) (when validated)**
+**Milestone 4 — Memory (Layer III) (when validated)** — ⬜ **Not started**
 pgvector decision store; `synapse_why` RAG query; Slack ingestion; onboarding mode.
 
-**Cross-cutting (start early):** auth/multi-tenancy, self-host packaging (Docker compose), telemetry,
-and a tiny eval harness for "did we correctly flag/ignore this conflict?" on recorded scenarios.
+**Cross-cutting (start early):** auth/multi-tenancy (✅ optional shared-token auth, PR #21; GitHub
+OAuth + JWT still ahead), self-host packaging (Docker compose — not yet), telemetry (not yet), and a
+tiny eval harness for "did we correctly flag/ignore this conflict?" on recorded scenarios.
 Current eval harness: `npm run eval:conflicts` runs recorded JSON scenarios through the deterministic
 conflict engine and asserts verdicts, rules, recommendations, compatibility, and resolutions.
 
@@ -245,13 +276,17 @@ conflict engine and asserts verdicts, rules, recommendations, compatibility, and
 
 ## 6. Key Technical Risks & Open Decisions
 
-1. Hot-path latency vs. accuracy — solved by local warm cache + deterministic AST diff, but needs proof.
-2. Cross-agent support — only Claude Code has true hooks; others need MCP-tool cooperation which is
-   softer (the agent must *choose* to call). How hard do we push v1 beyond Claude Code?
-3. Dep-graph accuracy vs. cost — tree-sitter queries vs. full LSP/SCIP indexing.
-4. Privacy boundary — keep raw code local, ship only contract deltas + summaries. Confirm acceptable.
-5. Self-hosted vs. SaaS first (affects auth, hosting, packaging from day one).
-6. Alarm fatigue — severity model must be right or the tool gets disabled.
+1. Hot-path latency vs. accuracy — local warm cache + deterministic AST diff in place; TS analysis is
+   in-process, Python runs in a warm sidecar. Formal latency benchmarking still TODO.
+2. Cross-agent support — ✅ Claude Code via installed hooks; Cursor/Cline/Aider via the MCP adapter.
+3. Dep-graph accuracy vs. cost — ✅ resolved for v1: ts-morph (TS, in-process) + jedi (Python,
+   sidecar). SCIP-grade indexing remains a later option.
+4. Privacy boundary — ✅ raw code stays local; only contract deltas + summaries + symbol ids leave the
+   machine. The one relaxation (LLM resolver sends a file for context) is opt-in and documented.
+5. Self-hosted vs. SaaS — ✅ self-hosted first: SQLite persistence (no infra), optional shared-token
+   auth, runs with zero external services. SaaS/multi-instance (Postgres/Redis) is a later swap.
+6. Alarm fatigue — severity model (none/info/warn) and non-blocking `ask` hook in place; acted-on
+   telemetry to tune thresholds is still TODO.
 
 (Open product questions from the context doc — conflict granularity, friction point, session
 definition, multi-repo, pricing, name — are tracked in `synapse-context.md` §13.)
