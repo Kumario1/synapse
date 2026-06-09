@@ -35,8 +35,12 @@
     <td><code>synapse join</code> installs <code>PreToolUse</code> / <code>PostToolUse</code> / <code>SessionStart</code> hooks so checks fire automatically — no manual tool calls.</td>
   </tr>
   <tr>
+    <td><b>Any-agent onboarding</b></td>
+    <td><code>synapse connect</code> (run automatically by <code>join</code>) registers the stdio MCP server in Cursor, VS Code/Copilot, Gemini CLI, Windsurf, and any MCP client, and drops rules files that carry the <i>same</i> check-before-edit / report-after-edit guidance the Claude Code hooks encode — so non-Claude agents get hook-equivalent behavior with zero manual setup.</td>
+  </tr>
+  <tr>
     <td><b>MCP adapter</b></td>
-    <td>A thin stdio MCP server exposes the same daemon tools to any MCP-capable agent.</td>
+    <td>A thin stdio MCP server exposes the same daemon tools to any MCP-capable agent. It resolves its coordination room from <code>.synapse/config.json</code> and ships hook-equivalent usage as the MCP-native <code>instructions</code> field, so connecting agents are told when to call each tool.</td>
   </tr>
   <tr>
     <td><b>Team briefings</b></td>
@@ -95,6 +99,24 @@ SYNAPSE_AUTH_TOKEN=<token> synapse up
 
 ---
 
+## Works with any agent, not just Claude Code
+
+Claude Code gets `PreToolUse` / `PostToolUse` / `SessionStart` hooks that fire `synapse_check` before edits, `synapse_report` after edits, and a `synapse_whatsup` catch-up at session start. Every other agent gets the **same behavior** through MCP — `synapse join` (and `synapse connect`) sets it up automatically:
+
+```bash
+synapse connect                        # wire up every supported agent
+synapse connect --agent cursor,vscode  # or just the ones you use
+```
+
+This does two things so other agents connect seamlessly and then use Synapse the way it's intended:
+
+1. **Registers the stdio MCP server** in each client's own config — `.cursor/mcp.json`, `.vscode/mcp.json`, `.gemini/settings.json`, and the cross-agent `.mcp.json` — pointing at `synapse mcp`. The adapter resolves its room (repoId, session, daemon port) from `.synapse/config.json`, so there is nothing else to configure.
+2. **Drops rules files that encode the hooks as instructions** — `AGENTS.md`, `.cursor/rules/synapse.mdc`, and `.windsurf/rules/synapse.md` — telling the agent to call `synapse_check` before editing, `synapse_report` after, and `synapse_whatsup` at the start. The MCP server also advertises the same guidance via the protocol-native `instructions` field, so even clients that ignore rules files still receive it.
+
+Every write is idempotent and preserves your existing content (managed blocks for markdown, key-merge for JSON), so it is safe to re-run.
+
+---
+
 ## Commands
 
 The CLI binary is `synapse` (`apps/cli/src/index.ts`). In a dev checkout, run any command via `npm run dev --workspace @synapse/cli -- <command>`.
@@ -110,7 +132,8 @@ The CLI binary is `synapse` (`apps/cli/src/index.ts`). In a dev checkout, run an
 | `whatsup` | Show the daemon's current team-state briefing |
 | `why` | Search Synapse memory with source citations |
 | `mcp` | Run a stdio MCP server forwarding tools to the local daemon |
-| `join` | Write `.synapse/config.json` and install Claude Code hooks |
+| `connect` | Wire other agents (Cursor, VS Code/Copilot, Gemini CLI, Windsurf, any MCP client) to the MCP server |
+| `join` | Write `.synapse/config.json`, install Claude Code hooks, and `connect` other agents |
 | `up` | join + preflight + start daemon (`--serve` / `--tunnel` for the host) |
 | `keygen` | Mint a project-scoped key for this repo (needs `SYNAPSE_MASTER_SECRET`) |
 | `doctor` | Preflight: identity, server reachability, auth, and live peers |
@@ -207,6 +230,7 @@ Run with `npm run <script>`. See [`package.json`](package.json) for the complete
 | `verify:session-summary` / `verify:session-start` | Layer II session summaries and catch-up briefing |
 | `verify:hooks` | Claude Code `join` + `hook pre`/`hook post` as invoked by Claude Code |
 | `verify:mcp-adapter` | Stdio MCP adapter forwarding to the daemon |
+| `verify:connect` | `synapse connect` wires up every agent (configs + rules), idempotently, and the MCP server advertises hook-equivalent `instructions` |
 | `verify:auth` / `verify:tenancy` | Shared-token and project-key auth paths |
 | `verify:up` / `verify:up-tunnel` / `verify:doctor` | Multi-machine setup, tunnels, and preflight diagnostics |
 | `verify:persistence` | State survives a server restart |
