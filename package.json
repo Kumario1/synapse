@@ -34,6 +34,8 @@
     "verify:session-summary": "npm run build && node scripts/verify-session-summary.mjs",
     "verify:session-start": "npm run build && node scripts/verify-session-start.mjs",
     "verify:auth": "npm run build && node scripts/verify-auth.mjs",
+    "verify:tenancy": "npm run build && node scripts/verify-tenancy.mjs",
+    "verify:docker": "npm run build && node scripts/verify-docker.mjs",
     "verify:whatsup": "npm run build && node scripts/verify-whatsup.mjs",
     "verify:why": "npm run build && node scripts/verify-why.mjs",
     "verify:join-config": "npm run build && node scripts/verify-join-config.mjs",
