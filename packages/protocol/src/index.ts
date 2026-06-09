@@ -1,4 +1,21 @@
+import { createHmac } from "node:crypto";
+
 export const PROTOCOL_VERSION = 1 as const;
+
+/**
+ * Derive an opaque, project-scoped capability key from a server master secret.
+ *
+ * `key = base64url( HMAC-SHA256(masterSecret, repoId) )`
+ *
+ * A key minted for one `repoId` cannot validate against another — the server
+ * recomputes the HMAC for the requested repo and constant-time compares. This is
+ * the stateless tenancy primitive: the CLI mints (`synapse keygen`) and the
+ * server validates with this same function, so the two can never drift. Pure and
+ * deterministic.
+ */
+export function deriveProjectKey(masterSecret: string, repoId: string): string {
+  return createHmac("sha256", masterSecret).update(repoId).digest("base64url");
+}
 
 export type Severity = "none" | "info" | "warn";
 

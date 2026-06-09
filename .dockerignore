@@ -1,0 +1,26 @@
+# Keep the build context lean and the image clean. node_modules is reinstalled
+# from the lockfile inside the builder; dist is rebuilt.
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+.turbo
+**/.turbo
+
+# Local/dev state and secrets — never ship these into an image.
+.env
+.env.*
+!.env.example
+.synapse
+.synapse-server
+**/*.db
+**/*.db-shm
+**/*.db-wal
+
+# VCS, docs, and editor cruft.
+.git
+.gitignore
+*.md
+.DS_Store
+coverage
+.venv
+**/__pycache__

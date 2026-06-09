@@ -353,16 +353,60 @@ same database, and asserts the state resumed from disk):
 npm run verify:persistence
 ```
 
-## Server Auth (shared token)
+## Ship to a Machine (Docker server + per-project keys)
 
-The daemon↔server channel can require a shared token. Set `SYNAPSE_AUTH_TOKEN` to the **same** value
-on the server and on each daemon (`--token`, or the `SYNAPSE_AUTH_TOKEN` env — it is never written to
-`.synapse/config.json`, so the secret stays off disk). When set, the server rejects WSS connections
-and `GET /state` that don't present it (via `?token=` or `Authorization: Bearer`), using a constant-time
-comparison. `/health` stays open, and the GitHub webhook keeps its own HMAC. Unset = open, which keeps
-local/dev and the verify scripts hermetic. GitHub OAuth + per-connection JWT is the intended upgrade.
+Ship the **server** to a machine and have a team "just work" with two inputs: a project key (auth) and
+a project identity (`repoId`, auto-derived from the git remote). The server is the one always-on piece;
+the per-dev daemon stays a local CLI, since it needs your working tree and writes Claude Code hooks.
 
 ```bash
+# 1. On the host: bring up the Dockerized server with project-key auth.
+cp .env.example .env          # set SYNAPSE_MASTER_SECRET to a long random string
+docker compose up -d          # starts just the server; state persists in a named volume
+
+# 2. Mint a per-project key (resolves repoId from the git remote, like `up`):
+SYNAPSE_MASTER_SECRET=<secret> synapse keygen
+# → prints base64url(HMAC-SHA256(secret, repoId)); share it out-of-band (Slack/1Password).
+
+# 3. Each teammate, in their clone, points at the server and connects with the key:
+#    (commit .synapse/team.json with the server URL so the URL is inherited)
+SYNAPSE_PROJECT_KEY=<key> synapse up
+```
+
+The image builds the server (and only its `@synapse/protocol` + `@synapse/conflict-engine` deps) in a
+`node:20` builder and runs it on `node:20-slim`, so `better-sqlite3`'s native binding matches the
+runtime. Point `SYNAPSE_DB_PATH` at the mounted volume (compose does this) for durable state.
+
+```bash
+npm run verify:docker   # builds the image, boots it, drives one edit→report (skipped if no daemon)
+```
+
+## Server Auth (open / shared-token / project-key)
+
+The daemon↔server channel resolves one of three modes at server startup. In every mode `/health` stays
+open, the GitHub webhook keeps its own HMAC, and the credential is sent via `?token=` /
+`Authorization: Bearer` (flag/env only — never written to `.synapse/config.json`, so secrets stay off
+disk) and compared in constant time.
+
+- **project-key** (`SYNAPSE_MASTER_SECRET` set) — **real tenancy.** A key is
+  `base64url(HMAC-SHA256(master secret, repoId))`; it authorizes *its* project only. The server
+  recomputes the HMAC for the requested `repoId` at the handshake **and** rejects any per-message
+  payload that targets a different repo (`forbidden_repo`). Mint keys with `synapse keygen`.
+- **shared-token** (`SYNAPSE_AUTH_TOKEN` set, no master secret) — the original all-or-nothing token: any
+  valid token reads/writes any project.
+- **open** (neither set) — no auth; keeps local/dev and the verify scripts hermetic.
+
+DB-backed API keys / a GitHub-OAuth-minted JWT carrying `allowedRepoIds` are the intended multi-tenant
+upgrade, reusing the same two checkpoints (handshake + per-message repo binding).
+
+```bash
+# project-key mode
+SYNAPSE_MASTER_SECRET=secret npm run dev --workspace @synapse/server
+SYNAPSE_MASTER_SECRET=secret npm run dev --workspace @synapse/cli -- keygen --repo-id github.com/acme/app
+npm run dev --workspace @synapse/cli -- daemon --key <key> --repo-id github.com/acme/app
+npm run verify:tenancy
+
+# shared-token mode
 SYNAPSE_AUTH_TOKEN=secret npm run dev --workspace @synapse/server
 npm run dev --workspace @synapse/cli -- daemon --token secret
 npm run verify:auth

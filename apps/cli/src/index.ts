@@ -45,6 +45,7 @@ import {
 import { runMcp } from "./mcp.js";
 import {
   createEmptyTeamState,
+  deriveProjectKey,
   PROTOCOL_VERSION,
   type AgentType,
   type CodeSymbol,
@@ -167,6 +168,9 @@ switch (command) {
   case "up":
     await runUp(args.slice(1));
     break;
+  case "keygen":
+    runKeygen(args.slice(1));
+    break;
   case "doctor":
     await runDoctor(args.slice(1));
     break;
@@ -246,7 +250,9 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
     socket.on("unexpected-response", (_request, response) => {
       const auth = response.statusCode === 401;
       warnConnection(
-        auth ? "401 unauthorized — check SYNAPSE_AUTH_TOKEN" : `HTTP ${response.statusCode}`,
+        auth
+          ? "401 unauthorized — check your project key (SYNAPSE_PROJECT_KEY / --key) or SYNAPSE_AUTH_TOKEN"
+          : `HTTP ${response.statusCode}`,
         { auth }
       );
     });
@@ -763,6 +769,31 @@ async function runUp(rawArgs: string[]): Promise<void> {
   await startDaemon(config);
 }
 
+/**
+ * Mint a project-scoped key for the server operator: HMAC(SYNAPSE_MASTER_SECRET,
+ * repoId). The operator runs this once per project and shares the key
+ * out-of-band; teammates pass it as SYNAPSE_PROJECT_KEY / --key. repoId resolves
+ * via the same chain as `up`, so a checkout with a git remote needs no flags.
+ */
+function runKeygen(rawArgs: string[]): void {
+  const secret = process.env.SYNAPSE_MASTER_SECRET ?? "";
+  if (!secret) {
+    throw new Error(
+      "SYNAPSE_MASTER_SECRET is not set. Set the same master secret the server runs with, then re-run `synapse keygen`."
+    );
+  }
+
+  const config = configFromArgs(rawArgs);
+  if (config.repoId === "local") {
+    console.warn(
+      'synapse: repoId is "local" — this key only authorizes the "local" project. ' +
+        "Add a git remote, pass --repo-id, or set repoId in .synapse/team.json to scope it to a real project."
+    );
+  }
+
+  console.log(deriveProjectKey(secret, config.repoId));
+}
+
 /** Resolve the built @synapse/server entrypoint, or throw a clear build hint. */
 function resolveServerEntry(): string {
   try {
@@ -1116,7 +1147,7 @@ function probeWsHandshake(config: RuntimeConfig): Promise<DoctorCheck> {
         status: "fail",
         detail:
           response.statusCode === 401
-            ? "WS handshake rejected 401 — auth token missing or wrong."
+            ? "WS handshake rejected 401 — project key/token missing or wrong for this repo."
             : `WS handshake rejected — HTTP ${response.statusCode}.`
       })
     );
@@ -1568,8 +1599,15 @@ function configFromArgs(rawArgs: string[]): RuntimeConfig {
         gitWorktreeRoot()
     ),
     // Sourced from flag/env only — never persisted to .synapse/config.json so a
-    // secret token does not land on disk.
-    authToken: flags.token ?? process.env.SYNAPSE_AUTH_TOKEN ?? ""
+    // secret credential does not land on disk. A project key (--key /
+    // SYNAPSE_PROJECT_KEY) and a shared token (--token / SYNAPSE_AUTH_TOKEN) both
+    // ride this field; the server decides which it is by its own auth mode.
+    authToken:
+      flags.key ??
+      process.env.SYNAPSE_PROJECT_KEY ??
+      flags.token ??
+      process.env.SYNAPSE_AUTH_TOKEN ??
+      ""
   };
 }
 
@@ -2817,6 +2855,7 @@ Commands:
   mcp      Run a stdio MCP server that forwards tools to the local daemon
   join     Write .synapse/config.json and install Claude Code hooks
   up       One command: join + preflight + start daemon (--serve / --tunnel for the host)
+  keygen   Mint a project-scoped key for this repo (needs SYNAPSE_MASTER_SECRET)
   doctor   Preflight a setup: identity, server reachability, auth, and live peers
   hook     Claude Code hook entrypoint (pre|post); reads hook JSON on stdin
   analyze  Extract TypeScript contract symbols from a file
@@ -2824,6 +2863,8 @@ Commands:
 Examples:
   synapse up                                   # teammate: inherits .synapse/team.json
   synapse up --serve --tunnel                  # host: run the server + expose it publicly
+  SYNAPSE_MASTER_SECRET=… synapse keygen       # operator: mint this project's key
+  SYNAPSE_PROJECT_KEY=… synapse up             # teammate: connect with the project key
   synapse doctor                               # diagnose why two machines aren't coordinating
   synapse join --member alice --session alice --port 4011 --server ws://localhost:4010
   synapse daemon
