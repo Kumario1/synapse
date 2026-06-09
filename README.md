@@ -27,6 +27,8 @@ The repository now has the local realtime loop in place:
    edit locks, and resolutions survive a server restart.
 8. Automatic Claude Code hooks installed by `synapse join`: `PreToolUse` checks before an edit and
    `PostToolUse` reports after, via the `synapse hook` entrypoint.
+9. A deterministic hot-path latency verifier for the file-only pre-edit check path: two daemons,
+   separate worktrees, no external network or LLM calls, with p95 and max latency budgets enforced.
 
 The server is single-process with an in-memory hot path backed by a durable store. Postgres/Redis
 (for multi-instance fan-out) can implement the same `StateStore` later without touching server logic.
@@ -177,6 +179,16 @@ Verify that a check with only a TypeScript file path can still find symbol-level
 ```bash
 npm run verify:file-only-ts-check
 ```
+
+Benchmark the same file-only pre-edit path used by Claude Code hooks:
+
+```bash
+npm run verify:hot-path-latency
+```
+
+This synthetic local benchmark starts a server plus Alice/Bob daemons in separate one-file
+worktrees, disables OpenRouter, measures no-conflict and warning checks, and asserts p95 <= 50ms and
+max <= 150ms for both paths.
 
 Verify that a checked TypeScript file warns when it depends on another file's unpushed contract
 change:

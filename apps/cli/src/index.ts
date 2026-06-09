@@ -2,7 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createRequire } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
@@ -89,6 +89,31 @@ interface LocalConfig {
   worktreeRoot?: string;
 }
 
+interface AnalysisCache {
+  symbolsByFile: Map<string, CachedSymbols>;
+  graph: CachedGraph | null;
+}
+
+interface CachedSymbols {
+  fingerprint: string;
+  symbols: CodeSymbol[];
+}
+
+interface CachedGraph {
+  fingerprint: string;
+  value: DaemonGraph;
+}
+
+interface SourceFileFingerprint {
+  filePath: string;
+  mtimeMs: number;
+  size: number;
+}
+
+interface SourceFileContent extends SourceFileFingerprint {
+  source: string;
+}
+
 const args = process.argv.slice(2);
 const command = args[0] ?? "help";
 
@@ -133,6 +158,10 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
   let teamState = createEmptyTeamState(config.repoId);
   let socket: WebSocket | null = null;
   const contractSnapshots = new Map<string, CodeSymbol[]>();
+  const analysisCache: AnalysisCache = {
+    symbolsByFile: new Map(),
+    graph: null
+  };
   // Optional LLM analysis layer (Rung 5). Null unless OPENROUTER_API_KEY is
   // set; detection stays deterministic either way.
   const analysisProvider = createOpenRouterAnalysisProvider();
@@ -222,7 +251,7 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
 
       if (request.method === "POST" && url.pathname === "/tools/synapse_check") {
         const body = (await readJson(request)) as Partial<SynapseCheckRequest>;
-        const targets = await resolveCheckTargets(config, body);
+        const targets = await resolveCheckTargets(config, body, analysisCache);
 
         for (const target of targets) {
           sendToServer("edit.intent", {
@@ -233,7 +262,7 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
           });
         }
 
-        const { graph, neighborsOf } = await buildDependencyGraph(config);
+        const { graph, neighborsOf } = await buildDependencyGraph(config, analysisCache);
         const conflicts = evaluateConflicts({
           selfSessionId: config.sessionId,
           targets,
@@ -279,7 +308,7 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
           return;
         }
 
-        const deltas = await reportContractChanges(config, contractSnapshots, body);
+        const deltas = await reportContractChanges(config, contractSnapshots, body, analysisCache);
         for (const delta of deltas) {
           sendToServer("contract.delta", { delta });
         }
@@ -1126,7 +1155,8 @@ interface CheckTarget {
 
 async function resolveCheckTargets(
   config: RuntimeConfig,
-  body: Partial<SynapseCheckRequest>
+  body: Partial<SynapseCheckRequest>,
+  cache?: AnalysisCache
 ): Promise<CheckTarget[]> {
   const files = body.files ?? [];
   const targets: CheckTarget[] = [];
@@ -1143,7 +1173,7 @@ async function resolveCheckTargets(
       continue;
     }
 
-    const symbols = await extractSymbolsForFile(config, filePath);
+    const symbols = await extractSymbolsForFile(config, filePath, cache);
     if (symbols.length === 0) {
       targets.push({ filePath, symbolId: symbolForFile(filePath) });
       continue;
@@ -1186,12 +1216,26 @@ interface DaemonGraph {
   neighborsOf(symbolRaw: string): { symbol: string; signature: string }[];
 }
 
-async function buildDependencyGraph(config: RuntimeConfig): Promise<DaemonGraph> {
+async function buildDependencyGraph(
+  config: RuntimeConfig,
+  cache?: AnalysisCache
+): Promise<DaemonGraph> {
   // Build each language's graph locally, then merge. Symbol ids are
   // language-prefixed (`ts:` / `py:`), so the union never collides and the
   // conflict engine sees one graph spanning both.
-  const tsFiles = await readSourceFiles(config.worktreeRoot, isTypeScriptLike);
-  const pyFiles = await readSourceFiles(config.worktreeRoot, isPythonLike);
+  const [tsFingerprints, pyFingerprints] = await Promise.all([
+    readSourceFileFingerprints(config.worktreeRoot, isTypeScriptLike),
+    readSourceFileFingerprints(config.worktreeRoot, isPythonLike)
+  ]);
+  const graphFingerprint = sourceSetFingerprint([...tsFingerprints, ...pyFingerprints]);
+  if (cache?.graph?.fingerprint === graphFingerprint) {
+    return cache.graph.value;
+  }
+
+  const [tsFiles, pyFiles] = await Promise.all([
+    readSourceFiles(config.worktreeRoot, isTypeScriptLike),
+    readSourceFiles(config.worktreeRoot, isPythonLike)
+  ]);
 
   const symbols: CodeSymbol[] = [];
   const edges: { from: ContractDelta["symbolId"]; to: ContractDelta["symbolId"] }[] = [];
@@ -1213,7 +1257,11 @@ async function buildDependencyGraph(config: RuntimeConfig): Promise<DaemonGraph>
   }
 
   if (symbols.length === 0 && edges.length === 0) {
-    return { graph: emptyDependencyGraph, neighborsOf: () => [] };
+    const empty = { graph: emptyDependencyGraph, neighborsOf: () => [] };
+    if (cache) {
+      cache.graph = { fingerprint: graphFingerprint, value: empty };
+    }
+    return empty;
   }
 
   const adjacency = new Map<string, ContractDelta["symbolId"][]>();
@@ -1275,7 +1323,11 @@ async function buildDependencyGraph(config: RuntimeConfig): Promise<DaemonGraph>
     }
   };
 
-  return { graph: dependencyGraph, neighborsOf };
+  const value = { graph: dependencyGraph, neighborsOf };
+  if (cache) {
+    cache.graph = { fingerprint: graphFingerprint, value };
+  }
+  return value;
 }
 
 /**
@@ -1422,7 +1474,8 @@ function contractParses(proposedContract: string | null): boolean {
 async function reportContractChanges(
   config: RuntimeConfig,
   contractSnapshots: Map<string, CodeSymbol[]>,
-  body: Partial<SynapseReportRequest>
+  body: Partial<SynapseReportRequest>,
+  cache?: AnalysisCache
 ): Promise<ContractDelta[]> {
   if (!body.filePath) {
     return [];
@@ -1446,7 +1499,7 @@ async function reportContractChanges(
     ];
   }
 
-  const current = await extractSymbolsForFile(config, filePath);
+  const current = await extractSymbolsForFile(config, filePath, cache);
   const previous = contractSnapshots.get(filePath);
   contractSnapshots.set(filePath, current);
 
@@ -1544,19 +1597,34 @@ function isAnalyzable(filePath: string): boolean {
  * (no venv/deps) the call returns `[]`, so callers degrade to file-level
  * detection exactly as they do for an unsupported language.
  */
-async function extractSymbolsForFile(config: RuntimeConfig, filePath: string): Promise<CodeSymbol[]> {
-  const source = await readFile(resolve(config.worktreeRoot, filePath), "utf8");
+async function extractSymbolsForFile(
+  config: RuntimeConfig,
+  filePath: string,
+  cache?: AnalysisCache
+): Promise<CodeSymbol[]> {
+  const fullPath = resolve(config.worktreeRoot, filePath);
+  const fingerprint = await fileFingerprint(fullPath);
+  const cached = cache?.symbolsByFile.get(filePath);
+  if (cached?.fingerprint === fingerprint) {
+    return cached.symbols;
+  }
+
+  const source = await readFile(fullPath, "utf8");
 
   if (isPythonLike(filePath)) {
     try {
-      return (await extractPythonContracts({ filePath, source })).symbols;
+      const symbols = (await extractPythonContracts({ filePath, source })).symbols;
+      cache?.symbolsByFile.set(filePath, { fingerprint, symbols });
+      return symbols;
     } catch (error) {
       warnAnalyzerDegraded("python", filePath, error);
       return [];
     }
   }
 
-  return extractTypeScriptContracts({ filePath, source }).symbols;
+  const symbols = extractTypeScriptContracts({ filePath, source }).symbols;
+  cache?.symbolsByFile.set(filePath, { fingerprint, symbols });
+  return symbols;
 }
 
 let pythonDegradedWarned = false;
@@ -1577,9 +1645,9 @@ async function readSourceFiles(
   root: string,
   matches: (filePath: string) => boolean,
   currentDir: string = root
-): Promise<{ filePath: string; source: string }[]> {
+): Promise<SourceFileContent[]> {
   const entries = await readdir(currentDir, { withFileTypes: true });
-  const files: { filePath: string; source: string }[] = [];
+  const files: SourceFileContent[] = [];
 
   for (const entry of entries) {
     const fullPath = join(currentDir, entry.name);
@@ -1601,13 +1669,67 @@ async function readSourceFiles(
       continue;
     }
 
+    const stats = await stat(fullPath);
     files.push({
       filePath,
+      mtimeMs: stats.mtimeMs,
+      size: stats.size,
       source: await readFile(fullPath, "utf8")
     });
   }
 
   return files;
+}
+
+async function readSourceFileFingerprints(
+  root: string,
+  matches: (filePath: string) => boolean,
+  currentDir: string = root
+): Promise<SourceFileFingerprint[]> {
+  const entries = await readdir(currentDir, { withFileTypes: true });
+  const files: SourceFileFingerprint[] = [];
+
+  for (const entry of entries) {
+    const fullPath = join(currentDir, entry.name);
+    if (entry.isDirectory()) {
+      if (ignoredDirectory(entry.name)) {
+        continue;
+      }
+
+      files.push(...(await readSourceFileFingerprints(root, matches, fullPath)));
+      continue;
+    }
+
+    if (!entry.isFile()) {
+      continue;
+    }
+
+    const filePath = normalizePath(relative(root, fullPath));
+    if (!matches(filePath)) {
+      continue;
+    }
+
+    const stats = await stat(fullPath);
+    files.push({
+      filePath,
+      mtimeMs: stats.mtimeMs,
+      size: stats.size
+    });
+  }
+
+  return files;
+}
+
+async function fileFingerprint(fullPath: string): Promise<string> {
+  const stats = await stat(fullPath);
+  return `${stats.mtimeMs}:${stats.size}`;
+}
+
+function sourceSetFingerprint(files: SourceFileFingerprint[]): string {
+  return files
+    .map((file) => `${file.filePath}:${file.mtimeMs}:${file.size}`)
+    .sort()
+    .join("|");
 }
 
 function ignoredDirectory(name: string): boolean {
