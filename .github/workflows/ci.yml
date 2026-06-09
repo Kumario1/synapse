@@ -1,0 +1,57 @@
+# CI gate (plan-future.md M1). Two jobs:
+#   check  — fast feedback: build + typecheck + unit tests.
+#   verify — the full hermetic verify matrix + eval via scripts/ci-verify-all.mjs
+#            (the same single command devs run locally). verify-docker runs for
+#            real on ubuntu runners (docker is preinstalled); it self-skips when
+#            docker is absent. Latency gates are the verify scripts' own exit
+#            codes — no separate budget mechanism here.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm test
+
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Cache analyzer-py venv
+        uses: actions/cache@v4
+        with:
+          path: packages/analyzer-py/.venv
+          key: analyzer-py-${{ runner.os }}-py3.12-${{ hashFiles('packages/analyzer-py/requirements.txt') }}
+      - run: npm ci
+      - name: Build, test, and run the full verify matrix
+        run: node scripts/ci-verify-all.mjs
+        env:
+          # Hermetic: the runner also forces these, belt and suspenders.
+          OPENROUTER_API_KEY: ""
+          SYNAPSE_LLM_EXPLAIN: "0"

@@ -1,5 +1,9 @@
 import { createHmac } from "node:crypto";
 
+export * from "./log.js";
+export * from "./metrics.js";
+export * from "./wire-schema.js";
+
 export const PROTOCOL_VERSION = 1 as const;
 
 /**
