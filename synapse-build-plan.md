@@ -29,7 +29,7 @@ The core agent-coordination loop is implemented and runs as an installed tool. S
 | **Redis** live state + pub/sub (multi-instance fan-out) | ⬜ Deferred | in-memory + SQLite today; `StateStore` is the swap seam |
 | **Postgres** durable store (multi-instance) | ⬜ Deferred | SQLite implements the same `StateStore` interface |
 | **GitHub OAuth + per-connection JWT** | ⬜ Planned | shared-token is the interim |
-| PR / review ingestion into briefings | ⬜ Planned | push webhook done; `pull_request` events next |
+| PR / review ingestion into briefings | ✅ Done | `pull_request`, `pull_request_review`, and `issue_comment` webhooks |
 | Memory Layer III — pgvector + `synapse_why` | ⬜ Not started | "when validated" |
 | Go analyzer; SCIP-grade indexing; telemetry/acted-on tuning | ⬜ Not started | — |
 
@@ -259,9 +259,9 @@ login feature) is caught **before** the second agent starts — see `verify:reso
 Symbol/import graph for transitive conflicts (TS + Python); Cursor/Cline support via MCP tools; GitHub
 push webhook for state reset on push. Severity tuning + acted-on telemetry still ahead.
 
-**Milestone 3 — Briefings (Layer II) (weeks 6–9)** — 🟡 **Mostly done**
+**Milestone 3 — Briefings (Layer II) (weeks 6–9)** — ✅ **Done for current local scope**
 Session-end summarization (deterministic + optional OpenRouter) ✅; `synapse whatsup` ✅; morning push
-on session start (`SessionStart` hook) ✅. PR ingestion into briefings still ahead.
+on session start (`SessionStart` hook) ✅; PR/review/comment ingestion into briefings ✅.
 
 **Milestone 4 — Memory (Layer III) (when validated)** — ⬜ **Not started**
 pgvector decision store; `synapse_why` RAG query; Slack ingestion; onboarding mode.

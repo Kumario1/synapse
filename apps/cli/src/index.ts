@@ -705,6 +705,15 @@ function sessionStartBriefing(briefing: SynapseWhatsupResponse, selfSessionId: s
     );
   }
 
+  const repoEvents = briefing.recentRepoEvents.slice(0, 5);
+  if (repoEvents.length > 0) {
+    sections.push(
+      `Recent GitHub activity:\n${repoEvents
+        .map((event) => `  • ${event.actor}: ${event.summary}`)
+        .join("\n")}`
+    );
+  }
+
   const othersDeltas = briefing.unpushedDeltas.filter((delta) => delta.sessionId !== selfSessionId);
   if (othersDeltas.length > 0) {
     sections.push(
@@ -1039,6 +1048,9 @@ function buildWhatsupResponse(
     .filter((delta) => delta.pushedAt === null)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const recentPushes = [...state.recentPushes].sort((a, b) => b.pushedAt.localeCompare(a.pushedAt));
+  const recentRepoEvents = [...state.recentRepoEvents].sort((a, b) =>
+    b.createdAt.localeCompare(a.createdAt)
+  );
   const resolutions = [...state.resolutions].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const sessionSummaries = [...state.sessionSummaries].sort((a, b) =>
     b.endedAt.localeCompare(a.endedAt)
@@ -1053,6 +1065,7 @@ function buildWhatsupResponse(
       `${unpushedDeltas.length} unpushed contract delta${unpushedDeltas.length === 1 ? "" : "s"}`,
       `${state.editLocks.length} active edit lock${state.editLocks.length === 1 ? "" : "s"}`,
       `${recentPushes.length} recent push${recentPushes.length === 1 ? "" : "es"}`,
+      `${recentRepoEvents.length} GitHub repo event${recentRepoEvents.length === 1 ? "" : "s"}`,
       `${resolutions.length} shared resolution${resolutions.length === 1 ? "" : "s"}`,
       `${sessionSummaries.length} session summar${sessionSummaries.length === 1 ? "y" : "ies"}`
     ],
@@ -1080,6 +1093,7 @@ function buildWhatsupResponse(
     })),
     editLocks: state.editLocks.slice(0, limit),
     recentPushes: recentPushes.slice(0, limit),
+    recentRepoEvents: recentRepoEvents.slice(0, limit),
     resolutions: resolutions.slice(0, limit),
     sessionSummaries: sessionSummaries.slice(0, limit)
   };

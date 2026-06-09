@@ -10,7 +10,7 @@ import {
   type WireEnvelope
 } from "@synapse/protocol";
 import { WebSocket, WebSocketServer } from "ws";
-import { gitHubPushToNotify } from "./github.js";
+import { gitHubPushToNotify, gitHubRepoEventToNotify } from "./github.js";
 import { applyMessage, pruneExpiredLocks, repoIdFor } from "./state.js";
 import { createStateStore } from "./store.js";
 
@@ -137,11 +137,6 @@ async function handleGitHubWebhook(
   }
 
   const event = headerValue(request, "x-github-event") ?? "unknown";
-  if (event !== "push") {
-    writeJson(response, 202, { ok: true, ignored: true, event });
-    return;
-  }
-
   let payload: unknown;
   try {
     payload = raw ? JSON.parse(raw) : {};
@@ -151,6 +146,30 @@ async function handleGitHubWebhook(
   }
 
   try {
+    if (event !== "push" && !repoEventSupported(event)) {
+      writeJson(response, 202, { ok: true, ignored: true, event });
+      return;
+    }
+
+    if (event !== "push") {
+      const repoEvent = gitHubRepoEventToNotify(event, payload, url.searchParams.get("repoId"));
+      applyMessage(
+        getState(repoEvent.repoId),
+        repoEvent.repoId,
+        clientEnvelope("repo.event", repoEvent.payload)
+      );
+      persist(repoEvent.repoId);
+      broadcast(repoEvent.repoId, envelope("state.snapshot", { teamState: getState(repoEvent.repoId) }));
+      writeJson(response, 202, {
+        ok: true,
+        repoId: repoEvent.repoId,
+        event,
+        kind: repoEvent.payload.kind,
+        action: repoEvent.payload.action
+      });
+      return;
+    }
+
     const push = gitHubPushToNotify(payload, url.searchParams.get("repoId"));
     applyMessage(
       getState(push.repoId),
@@ -169,6 +188,10 @@ async function handleGitHubWebhook(
     const reason = error instanceof Error ? error.message : "unknown_error";
     writeJson(response, 400, { ok: false, error: reason });
   }
+}
+
+function repoEventSupported(event: string): boolean {
+  return event === "pull_request" || event === "pull_request_review" || event === "issue_comment";
 }
 
 function getState(repoId: string): TeamState {
