@@ -33,6 +33,7 @@
     "verify:session-start": "npm run build && node scripts/verify-session-start.mjs",
     "verify:auth": "npm run build && node scripts/verify-auth.mjs",
     "verify:whatsup": "npm run build && node scripts/verify-whatsup.mjs",
+    "verify:why": "npm run build && node scripts/verify-why.mjs",
     "verify:join-config": "npm run build && node scripts/verify-join-config.mjs",
     "eval:conflicts": "npm run build && node scripts/eval-conflicts.mjs",
     "verify:m0": "npm run build && node scripts/verify-milestone-0.mjs"

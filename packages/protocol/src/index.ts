@@ -414,6 +414,41 @@ export interface SynapseWhatsupResponse {
   sessionSummaries: SessionSummary[];
 }
 
+export interface SynapseWhyRequest {
+  repoId: string;
+  sessionId: string;
+  question: string;
+  /** Max matching sources to return. Defaults to 5. */
+  limit?: number;
+}
+
+export type SynapseWhySourceKind =
+  | "session_summary"
+  | "repo_event"
+  | "recent_push"
+  | "resolution"
+  | "unpushed_delta"
+  | "session";
+
+export interface SynapseWhySource {
+  kind: SynapseWhySourceKind;
+  title: string;
+  summary: string;
+  createdAt: string;
+  score: number;
+  url?: string;
+  reference?: string;
+}
+
+export interface SynapseWhyResponse {
+  repoId: string;
+  generatedAt: string;
+  degraded: boolean;
+  question: string;
+  answer: string;
+  sources: SynapseWhySource[];
+}
+
 export interface WireEnvelope<TType extends string = string, TPayload = unknown> {
   v: typeof PROTOCOL_VERSION;
   type: TType;

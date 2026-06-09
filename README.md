@@ -21,13 +21,15 @@ The repository now has the local realtime loop in place:
    (tree-sitter + jedi), routed through the same conflict engine as TypeScript.
 5. Deterministic `synapse whatsup` team-state briefing from the daemon's warm cache, plus durable
    session summaries (Layer II) distilled on session end and GitHub PR/review/comment activity.
-6. Stdio MCP adapter so MCP-capable agents can call the same daemon tools without shell-specific
+6. Deterministic `synapse why` memory search over the same durable team state, with source citations
+   from session summaries, repo events, pushes, resolutions, and live deltas.
+7. Stdio MCP adapter so MCP-capable agents can call the same daemon tools without shell-specific
    integration code.
-7. Durable server state via a `StateStore` (SQLite): live sessions, unpushed deltas, recent pushes,
+8. Durable server state via a `StateStore` (SQLite): live sessions, unpushed deltas, recent pushes,
    edit locks, and resolutions survive a server restart.
-8. Automatic Claude Code hooks installed by `synapse join`: `PreToolUse` checks before an edit and
+9. Automatic Claude Code hooks installed by `synapse join`: `PreToolUse` checks before an edit and
    `PostToolUse` reports after, via the `synapse hook` entrypoint.
-9. A deterministic hot-path latency verifier for the file-only pre-edit check path: two daemons,
+10. A deterministic hot-path latency verifier for the file-only pre-edit check path: two daemons,
    separate worktrees, no external network or LLM calls, with p95 and max latency budgets enforced.
    A larger synthetic verifier covers the same path across 181 TypeScript source files.
 
@@ -324,9 +326,21 @@ npm run verify:mcp-adapter
 ```
 
 The MCP adapter is intentionally thin. It runs over stdio, registers `synapse_check`,
-`synapse_report`, `synapse_push`, `synapse_session`, and `synapse_whatsup`, then forwards each call
-to the local daemon. The daemon remains the single place that owns contract extraction, conflict
-detection, LLM analysis, resolution, and briefing.
+`synapse_report`, `synapse_push`, `synapse_session`, `synapse_whatsup`, and `synapse_why`, then
+forwards each call to the local daemon. The daemon remains the single place that owns contract
+extraction, conflict detection, LLM analysis, resolution, briefing, and memory search.
+
+## Memory Search (Layer III seed)
+
+`synapse why` is the first deterministic slice of Layer III. It searches the daemon's warm team-state
+cache — session summaries, GitHub PR/review/comment events, recent pushes, shared resolutions,
+unpushed contract deltas, and active sessions — and returns a short answer with cited sources. It is
+not vector/RAG yet; pgvector and Slack/Notion ingestion remain the planned memory backend.
+
+```bash
+npm run dev --workspace @synapse/cli -- why --port 4012 --question "why did auth validation change?"
+npm run verify:why
+```
 
 ## Contract-Level Conflict Classification
 
@@ -437,4 +451,4 @@ Before changing these, ask the project owner:
 - Milestone 1: TS/Python contract extraction, contract delta diffing, durable live state (SQLite now; Postgres/Redis later), severity scoring.
 - Milestone 2: dependency graph, MCP adapter, GitHub webhooks, cross-agent support.
 - Milestone 3: team briefings.
-- Milestone 4: persistent memory.
+- Milestone 4: persistent memory (`synapse why` deterministic seed now; pgvector/RAG later).

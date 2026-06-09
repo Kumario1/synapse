@@ -50,7 +50,14 @@ try {
   const tools = await client.listTools();
   assert.deepEqual(
     tools.tools.map((tool) => tool.name).sort(),
-    ["synapse_check", "synapse_push", "synapse_report", "synapse_session", "synapse_whatsup"]
+    [
+      "synapse_check",
+      "synapse_push",
+      "synapse_report",
+      "synapse_session",
+      "synapse_whatsup",
+      "synapse_why"
+    ]
   );
 
   const session = await callJson(client, "synapse_session", {
@@ -79,6 +86,15 @@ try {
   assert.equal(briefing.degraded, false);
   assert.equal(briefing.unpushedDeltas.length, 1);
   assert.equal(briefing.unpushedDeltas[0].symbolId.raw, symbol);
+
+  const why = await callJson(client, "synapse_why", {
+    port: bobPort,
+    sessionId: "bob",
+    question: "why did token validation change?"
+  });
+  assert.equal(why.degraded, false);
+  assert.ok(why.answer.includes("TokenValidator.validate"));
+  assert.ok(why.sources.some((source) => source.kind === "unpushed_delta"));
 
   const check = await callJson(client, "synapse_check", {
     port: bobPort,
@@ -111,7 +127,7 @@ try {
   );
 
   console.log("MCP adapter verification passed:");
-  console.log(JSON.stringify({ tools: tools.tools.map((tool) => tool.name), briefing, check, stateAfterPush }, null, 2));
+  console.log(JSON.stringify({ tools: tools.tools.map((tool) => tool.name), briefing, why, check, stateAfterPush }, null, 2));
 
   await client.close();
   client = null;
