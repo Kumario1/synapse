@@ -279,7 +279,7 @@ synapse_report       { filePath: string }   // daemon reads tree+git, extracts d
 synapse_push         { sha, summary, files[], symbols?: SymbolId[] }
                      -> { ok: true, sha, files[] }
 synapse_whatsup      { limit?: number }      -> SynapseWhatsupResponse        // Layer II
-synapse_why          { question: string }    -> { answer: string, sources: [] } // Layer III
+synapse_why          { question: string, limit?: number } -> SynapseWhyResponse // Layer III seed
 synapse_session      { action: "start"|"heartbeat"|"end", task?: string } -> { sessionId }
 ```
 
@@ -287,7 +287,10 @@ Current implementation: `synapse mcp` starts a stdio MCP adapter for Cursor/Clin
 clients. The adapter does not duplicate Synapse logic; it forwards tool calls to the local daemon's
 HTTP endpoints so the daemon remains the owner of extraction, conflict detection, analysis, and
 resolution. `synapse_whatsup` is deterministic today: it reads the daemon's warm cache and returns
-active sessions, unpushed deltas, edit locks, recent pushes, and shared resolutions.
+active sessions, unpushed deltas, edit locks, recent pushes, and shared resolutions. `synapse_why` is
+also deterministic today: it ranks matching session summaries, repo events, pushes, resolutions,
+unpushed deltas, and active sessions by question terms, then returns a source-cited answer. pgvector
+RAG remains the Layer III backend target.
 
 **Claude Code hooks** (the first-class automatic path) — installed into the repo's settings:
 - `PreToolUse` on `Edit|Write|MultiEdit`: shells into the daemon's local endpoint = `synapse_check`
@@ -478,7 +481,8 @@ Allowed non-authoritative uses:
    contract and your own unpushed change, then return `{ assessment, recommendation, actions, source }`.
 2. **Session summary** (Layer II, on session end): batch-summarize the session's deltas + task into 2-3
    sentences.
-3. **Memory answers** (Layer III): RAG over pgvector with provenance.
+3. **Memory answers** (Layer III): deterministic state search today; later RAG over pgvector with
+   provenance.
 
 Never for detection or compatibility classification. Detection is always deterministic, which keeps the
 hot path cheap, fast, and free of hallucinated contracts.

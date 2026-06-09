@@ -5,7 +5,8 @@ import type {
   SynapsePushRequest,
   SynapseReportRequest,
   SynapseSessionRequest,
-  SynapseWhatsupRequest
+  SynapseWhatsupRequest,
+  SynapseWhyRequest
 } from "@synapse/protocol";
 import { z } from "zod/v4";
 
@@ -206,6 +207,35 @@ export async function runMcp(rawArgs: string[]): Promise<void> {
       };
 
       return jsonResult(await daemonPost(args.port ?? defaultPort, "synapse_whatsup", request));
+    }
+  );
+
+  server.registerTool(
+    "synapse_why",
+    {
+      title: "Search Synapse Memory",
+      description:
+        "Answer a why/what changed question from the local Synapse daemon's stored team context and return cited sources.",
+      inputSchema: {
+        ...commonShape,
+        question: z.string().min(1),
+        limit: z.number().int().positive().max(20).optional()
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true
+      }
+    },
+    async (args) => {
+      const request: SynapseWhyRequest = {
+        repoId: args.repoId ?? defaultRepoId,
+        sessionId: args.sessionId ?? defaultSessionId,
+        question: args.question,
+        limit: args.limit
+      };
+
+      return jsonResult(await daemonPost(args.port ?? defaultPort, "synapse_why", request));
     }
   );
 

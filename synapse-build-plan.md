@@ -31,10 +31,10 @@ The core agent-coordination loop is implemented and runs as an installed tool. S
 | **Postgres** durable store (multi-instance) | ⬜ Deferred | SQLite implements the same `StateStore` interface |
 | **GitHub OAuth + per-connection JWT** | ⬜ Planned | shared-token is the interim |
 | PR / review ingestion into briefings | ✅ Done | `pull_request`, `pull_request_review`, and `issue_comment` webhooks |
-| Memory Layer III — pgvector + `synapse_why` | ⬜ Not started | "when validated" |
+| Memory Layer III — `synapse_why` + pgvector target | 🟡 Partial | deterministic state search now; vector memory later |
 | Go analyzer; SCIP-grade indexing; telemetry/acted-on tuning | ⬜ Not started | — |
 
-Verification: every implemented area has a `npm run verify:*` script (22 total) plus unit tests and
+Verification: every implemented area has a `npm run verify:*` script (23 total) plus unit tests and
 `npm run eval:conflicts`; all green. See the README for the per-feature commands.
 
 ---
@@ -191,8 +191,10 @@ This is what separates Synapse from a filename-collision toy.
 - Batch summarization (optional OpenRouter model) on session end — never in the edit hot path.
 
 ### 2.8 Memory / RAG Service (Layer III)
-- Ingest distilled session summaries, PR decisions, flagged Slack threads → embed → pgvector.
-- Plain-language query tool (`synapse_why`) returns reasoning with provenance links.
+- Current deterministic `synapse why`: CLI + MCP tool that searches existing team state (session
+  summaries, repo events, pushes, resolutions, live deltas, sessions) and returns an answer with
+  cited sources.
+- Later: ingest distilled session summaries, PR decisions, flagged Slack threads → embed → pgvector.
 
 ### 2.9 Web Dashboard (optional, later)
 - Next.js read-only team-awareness view. Explicitly **not** required for the core agent loop and
@@ -264,8 +266,9 @@ push webhook for state reset on push. Severity tuning + acted-on telemetry still
 Session-end summarization (deterministic + optional OpenRouter) ✅; `synapse whatsup` ✅; morning push
 on session start (`SessionStart` hook) ✅; PR/review/comment ingestion into briefings ✅.
 
-**Milestone 4 — Memory (Layer III) (when validated)** — ⬜ **Not started**
-pgvector decision store; `synapse_why` RAG query; Slack ingestion; onboarding mode.
+**Milestone 4 — Memory (Layer III) (when validated)** — 🟡 **Partial**
+Deterministic `synapse_why` over existing team state ✅; pgvector decision store, RAG ranking, Slack
+ingestion, and onboarding mode remain ahead.
 
 **Cross-cutting (start early):** auth/multi-tenancy (✅ optional shared-token auth, PR #21; GitHub
 OAuth + JWT still ahead), self-host packaging (Docker compose — not yet), telemetry (not yet), and a
