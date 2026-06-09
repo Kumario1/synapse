@@ -63,7 +63,11 @@ import {
   type SynapseReportRequest,
   type SynapseSessionRequest,
   type SynapseWhatsupRequest,
-  type SynapseWhatsupResponse
+  type SynapseWhatsupResponse,
+  type SynapseWhyRequest,
+  type SynapseWhyResponse,
+  type SynapseWhySource,
+  type SynapseWhySourceKind
 } from "@synapse/protocol";
 import { WebSocket } from "ws";
 
@@ -135,6 +139,9 @@ switch (command) {
     break;
   case "whatsup":
     await runWhatsup(args.slice(1));
+    break;
+  case "why":
+    await runWhy(args.slice(1));
     break;
   case "mcp":
     await runMcp(args.slice(1));
@@ -242,6 +249,24 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
           response,
           200,
           buildWhatsupResponse(teamState, {
+            degraded: socket?.readyState !== WebSocket.OPEN,
+            limit: body.limit
+          })
+        );
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/tools/synapse_why") {
+        const body = (await readJson(request)) as Partial<SynapseWhyRequest>;
+        if (!body.question) {
+          writeJson(response, 400, { error: "question is required" });
+          return;
+        }
+
+        writeJson(
+          response,
+          200,
+          buildWhyResponse(teamState, body.question, {
             degraded: socket?.readyState !== WebSocket.OPEN,
             limit: body.limit
           })
@@ -477,6 +502,24 @@ async function runWhatsup(rawArgs: string[]): Promise<void> {
   const response = await postJson(`http://localhost:${defaults.daemonPort}/tools/synapse_whatsup`, {
     repoId: defaults.repoId,
     sessionId: defaults.sessionId,
+    limit: Number.isFinite(limit) ? limit : undefined
+  });
+  console.log(JSON.stringify(response, null, 2));
+}
+
+async function runWhy(rawArgs: string[]): Promise<void> {
+  const flags = parseFlags(rawArgs);
+  const defaults = commandDefaults(flags);
+  const question = flags.question ?? flags.q ?? rawArgs.filter((arg) => !arg.startsWith("--")).join(" ");
+  if (!question) {
+    throw new Error("--question is required");
+  }
+
+  const limit = flags.limit ? Number(flags.limit) : undefined;
+  const response = await postJson(`http://localhost:${defaults.daemonPort}/tools/synapse_why`, {
+    repoId: defaults.repoId,
+    sessionId: defaults.sessionId,
+    question,
     limit: Number.isFinite(limit) ? limit : undefined
   });
   console.log(JSON.stringify(response, null, 2));
@@ -1126,6 +1169,158 @@ function buildWhatsupResponse(
     resolutions: resolutions.slice(0, limit),
     sessionSummaries: sessionSummaries.slice(0, limit)
   };
+}
+
+function buildWhyResponse(
+  state: TeamState,
+  question: string,
+  options: { degraded: boolean; limit?: number }
+): SynapseWhyResponse {
+  const limit = clampWhyLimit(options.limit);
+  const terms = questionTerms(question);
+  const sources = whySources(state)
+    .map((source) => ({ ...source, score: scoreWhySource(source, terms) }))
+    .filter((source) => source.score > 0)
+    .sort((a, b) => b.score - a.score || b.createdAt.localeCompare(a.createdAt))
+    .slice(0, limit);
+
+  const answer =
+    sources.length === 0
+      ? `No matching Synapse memory found for "${question}". Try a symbol, file, PR title, teammate, or task keyword.`
+      : [
+          `Found ${sources.length} Synapse memor${sources.length === 1 ? "y" : "ies"} related to "${question}":`,
+          ...sources.map((source, index) => `${index + 1}. ${source.title} — ${source.summary}`)
+        ].join("\n");
+
+  return {
+    repoId: state.repoId,
+    generatedAt: new Date().toISOString(),
+    degraded: options.degraded,
+    question,
+    answer,
+    sources
+  };
+}
+
+function whySources(state: TeamState): SynapseWhySource[] {
+  const memberBySession = new Map(
+    state.sessions.map((session) => [
+      session.id,
+      session.memberLogin ?? session.memberId ?? session.id
+    ])
+  );
+
+  return [
+    ...state.sessionSummaries.map((summary) => ({
+      kind: "session_summary" as SynapseWhySourceKind,
+      title: `${summary.memberLogin}'s ended session`,
+      summary: summary.summary,
+      createdAt: summary.endedAt,
+      score: 0,
+      reference: summary.sessionId
+    })),
+    ...state.recentRepoEvents.map((event) => ({
+      kind: "repo_event" as SynapseWhySourceKind,
+      title: event.title,
+      summary: `${event.actor}: ${event.summary}`,
+      createdAt: event.createdAt,
+      score: 0,
+      url: event.url,
+      reference: event.number ? `#${event.number}` : event.kind
+    })),
+    ...state.recentPushes.map((push) => ({
+      kind: "recent_push" as SynapseWhySourceKind,
+      title: `Push ${push.sha}`,
+      summary: `${push.memberId}: ${push.summary} (${push.filesAffected.join(", ")})`,
+      createdAt: push.pushedAt,
+      score: 0,
+      reference: push.sha
+    })),
+    ...state.resolutions.map((resolution) => ({
+      kind: "resolution" as SynapseWhySourceKind,
+      title: `Resolution for ${resolution.symbol.raw}`,
+      summary: `${resolution.recommendation}: ${resolution.instruction} ${resolution.rationale}`,
+      createdAt: resolution.createdAt,
+      score: 0,
+      reference: resolution.inputsHash
+    })),
+    ...state.unpushedDeltas
+      .filter((delta) => delta.pushedAt === null)
+      .map((delta) => ({
+        kind: "unpushed_delta" as SynapseWhySourceKind,
+        title: `${memberBySession.get(delta.sessionId) ?? delta.sessionId} changed ${delta.symbolId.raw}`,
+        summary: [
+          delta.summary,
+          delta.before?.raw && delta.after?.raw ? `${delta.before.raw} -> ${delta.after.raw}` : "",
+          delta.filePath
+        ]
+          .filter(Boolean)
+          .join(" "),
+        createdAt: delta.createdAt,
+        score: 0,
+        reference: delta.symbolId.raw
+      })),
+    ...state.sessions.map((session) => ({
+      kind: "session" as SynapseWhySourceKind,
+      title: `${session.memberLogin ?? session.memberId}'s ${session.status} session`,
+      summary: [
+        session.lastTask ?? "No task recorded",
+        session.filesEditing.length ? `editing ${session.filesEditing.join(", ")}` : ""
+      ]
+        .filter(Boolean)
+        .join("; "),
+      createdAt: session.lastSeen,
+      score: 0,
+      reference: session.id
+    }))
+  ];
+}
+
+function scoreWhySource(source: SynapseWhySource, terms: string[]): number {
+  if (terms.length === 0) {
+    return 1;
+  }
+
+  const text = `${source.kind} ${source.title} ${source.summary} ${source.reference ?? ""}`.toLowerCase();
+  return terms.reduce((score, term) => score + (text.includes(term) ? term.length : 0), 0);
+}
+
+function questionTerms(question: string): string[] {
+  const stopwords = new Set([
+    "a",
+    "an",
+    "and",
+    "are",
+    "did",
+    "do",
+    "for",
+    "how",
+    "is",
+    "it",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "was",
+    "what",
+    "when",
+    "where",
+    "who",
+    "why"
+  ]);
+
+  return [...new Set(question.toLowerCase().match(/[a-z0-9_.#/-]+/gu) ?? [])].filter(
+    (term) => term.length > 1 && !stopwords.has(term)
+  );
+}
+
+function clampWhyLimit(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) {
+    return 5;
+  }
+
+  return Math.max(1, Math.min(20, Math.trunc(value)));
 }
 
 function clampLimit(value: number | undefined): number {
@@ -1851,6 +2046,7 @@ Commands:
   push     Notify Synapse that files were pushed
   session  Start, heartbeat, or end a local session
   whatsup  Show the daemon's current team-state briefing
+  why      Search Synapse memory with source citations
   mcp      Run a stdio MCP server that forwards tools to the local daemon
   join     Write .synapse/config.json and install Claude Code hooks
   hook     Claude Code hook entrypoint (pre|post); reads hook JSON on stdin
@@ -1864,6 +2060,7 @@ Examples:
   synapse push --port 4011 --file src/auth/token.ts --sha abc123 --summary "Pushed auth token changes"
   synapse check --port 4012 --file src/auth/token.ts --symbol ts:src/auth/token.ts#TokenValidator.validate
   synapse whatsup --port 4012
+  synapse why --port 4012 --question "why did auth validation change?"
   synapse analyze --file packages/analyzer-ts/src/index.ts
 `);
 }
