@@ -466,6 +466,7 @@ export type SynapseWhySourceKind =
   | "repo_event"
   | "recent_push"
   | "resolution"
+  | "conflict_feedback"
   | "unpushed_delta"
   | "session";
 

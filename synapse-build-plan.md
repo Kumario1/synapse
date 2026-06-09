@@ -193,8 +193,8 @@ This is what separates Synapse from a filename-collision toy.
 
 ### 2.8 Memory / RAG Service (Layer III)
 - Current deterministic `synapse why`: CLI + MCP tool that searches existing team state (session
-  summaries, repo events, pushes, resolutions, live deltas, sessions) and returns an answer with
-  cited sources.
+  summaries, repo events, pushes, resolutions, conflict feedback, live deltas, sessions) and returns
+  an answer with cited sources.
 - Later: ingest distilled session summaries, PR decisions, flagged Slack threads → embed → pgvector.
 
 ### 2.9 Web Dashboard (optional, later)

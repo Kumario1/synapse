@@ -1306,6 +1306,20 @@ function whySources(state: TeamState): SynapseWhySource[] {
       score: 0,
       reference: resolution.inputsHash
     })),
+    ...state.conflictFeedback.map((feedback) => ({
+      kind: "conflict_feedback" as SynapseWhySourceKind,
+      title: `${memberBySession.get(feedback.sessionId) ?? feedback.memberId} ${feedback.outcome} on ${feedback.conflictId}`,
+      summary: [
+        feedback.rule ? `rule ${feedback.rule}` : "",
+        feedback.targetSymbol?.raw ? `target ${feedback.targetSymbol.raw}` : "",
+        feedback.note ?? ""
+      ]
+        .filter(Boolean)
+        .join("; "),
+      createdAt: feedback.createdAt,
+      score: 0,
+      reference: feedback.conflictId
+    })),
     ...state.unpushedDeltas
       .filter((delta) => delta.pushedAt === null)
       .map((delta) => ({

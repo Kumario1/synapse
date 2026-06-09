@@ -294,8 +294,8 @@ resolution. `synapse_feedback` records explicit acted/dismissed telemetry for a 
 does not change verdicts. `synapse_whatsup` is deterministic today: it reads the daemon's warm cache
 and returns active sessions, unpushed deltas, edit locks, recent pushes, shared resolutions, and
 recent feedback. `synapse_why` is also deterministic today: it ranks matching session summaries, repo
-events, pushes, resolutions, unpushed deltas, and active sessions by question terms, then returns a
-source-cited answer. pgvector RAG remains the Layer III backend target.
+events, pushes, resolutions, conflict feedback, unpushed deltas, and active sessions by question terms,
+then returns a source-cited answer. pgvector RAG remains the Layer III backend target.
 
 **Claude Code hooks** (the first-class automatic path) — installed into the repo's settings:
 - `PreToolUse` on `Edit|Write|MultiEdit`: shells into the daemon's local endpoint = `synapse_check`
