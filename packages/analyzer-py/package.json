@@ -15,7 +15,8 @@
   "files": [
     "dist",
     "python",
-    "requirements.txt"
+    "requirements.txt",
+    "scripts"
   ],
   "scripts": {
     "build": "tsc -b",

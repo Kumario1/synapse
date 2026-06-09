@@ -21,6 +21,7 @@ import {
   extractPythonDependencyGraph
 } from "@synapse/analyzer-py";
 import {
+  applyAdaptiveSeverity,
   contractChangeFor,
   emptyDependencyGraph,
   enrichConflicts,
@@ -45,7 +46,9 @@ import {
 import { runMcp } from "./mcp.js";
 import {
   createEmptyTeamState,
+  createLogger,
   deriveProjectKey,
+  MetricsRegistry,
   PROTOCOL_VERSION,
   type AgentType,
   type CodeSymbol,
@@ -189,6 +192,8 @@ switch (command) {
 async function startDaemon(config: RuntimeConfig): Promise<void> {
   let teamState = createEmptyTeamState(config.repoId);
   let socket: WebSocket | null = null;
+  const log = createLogger("synapse-daemon");
+  const metrics = new MetricsRegistry();
   const contractSnapshots = new Map<string, CodeSymbol[]>();
   const analysisCache: AnalysisCache = {
     symbolsByFile: new Map(),
@@ -204,12 +209,42 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
   // deterministic, structured summary. Never runs in the edit hot path.
   const summaryProvider = createOpenRouterSummaryProvider();
 
+  // Offline outbox: a report emitted while the server is down/restarting is
+  // queued (FIFO, capped, drop-oldest) and flushed on the next open — so a
+  // contract delta produced during a blip reaches the team instead of being
+  // silently dropped. Heartbeats are the exception: they are stale on arrival,
+  // and the reconnect's `session.start` re-asserts liveness anyway.
+  const outbox: ClientMessage[] = [];
+  const OUTBOX_CAP = 500;
   const sendToServer = (type: ClientMessage["type"], payload: unknown): void => {
+    const message = envelope(type, payload);
     if (!socket || socket.readyState !== WebSocket.OPEN) {
+      if (type === "session.heartbeat") {
+        return;
+      }
+      outbox.push(message);
+      metrics.count("synapse_outbox_enqueued_total", { type });
+      log.debug("outbox.enqueued", { type, queued: outbox.length });
+      if (outbox.length > OUTBOX_CAP) {
+        outbox.shift();
+        metrics.count("synapse_outbox_dropped_total");
+        log.warn("outbox.dropped_oldest", { cap: OUTBOX_CAP });
+      }
       return;
     }
 
-    socket.send(JSON.stringify(envelope(type, payload)));
+    socket.send(JSON.stringify(message));
+  };
+
+  const flushOutbox = (): void => {
+    const queued = outbox.length;
+    while (outbox.length > 0 && socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify(outbox.shift()));
+    }
+    if (queued > 0) {
+      metrics.count("synapse_outbox_flushed_total", {}, queued);
+      log.info("outbox.flushed", { flushed: queued });
+    }
   };
 
   // A daemon that cannot reach the server reconnects forever; without a signal
@@ -227,17 +262,26 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
     );
   };
 
+  // Reconnect with exponential backoff + full jitter so a restarting server is
+  // not hammered by every daemon at once; the attempt counter resets on a
+  // successful open. Env knobs exist so the reconnect verifier runs fast.
+  const reconnectBaseMs = Number(process.env.SYNAPSE_RECONNECT_BASE_MS ?? 500);
+  const reconnectMaxMs = Number(process.env.SYNAPSE_RECONNECT_MAX_MS ?? 30_000);
+  let reconnectAttempt = 0;
+
   const connect = (): void => {
-    const tokenParam = config.authToken
-      ? `&token=${encodeURIComponent(config.authToken)}`
-      : "";
+    // Credential travels in the Authorization header, not the query string,
+    // so it never lands in proxy/access logs along the way.
     socket = new WebSocket(
-      `${config.serverUrl}?repoId=${encodeURIComponent(config.repoId)}&sessionId=${encodeURIComponent(config.sessionId)}${tokenParam}`
+      `${config.serverUrl}?repoId=${encodeURIComponent(config.repoId)}&sessionId=${encodeURIComponent(config.sessionId)}`,
+      config.authToken ? { headers: { authorization: `Bearer ${config.authToken}` } } : undefined
     );
 
     socket.on("open", () => {
       connectionWarned = false;
+      reconnectAttempt = 0;
       sendToServer("session.start", { session: makeSession(config) });
+      flushOutbox();
     });
 
     socket.on("message", (data) => {
@@ -258,7 +302,12 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
     });
 
     socket.on("close", () => {
-      setTimeout(connect, 1000);
+      const ceiling = Math.min(reconnectMaxMs, reconnectBaseMs * 2 ** reconnectAttempt);
+      const delayMs = Math.max(50, Math.floor(Math.random() * ceiling));
+      reconnectAttempt = Math.min(reconnectAttempt + 1, 16);
+      metrics.count("synapse_reconnects_scheduled_total");
+      log.debug("ws.reconnect_scheduled", { delayMs, attempt: reconnectAttempt });
+      setTimeout(connect, delayMs);
     });
 
     socket.on("error", (error) => {
@@ -327,7 +376,14 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/metrics") {
+        response.writeHead(200, { "content-type": "text/plain; version=0.0.4" });
+        response.end(metrics.renderPrometheus());
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/tools/synapse_check") {
+        const checkStartedAt = performance.now();
         const body = (await readJson(request)) as Partial<SynapseCheckRequest>;
         const targets = await resolveCheckTargets(config, body, analysisCache);
 
@@ -341,12 +397,34 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
         }
 
         const { graph, neighborsOf } = await buildDependencyGraph(config, analysisCache);
-        const conflicts = evaluateConflicts({
+        const rawConflicts = evaluateConflicts({
           selfSessionId: config.sessionId,
           targets,
           state: teamState,
           graph
         });
+        // Adaptive severity (F1): demote warn rules this team chronically
+        // dismisses, from the explicit feedback already in shared state.
+        // Deterministic, never promotes; SYNAPSE_ADAPTIVE_SEVERITY=0 disables.
+        const adaptive =
+          process.env.SYNAPSE_ADAPTIVE_SEVERITY === "0"
+            ? { conflicts: rawConflicts, demotedRules: [] }
+            : applyAdaptiveSeverity(rawConflicts, teamState.conflictFeedback);
+        const conflicts = adaptive.conflicts;
+        for (const rule of adaptive.demotedRules) {
+          metrics.count("synapse_severity_demotions_total", { rule });
+          log.info("severity.demoted", { rule });
+        }
+        // Measure only the deterministic hot path (extract + graph + evaluate):
+        // the optional LLM enrichment below is off the latency budget.
+        metrics.observe("synapse_check_duration_ms", performance.now() - checkStartedAt);
+        metrics.count("synapse_checks_total", { verdict: verdictFor(conflicts) });
+        for (const conflict of conflicts) {
+          metrics.count("synapse_conflicts_total", {
+            rule: conflict.rule,
+            severity: conflict.severity
+          });
+        }
 
         // Verdict is already decided deterministically; the analysis layer only
         // enriches the actionable steps and falls back silently on any failure.
@@ -387,7 +465,9 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
         }
 
         const deltas = await reportContractChanges(config, contractSnapshots, body, analysisCache);
+        metrics.count("synapse_reports_total");
         for (const delta of deltas) {
+          metrics.count("synapse_deltas_emitted_total", { changeKind: delta.changeKind });
           sendToServer("contract.delta", { delta });
         }
 
@@ -1118,10 +1198,12 @@ async function probeHealth(url: string): Promise<{ check: DoctorCheck; body: unk
 }
 
 function probeWsHandshake(config: RuntimeConfig): Promise<DoctorCheck> {
-  const tokenParam = config.authToken ? `&token=${encodeURIComponent(config.authToken)}` : "";
-  const url = `${config.serverUrl}?repoId=${encodeURIComponent(config.repoId)}&sessionId=synapse-doctor${tokenParam}`;
+  const url = `${config.serverUrl}?repoId=${encodeURIComponent(config.repoId)}&sessionId=synapse-doctor`;
   return new Promise((resolvePromise) => {
-    const ws = new WebSocket(url);
+    const ws = new WebSocket(
+      url,
+      config.authToken ? { headers: { authorization: `Bearer ${config.authToken}` } } : undefined
+    );
     let settled = false;
     const settle = (check: DoctorCheck): void => {
       if (settled) {
@@ -1156,12 +1238,14 @@ function probeWsHandshake(config: RuntimeConfig): Promise<DoctorCheck> {
 }
 
 async function probePeers(config: RuntimeConfig): Promise<DoctorCheck> {
-  const tokenParam = config.authToken ? `&token=${encodeURIComponent(config.authToken)}` : "";
-  const url = `${httpFromWs(config.serverUrl)}/state?repoId=${encodeURIComponent(config.repoId)}${tokenParam}`;
+  const url = `${httpFromWs(config.serverUrl)}/state?repoId=${encodeURIComponent(config.repoId)}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5000);
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: config.authToken ? { authorization: `Bearer ${config.authToken}` } : undefined
+    });
     if (!response.ok) {
       return {
         name: "peers",
