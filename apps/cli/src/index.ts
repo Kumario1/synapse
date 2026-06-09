@@ -75,6 +75,8 @@ interface RuntimeConfig {
   daemonPort: number;
   serverUrl: string;
   worktreeRoot: string;
+  /** Shared auth token for the server, if the server requires one. */
+  authToken: string;
 }
 
 interface LocalConfig {
@@ -150,8 +152,11 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
   };
 
   const connect = (): void => {
+    const tokenParam = config.authToken
+      ? `&token=${encodeURIComponent(config.authToken)}`
+      : "";
     socket = new WebSocket(
-      `${config.serverUrl}?repoId=${encodeURIComponent(config.repoId)}&sessionId=${encodeURIComponent(config.sessionId)}`
+      `${config.serverUrl}?repoId=${encodeURIComponent(config.repoId)}&sessionId=${encodeURIComponent(config.sessionId)}${tokenParam}`
     );
 
     socket.on("open", () => {
@@ -836,7 +841,10 @@ function configFromArgs(rawArgs: string[]): RuntimeConfig {
         process.env.SYNAPSE_WORKTREE_ROOT ??
         localConfig.worktreeRoot ??
         commandCwd()
-    )
+    ),
+    // Sourced from flag/env only — never persisted to .synapse/config.json so a
+    // secret token does not land on disk.
+    authToken: flags.token ?? process.env.SYNAPSE_AUTH_TOKEN ?? ""
   };
 }
 
