@@ -434,7 +434,9 @@ Latency budget: steps 2–5 ≈ <50ms p95 (no network). Steps 8–10 are off the
 file-only PreToolUse path: two daemons, separate one-file worktrees, OpenRouter disabled, p95 <= 50ms
 and max <= 150ms for both no-conflict and warning checks. `npm run verify:large-repo-latency` repeats
 the same warm-budget enforcement against 181 generated TypeScript files and records cold first-check
-time separately.
+time separately. `npm run verify:repo-latency` snapshots the tracked Synapse repo with
+`git archive HEAD`, then enforces the same warm budget for no-conflict checks and a real same-symbol
+warning while recording cold first-check time separately.
 When `OPENROUTER_API_KEY` is set, the daemon may upgrade a conflict's deterministic `analysis` by
 sending the relevant self/counterpart contract-change payloads to OpenRouter. Failure, timeout, or a
 missing key keeps the deterministic analysis.
@@ -550,8 +552,9 @@ survives restarts and feeds Layer II/III. Once a delta's `pushed_at` is set, it'
    remains an option if cross-file accuracy bites. See `packages/analyzer-py`.
 4. **Graph rebuild cost** — 🟡 partial. The daemon keeps an mtime/size-based in-memory cache for file
    symbols and the merged dependency graph, so unchanged hot-path checks avoid fresh analyzer work.
-   Synthetic one-file and 181-file latency verifiers cover the current hot path. A persisted on-disk
-   graph cache and real production-repo profiling are still open.
+   Synthetic one-file and 181-file latency verifiers cover the current hot path, and a tracked Synapse
+   repo snapshot verifier covers the actual codebase shape. A persisted on-disk graph cache and
+   external production-repo profiling are still open.
 5. **Self-host packaging** — 🟡 partial: the Python sidecar uses a **shipped venv created on `join`**
    (`setup-venv.mjs`, pinned deps). A container/binary bundle is a later option.
 6. **Wire-protocol auth** — 🟡 partial: an **optional shared token** gates WSS + `/state` (PR #21).

@@ -188,6 +188,7 @@ Benchmark the same file-only pre-edit path used by Claude Code hooks:
 ```bash
 npm run verify:hot-path-latency
 npm run verify:large-repo-latency
+npm run verify:repo-latency
 ```
 
 This synthetic local benchmark starts a server plus Alice/Bob daemons in separate one-file
@@ -196,7 +197,12 @@ max <= 150ms for both paths.
 
 The large-repo variant generates 181 TypeScript source files, records the cold first-check time, then
 enforces the same warm p95/max budgets for no-conflict checks and dependency-warning checks. It is a
-synthetic guardrail; real production-repo profiling remains a separate validation step.
+synthetic guardrail.
+
+The repo-latency variant snapshots the tracked Synapse repo with `git archive HEAD`, runs two daemons
+against separate temp worktrees, records the cold first-check time, then enforces the same warm
+p95/max budgets for no-conflict checks and a real same-symbol warning on `deterministicAnalysis`.
+External production-repo profiling remains a separate validation step.
 
 Verify that a checked TypeScript file warns when it depends on another file's unpushed contract
 change:
