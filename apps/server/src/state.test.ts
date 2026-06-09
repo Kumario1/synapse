@@ -108,6 +108,18 @@ test("session.summary stores most-recent-first and replaces a session's prior su
   assert.equal(state.sessionSummaries.filter((s) => s.sessionId === "alice").length, 1);
 });
 
+test("repo.event stores recent GitHub activity most-recent-first and caps history", () => {
+  const state = createEmptyTeamState("local");
+
+  for (let index = 0; index < 55; index += 1) {
+    applyMessage(state, "local", repoEventMessage(index));
+  }
+
+  assert.equal(state.recentRepoEvents.length, 50);
+  assert.equal(state.recentRepoEvents[0].summary, "GitHub PR #54 opened: Feature 54");
+  assert.equal(state.recentRepoEvents[49].summary, "GitHub PR #5 opened: Feature 5");
+});
+
 const now = "2026-06-07T00:00:00.000Z";
 
 function withDivergentDeltas(): TeamState {
@@ -200,6 +212,25 @@ function summaryMessage(sessionId: string, summary: string): ClientMessage {
         startedAt: now,
         endedAt: now
       }
+    }
+  };
+}
+
+function repoEventMessage(index: number): ClientMessage {
+  return {
+    v: PROTOCOL_VERSION,
+    type: "repo.event",
+    id: `e-${index}`,
+    ts: now,
+    payload: {
+      repoId: "local",
+      kind: "pull_request",
+      action: "opened",
+      actor: "alice",
+      title: `Feature ${index}`,
+      number: index,
+      url: `https://github.com/acme/widgets/pull/${index}`,
+      summary: `GitHub PR #${index} opened: Feature ${index}`
     }
   };
 }

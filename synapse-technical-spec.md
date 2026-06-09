@@ -240,12 +240,21 @@ interface RecentPush {
   summary: string; filesAffected: string[]; sha: string; pushedAt: string;
 }
 
+interface RecentRepoEvent {
+  id: string; repoId: string;
+  kind: "pull_request" | "pull_request_review" | "issue_comment";
+  action: string; actor: string;
+  title: string; number?: number; url?: string;
+  summary: string; createdAt: string;
+}
+
 interface TeamState {           // what a daemon's warm cache replicates
   repoId: string;
   sessions: Session[];
   editLocks: EditLock[];
   unpushedDeltas: ContractDelta[];   // pushedAt === null
   recentPushes: RecentPush[];        // last 24h
+  recentRepoEvents: RecentRepoEvent[];// PR/review/comment activity for Layer II
   resolutions: ContractResolution[]; // shared merged contracts (implemented)
   sessionSummaries: SessionSummary[];// Layer II, on session end (implemented)
 }
@@ -296,6 +305,7 @@ session.start | session.heartbeat | session.end
 edit.intent          { symbolId, filePath }      // acquire/renew an EditLock
 contract.delta       { delta: ContractDelta }     // raw code NOT included
 push.notify          { sha, summary, files[] }    // local detected a git push
+repo.event           { kind, action, actor, title, number?, url?, summary }
 resolution.propose   { resolution }               // shared merged contract (implemented)
 session.summary      { summary: SessionSummary }   // Layer II, on session end (implemented)
 query.briefing       { since? }
@@ -317,10 +327,14 @@ graph. The server is the fan-out hub + source of truth, not in the hot path.
 
 ### 8c. GitHub → Server Webhook
 
-Current implementation accepts GitHub `push` events at `POST /webhooks/github`. It converts the
-payload's changed files into the existing `push.notify` state mutation, records a `RecentPush`, clears
-matching live deltas/locks, and broadcasts a fresh `state.snapshot`. Local/dev verification may pass
-`?repoId=local`; production defaults to `repository.full_name`. When
+Current implementation accepts GitHub events at `POST /webhooks/github`.
+
+- `push`: converts changed files into the existing `push.notify` state mutation, records a
+  `RecentPush`, clears matching live deltas/locks, and broadcasts a fresh `state.snapshot`.
+- `pull_request`, `pull_request_review`, `issue_comment`: converts the payload into `repo.event`,
+  records recent repo activity, and surfaces it in `whatsup` / `SessionStart` catch-ups.
+
+Local/dev verification may pass `?repoId=local`; production defaults to `repository.full_name`. When
 `SYNAPSE_GITHUB_WEBHOOK_SECRET` is set, the route requires a valid `X-Hub-Signature-256` HMAC.
 
 ---

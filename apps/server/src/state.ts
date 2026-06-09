@@ -3,6 +3,7 @@ import {
   type ContractDelta,
   type ContractResolution,
   type EditLock,
+  type RecentRepoEvent,
   type RecentPush,
   type Session,
   type SessionSummary,
@@ -69,6 +70,20 @@ export function applyMessage(
       });
       clearPushedLiveState(state, message.payload.files, message.payload.symbols);
       break;
+    case "repo.event":
+      addRecentRepoEvent(state, {
+        id: randomId(),
+        repoId,
+        kind: message.payload.kind,
+        action: message.payload.action,
+        actor: message.payload.actor,
+        title: message.payload.title,
+        number: message.payload.number,
+        url: message.payload.url,
+        summary: message.payload.summary,
+        createdAt: now
+      });
+      break;
     case "resolution.propose":
       storeResolution(state, message.payload.resolution);
       break;
@@ -94,6 +109,8 @@ export function repoIdFor(message: ClientMessage): string | null {
     case "contract.delta":
       return message.payload.delta.repoId;
     case "push.notify":
+      return message.payload.repoId;
+    case "repo.event":
       return message.payload.repoId;
     case "resolution.propose":
       return message.payload.repoId;
@@ -193,6 +210,11 @@ function upsertDelta(state: TeamState, delta: ContractDelta): void {
 function addRecentPush(state: TeamState, push: RecentPush): void {
   state.recentPushes.unshift(push);
   state.recentPushes = state.recentPushes.slice(0, 50);
+}
+
+function addRecentRepoEvent(state: TeamState, event: RecentRepoEvent): void {
+  state.recentRepoEvents.unshift(event);
+  state.recentRepoEvents = state.recentRepoEvents.slice(0, 50);
 }
 
 function clearPushedLiveState(

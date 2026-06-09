@@ -20,7 +20,7 @@ The repository now has the local realtime loop in place:
 4. Python contract extraction and cross-file dependency graphs via a long-lived analyzer sidecar
    (tree-sitter + jedi), routed through the same conflict engine as TypeScript.
 5. Deterministic `synapse whatsup` team-state briefing from the daemon's warm cache, plus durable
-   session summaries (Layer II) distilled on session end.
+   session summaries (Layer II) distilled on session end and GitHub PR/review/comment activity.
 6. Stdio MCP adapter so MCP-capable agents can call the same daemon tools without shell-specific
    integration code.
 7. Durable server state via a `StateStore` (SQLite): live sessions, unpushed deltas, recent pushes,
@@ -157,9 +157,10 @@ npm run verify:session-summary   # deterministic, no key required
 ```
 
 On the other end, a starting session gets a **catch-up briefing**: the `SessionStart` hook
-(`synapse hook session-start`) digests recent pushes, teammates' unpushed contract changes, and recent
-session summaries from `whatsup` and injects them as context — your own work filtered out — so an agent
-resumes with the team's current picture. It is silent when nothing has changed.
+(`synapse hook session-start`) digests recent pushes, recent GitHub PR/review/comment activity,
+teammates' unpushed contract changes, and recent session summaries from `whatsup` and injects them as
+context — your own work filtered out — so an agent resumes with the team's current picture. It is
+silent when nothing has changed.
 
 ```bash
 npm run verify:session-start     # deterministic, no key required
@@ -246,12 +247,15 @@ npm run dev --workspace @synapse/cli -- push --port 4011 --file src/auth/token.t
 npm run verify:push-state-reset
 ```
 
-The server also accepts GitHub `push` webhooks at `POST /webhooks/github`. For local/dev repos,
-pass `?repoId=local`; otherwise the webhook uses `repository.full_name` as the Synapse repo id.
+The server accepts GitHub webhooks at `POST /webhooks/github`. `push` events clear matching live
+state and record a recent push. `pull_request`, `pull_request_review`, and `issue_comment` events are
+stored as recent repo activity and surfaced in `whatsup` and `SessionStart` catch-ups. For local/dev
+repos, pass `?repoId=local`; otherwise the webhook uses `repository.full_name` as the Synapse repo id.
 Set `SYNAPSE_GITHUB_WEBHOOK_SECRET` to require GitHub's `X-Hub-Signature-256` HMAC check.
 
 ```bash
 npm run verify:github-webhook
+npm run verify:github-briefing
 ```
 
 ## Durable Server State
