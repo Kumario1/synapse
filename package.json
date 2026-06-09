@@ -45,11 +45,8 @@
     "verify:doctor": "npm run build && node scripts/verify-doctor.mjs",
     "verify:up": "npm run build && node scripts/verify-up.mjs",
     "verify:up-tunnel": "npm run build && node scripts/verify-up-tunnel.mjs",
-    "verify:reconnect": "npm run build && node scripts/verify-reconnect.mjs",
-    "verify:metrics": "npm run build && node scripts/verify-metrics.mjs",
-    "verify:adaptive-severity": "npm run build && node scripts/verify-adaptive-severity.mjs",
-    "verify:npm-pack": "npm run build && node scripts/verify-npm-pack.mjs",
-    "verify:all": "node scripts/ci-verify-all.mjs"
+    "package": "node scripts/build-package.mjs",
+    "verify:package": "node scripts/verify-package.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.19.2",
