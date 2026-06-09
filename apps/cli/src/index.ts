@@ -933,9 +933,11 @@ function printTeammateInstructions(publicUrl: string, authToken: string): void {
   console.log("\n── Share with teammates ──────────────────────────────");
   console.log(`server URL (in .synapse/team.json): ${publicUrl}`);
   console.log("1. Commit the updated .synapse/team.json.");
-  console.log("2. Each teammate pulls, then runs in their clone of the repo:");
+  console.log("2. Each teammate pulls, then runs `synapse up` in their clone of the repo:");
   const tokenPart = authToken ? `SYNAPSE_AUTH_TOKEN=${authToken} ` : "";
-  console.log(`     ${tokenPart}npx @synapse/cli up`);
+  console.log(`     ${tokenPart}synapse up`);
+  console.log("   If synapse isn't on your PATH, run it from your source checkout instead:");
+  console.log(`     ${tokenPart}node <path-to-synapse-checkout>/apps/cli/dist/index.js up`);
   if (authToken) {
     console.log("   The token is secret — share it over Slack/1Password, never commit it.");
   }
