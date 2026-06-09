@@ -353,6 +353,70 @@ same database, and asserts the state resumed from disk):
 npm run verify:persistence
 ```
 
+## Resilient Channel (backoff + offline outbox + dead-socket detection)
+
+The daemon↔server channel survives outages with no message loss: reconnects use exponential backoff
+with full jitter (base 500ms, cap 30s — `SYNAPSE_RECONNECT_BASE_MS` / `SYNAPSE_RECONNECT_MAX_MS`);
+anything emitted while the socket is down is queued in a capped offline outbox and flushed in order on
+reconnect (heartbeats excepted — they are stale on arrival); and the server pings every client every
+20s (`SYNAPSE_WS_PING_INTERVAL_MS`), terminating half-open sockets so they reconnect cleanly.
+
+```bash
+npm run verify:reconnect   # delta sent while the server is DOWN still reaches the team after restart
+```
+
+## Observability (structured logs + /metrics)
+
+Both processes log one JSON line per event to stderr, gated by `SYNAPSE_LOG_LEVEL` (default `info`),
+and expose Prometheus-format counters at `GET /metrics` (aggregate numbers only — never repo content
+or identity). The daemon owns the hot path, so check latency, verdicts, and conflict rules are on the
+daemon's endpoint; the server counts connections, wire messages by type, and apply latency.
+
+```bash
+npm run verify:metrics
+```
+
+## Ingress Validation
+
+Every inbound wire message is validated against zod schemas (`@synapse/protocol`'s `wire-schema.ts`,
+the single source shared by client and server) before any state mutation runs — malformed payloads get
+an `ack` error instead of poisoning persisted state. WS messages and webhook bodies are capped at 1MB
+(`SYNAPSE_MAX_PAYLOAD_BYTES`). The daemon sends its credential via `Authorization: Bearer` only, so
+tokens stay out of URL query strings and access logs.
+
+## Adaptive Severity (feedback-tuned warnings)
+
+The explicit acted/dismissed telemetry from `synapse_feedback` now tunes the surfaced volume: a rule
+with ≥5 dismissals and a ≥80% dismiss rate is demoted from `warn` to `info` for subsequent checks.
+Detection never changes — the conflict is still reported, just quieter — and nothing is ever promoted.
+Set `SYNAPSE_ADAPTIVE_SEVERITY=0` on a daemon to opt out.
+
+```bash
+npm run verify:adaptive-severity
+```
+
+## Install as a Package
+
+`@synapse/cli` packs as a self-contained tarball: the five workspace packages (including the server,
+so `synapse up --serve` works, and the Python sidecar's sources + venv bootstrap) ship as bundled
+dependencies built by `apps/cli/scripts/pack.mjs`.
+
+```bash
+node apps/cli/scripts/pack.mjs        # prints the tarball path
+npm run verify:npm-pack               # packs, installs into a fresh project, joins, drives a check
+```
+
+## CI
+
+`.github/workflows/ci.yml` runs a fast build+typecheck+test job and the full hermetic verify matrix
+via the same command you can run locally:
+
+```bash
+npm run verify:all                                       # everything (one build, then every verify)
+node scripts/ci-verify-all.mjs --only why,doctor         # a subset while iterating
+SYNAPSE_VERIFY_SKIP=hot-path-latency npm run verify:all  # explicit skips
+```
+
 ## Ship to a Machine (Docker server + per-project keys)
 
 Ship the **server** to a machine and have a team "just work" with two inputs: a project key (auth) and
@@ -384,9 +448,9 @@ npm run verify:docker   # builds the image, boots it, drives one edit→report (
 ## Server Auth (open / shared-token / project-key)
 
 The daemon↔server channel resolves one of three modes at server startup. In every mode `/health` stays
-open, the GitHub webhook keeps its own HMAC, and the credential is sent via `?token=` /
-`Authorization: Bearer` (flag/env only — never written to `.synapse/config.json`, so secrets stay off
-disk) and compared in constant time.
+open, the GitHub webhook keeps its own HMAC, and the credential is sent via `Authorization: Bearer`
+(the server still accepts `?token=` for back-compat; flag/env only — never written to
+`.synapse/config.json`, so secrets stay off disk) and compared in constant time.
 
 - **project-key** (`SYNAPSE_MASTER_SECRET` set) — **real tenancy.** A key is
   `base64url(HMAC-SHA256(master secret, repoId))`; it authorizes *its* project only. The server

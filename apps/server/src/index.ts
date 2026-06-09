@@ -4,7 +4,10 @@ import { createRequire } from "node:module";
 import { URL } from "node:url";
 import {
   createEmptyTeamState,
+  createLogger,
   deriveProjectKey,
+  MetricsRegistry,
+  parseClientMessage,
   PROTOCOL_VERSION,
   type ClientMessage,
   type ServerMessage,
@@ -42,6 +45,8 @@ const authMode: "project-key" | "shared-token" | "open" = masterSecret
 const store = createStateStore();
 const states = new Map<string, TeamState>();
 const roomClients = new Map<string, Set<WebSocket>>();
+const log = createLogger("synapse-server");
+const metrics = new MetricsRegistry();
 
 const httpServer = createServer((request, response) => {
   void handleHttp(request, response);
@@ -61,9 +66,18 @@ async function handleHttp(request: IncomingMessage, response: ServerResponse): P
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/metrics") {
+    // Aggregate counters only (no repo content or identity) — open like /health.
+    response.writeHead(200, { "content-type": "text/plain; version=0.0.4" });
+    response.end(metrics.renderPrometheus());
+    return;
+  }
+
   if (request.method === "GET" && url.pathname === "/state") {
     const repoId = url.searchParams.get("repoId") ?? "local";
     if (!authorized(request, url, repoId)) {
+      metrics.count("synapse_auth_rejections_total", { surface: "state" });
+      log.warn("auth.rejected", { surface: "state", repoId });
       writeJson(response, 401, { error: "unauthorized" });
       return;
     }
@@ -79,8 +93,14 @@ async function handleHttp(request: IncomingMessage, response: ServerResponse): P
   writeJson(response, 404, { error: "not_found" });
 }
 
+// Ingress hard cap: a single wire message or webhook body larger than this is
+// rejected outright (nothing legitimate approaches it — deltas carry
+// signatures, never file bodies).
+const MAX_PAYLOAD_BYTES = Number(process.env.SYNAPSE_MAX_PAYLOAD_BYTES ?? 1_048_576);
+
 const wsServer = new WebSocketServer({
   server: httpServer,
+  maxPayload: MAX_PAYLOAD_BYTES,
   // Reject the handshake itself when the token is missing/wrong, so an
   // unauthenticated client never enters a repo room.
   verifyClient: (info, done) => {
@@ -89,16 +109,32 @@ const wsServer = new WebSocketServer({
     if (authorized(info.req, url, repoId)) {
       done(true);
     } else {
+      metrics.count("synapse_auth_rejections_total", { surface: "ws" });
+      log.warn("auth.rejected", { surface: "ws", repoId });
       done(false, 401, "Unauthorized");
     }
   }
 });
 
+// Transport-level liveness: the daemon already sends an app-level heartbeat,
+// but a half-open socket (machine sleep, dropped NAT mapping) still looks OPEN
+// to both sides. The server pings every client; one missed pong window means
+// the socket is dead — terminate it so the daemon's backoff reconnects cleanly.
+const socketAlive = new WeakMap<WebSocket, boolean>();
+const pingIntervalMs = Number(process.env.SYNAPSE_WS_PING_INTERVAL_MS ?? 20_000);
+
 wsServer.on("connection", (socket, request) => {
   const url = new URL(request.url ?? "/", "ws://localhost");
   const repoId = url.searchParams.get("repoId") ?? "local";
   joinRoom(repoId, socket);
+  socketAlive.set(socket, true);
+  metrics.count("synapse_ws_connections_total");
+  log.info("ws.open", { repoId });
   send(socket, envelope("state.snapshot", { teamState: getState(repoId) }));
+
+  socket.on("pong", () => {
+    socketAlive.set(socket, true);
+  });
 
   socket.on("message", (data) => {
     void handleMessage(socket, repoId, data.toString());
@@ -106,8 +142,24 @@ wsServer.on("connection", (socket, request) => {
 
   socket.on("close", () => {
     leaveRoom(repoId, socket);
+    metrics.count("synapse_ws_closes_total");
+    log.info("ws.close", { repoId });
   });
 });
+
+const pingTimer = setInterval(() => {
+  for (const socket of wsServer.clients) {
+    if (socketAlive.get(socket) === false) {
+      metrics.count("synapse_ws_terminated_total");
+      log.warn("ws.terminated_dead", {});
+      socket.terminate();
+      continue;
+    }
+    socketAlive.set(socket, false);
+    socket.ping();
+  }
+}, pingIntervalMs);
+pingTimer.unref();
 
 httpServer.listen(port, () => {
   console.log(`synapse server listening on http://localhost:${port}`);
@@ -127,14 +179,30 @@ process.once("SIGINT", shutdown);
 process.once("SIGTERM", shutdown);
 
 async function handleMessage(socket: WebSocket, fallbackRepoId: string, raw: string): Promise<void> {
-  let message: ClientMessage;
+  let parsed: unknown;
 
   try {
-    message = JSON.parse(raw) as ClientMessage;
+    parsed = JSON.parse(raw);
   } catch {
+    metrics.count("synapse_message_failures_total", { reason: "invalid_json" });
     send(socket, envelope("ack", { forId: "unknown", ok: false, error: "invalid_json" }));
     return;
   }
+
+  // Validate the shape before any mutation runs: a malformed payload gets an
+  // ack error instead of poisoning the persisted TeamState.
+  const validated = parseClientMessage(parsed);
+  if (!validated.ok) {
+    const forId =
+      parsed && typeof parsed === "object" && typeof (parsed as { id?: unknown }).id === "string"
+        ? (parsed as { id: string }).id
+        : "unknown";
+    metrics.count("synapse_message_failures_total", { reason: "invalid_message" });
+    log.warn("message.invalid", { error: validated.error });
+    send(socket, envelope("ack", { forId, ok: false, error: validated.error }));
+    return;
+  }
+  const message: ClientMessage = validated.message;
 
   try {
     const messageRepoId = repoIdFor(message);
@@ -147,17 +215,25 @@ async function handleMessage(socket: WebSocket, fallbackRepoId: string, raw: str
       messageRepoId !== null &&
       messageRepoId !== fallbackRepoId
     ) {
+      metrics.count("synapse_message_failures_total", { reason: "forbidden_repo" });
+      log.warn("message.forbidden_repo", { type: message.type, repoId: messageRepoId });
       send(socket, envelope("ack", { forId: message.id, ok: false, error: "forbidden_repo" }));
       return;
     }
 
     const repoId = messageRepoId ?? fallbackRepoId;
+    const startedAt = performance.now();
     applyMessage(getState(repoId), repoId, message);
     persist(repoId);
+    metrics.count("synapse_messages_total", { type: message.type });
+    metrics.observe("synapse_message_apply_ms", performance.now() - startedAt);
+    log.debug("message.applied", { type: message.type, repoId });
     send(socket, envelope("ack", { forId: message.id, ok: true }));
     broadcast(repoId, envelope("state.snapshot", { teamState: getState(repoId) }));
   } catch (error) {
     const reason = error instanceof Error ? error.message : "unknown_error";
+    metrics.count("synapse_message_failures_total", { reason: "apply_error" });
+    log.error("message.failed", { type: message.type, reason });
     send(socket, envelope("ack", { forId: message.id, ok: false, error: reason }));
   }
 }
@@ -167,7 +243,14 @@ async function handleGitHubWebhook(
   response: ServerResponse,
   url: URL
 ): Promise<void> {
-  const raw = await readBody(request);
+  let raw: string;
+  try {
+    raw = await readBody(request);
+  } catch {
+    metrics.count("synapse_message_failures_total", { reason: "payload_too_large" });
+    writeJson(response, 413, { ok: false, error: "payload_too_large" });
+    return;
+  }
   const secret = process.env.SYNAPSE_GITHUB_WEBHOOK_SECRET;
   if (secret && !validGitHubSignature(raw, headerValue(request, "x-hub-signature-256"), secret)) {
     writeJson(response, 401, { ok: false, error: "invalid_signature" });
@@ -175,6 +258,8 @@ async function handleGitHubWebhook(
   }
 
   const event = headerValue(request, "x-github-event") ?? "unknown";
+  metrics.count("synapse_webhooks_total", { event });
+  log.info("webhook.received", { event });
   let payload: unknown;
   try {
     payload = raw ? JSON.parse(raw) : {};
@@ -311,6 +396,10 @@ async function readBody(request: IncomingMessage): Promise<string> {
   let body = "";
   for await (const chunk of request) {
     body += chunk;
+    if (body.length > MAX_PAYLOAD_BYTES) {
+      request.destroy();
+      throw new Error("payload_too_large");
+    }
   }
 
   return body;
