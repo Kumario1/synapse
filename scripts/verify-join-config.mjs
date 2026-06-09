@@ -37,7 +37,7 @@ try {
     tempRoot
   );
   assert.match(joinOutput.stdout, /wrote .*\.synapse\/config\.json/u);
-  assert.match(joinOutput.stdout, /synapse\/cli -- daemon/u);
+  assert.match(joinOutput.stdout, /start the daemon with: synapse daemon/u);
 
   const config = JSON.parse(await readFile(join(tempRoot, ".synapse/config.json"), "utf8"));
   assert.equal(config.repoId, "joined-repo");

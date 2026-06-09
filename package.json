@@ -44,7 +44,9 @@
     "verify:git-repo-id": "npm run build && node scripts/verify-git-repo-id.mjs",
     "verify:doctor": "npm run build && node scripts/verify-doctor.mjs",
     "verify:up": "npm run build && node scripts/verify-up.mjs",
-    "verify:up-tunnel": "npm run build && node scripts/verify-up-tunnel.mjs"
+    "verify:up-tunnel": "npm run build && node scripts/verify-up-tunnel.mjs",
+    "package": "node scripts/build-package.mjs",
+    "verify:package": "node scripts/verify-package.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.19.2",

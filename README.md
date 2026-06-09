@@ -37,6 +37,84 @@ The server is single-process with an in-memory hot path backed by a durable stor
 (for multi-instance fan-out) can implement the same `StateStore` later without touching server logic.
 The daemon↔server channel supports optional shared-token auth; GitHub OAuth is the planned upgrade.
 
+## Install from npm (quickstart)
+
+The CLI ships as a single npm package (the five internal `@synapse/*` workspace packages are bundled
+inside the tarball). The installed command is `synapse`.
+
+```bash
+npm install -g @kumario/synapse   # or: npx @kumario/synapse <command>
+
+# Host (one machine runs the coordination server and exposes it):
+cd your-repo
+synapse up --serve --tunnel       # prints the teammate onboarding command
+
+# Each teammate, in their clone of the same repo:
+synapse up
+```
+
+`synapse up` derives the repo identity from the git remote, writes `.synapse/config.json`, installs
+the Claude Code hooks, prepares the Python analyzer venv, runs a `synapse doctor` preflight, and
+starts the daemon. Leave it running; it is the local coordination process everything else talks to.
+
+### Using the installed CLI
+
+**Host (first machine).** Run the server alongside your daemon and expose it:
+
+```bash
+cd your-repo
+synapse up --serve --tunnel
+```
+
+This boots the coordination server, opens a public `wss://` tunnel (needs `cloudflared` or `ngrok`
+on PATH; without one it falls back to printing a LAN URL), generates a shared auth token, writes the
+server URL into the committable `.synapse/team.json`, and prints the exact command teammates run.
+Commit `.synapse/team.json`; share the token privately. On a trusted LAN you can skip the tunnel:
+`synapse up --serve` and teammates pass `--server ws://<your-ip>:4010`.
+
+**Teammates.** Pull the repo (so `.synapse/team.json` is present), then:
+
+```bash
+SYNAPSE_AUTH_TOKEN=<token> synapse up
+```
+
+**Claude Code** needs nothing else — `up` installed `PreToolUse`/`PostToolUse`/`SessionStart` hooks
+into `.claude/settings.json`, so every edit is checked against the team's in-flight changes
+automatically and reported afterward.
+
+**Cursor / Cline / Aider (MCP).** Register the stdio MCP server; it forwards tool calls
+(`synapse_check`, `synapse_report`, `synapse_whatsup`, `synapse_why`, `synapse_feedback`) to the
+running daemon. For Cursor, in `.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "synapse": { "command": "synapse", "args": ["mcp"] }
+  }
+}
+```
+
+**Day-to-day commands** (all read defaults from `.synapse/config.json`):
+
+```bash
+synapse doctor          # why aren't two machines coordinating? identity/server/auth/peers preflight
+synapse whatsup         # briefing: active sessions, unpushed contract deltas, locks, recent pushes
+synapse why --question "why did auth validation change?"   # memory search with cited sources
+synapse check --file src/auth/token.ts                     # manual pre-edit conflict check
+synapse feedback --conflict-id conflict:abc123 --outcome acted   # tell Synapse a warning helped
+synapse analyze --file src/index.ts                        # inspect extracted contract symbols
+```
+
+Optional LLM layer: set `OPENROUTER_API_KEY` (and optionally `SYNAPSE_LLM_MODEL`) in the daemon's
+environment to upgrade conflict analysis and session summaries. Everything works deterministically
+without it.
+
+### Releasing
+
+`npm run verify:package` proves the artifact end-to-end (pack → clean install → real two-machine
+`up` flow), then `npm run package` stages and packs `dist-release/<name>-<version>.tgz` for
+`npm publish --access public`. The public name/version live in `release.config.json`.
+
 ## Architecture Shape
 
 ```text

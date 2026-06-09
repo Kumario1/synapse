@@ -631,7 +631,7 @@ async function runWhy(rawArgs: string[]): Promise<void> {
 
 async function runJoin(rawArgs: string[]): Promise<void> {
   await performJoin(configFromArgs(rawArgs));
-  console.log(`start the daemon with: npm run dev --workspace @synapse/cli -- daemon`);
+  console.log("start the daemon with: synapse daemon");
 }
 
 /**
@@ -960,6 +960,22 @@ function omitUndefined<T extends object>(value: T): Partial<T> {
   ) as Partial<T>;
 }
 
+/**
+ * The name in this CLI's own package.json. `@synapse/cli` when running from the
+ * monorepo; the published package name when installed from npm.
+ */
+function ownPackageName(): string {
+  try {
+    const packageRoot = dirname(dirname(cliEntrypoint()));
+    const manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as {
+      name?: string;
+    };
+    return manifest.name ?? "@synapse/cli";
+  } catch {
+    return "@synapse/cli";
+  }
+}
+
 function printTeammateInstructions(publicUrl: string, authToken: string): void {
   console.log("\n── Share with teammates ──────────────────────────────");
   console.log(`server URL (in .synapse/team.json): ${publicUrl}`);
@@ -967,8 +983,14 @@ function printTeammateInstructions(publicUrl: string, authToken: string): void {
   console.log("2. Each teammate pulls, then runs `synapse up` in their clone of the repo:");
   const tokenPart = authToken ? `SYNAPSE_AUTH_TOKEN=${authToken} ` : "";
   console.log(`     ${tokenPart}synapse up`);
-  console.log("   If synapse isn't on your PATH, run it from your source checkout instead:");
-  console.log(`     ${tokenPart}node <path-to-synapse-checkout>/apps/cli/dist/index.js up`);
+  const packageName = ownPackageName();
+  if (packageName === "@synapse/cli") {
+    console.log("   If synapse isn't on your PATH, run it from your source checkout instead:");
+    console.log(`     ${tokenPart}node <path-to-synapse-checkout>/apps/cli/dist/index.js up`);
+  } else {
+    console.log("   If synapse isn't on your PATH, npx works without an install:");
+    console.log(`     ${tokenPart}npx ${packageName} up`);
+  }
   if (authToken) {
     console.log("   The token is secret — share it over Slack/1Password, never commit it.");
   }
