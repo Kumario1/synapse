@@ -60,6 +60,7 @@ test("deterministicResolution side ordering is identical on both machines", () =
 test("deterministicAnalysis adopts the counterpart contract for same_symbol_unpushed", () => {
   const after = sig("validate(input: string): Result<Token>");
   const conflict: Conflict = {
+    id: "conflict:test-adopt",
     severity: "warn",
     rule: "same_symbol_unpushed",
     targetSymbol: { raw: symbol },
@@ -84,6 +85,7 @@ test("deterministicAnalysis adopts the counterpart contract for same_symbol_unpu
 
 test("deterministicResolution returns undefined for unrelated rules", () => {
   const conflict: Conflict = {
+    id: "conflict:test-stale",
     severity: "warn",
     rule: "stale_base",
     targetSymbol: { raw: symbol },
@@ -106,6 +108,7 @@ function divergentConflict(options: { flip?: boolean } = {}): Conflict {
     : { sessionId: "bob", after: bobAfter, counterpartId: "alice", counterpartAfter: aliceAfter };
 
   return {
+    id: `conflict:test-divergent-${options.flip ? "alice" : "bob"}`,
     severity: "warn",
     rule: "contract_divergent",
     targetSymbol: { raw: symbol },

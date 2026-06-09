@@ -47,6 +47,7 @@ import {
   type AgentType,
   type CodeSymbol,
   type ClientMessage,
+  type ConflictFeedback,
   type ContractChange,
   type ContractDelta,
   type ContractDeltaSummary,
@@ -58,6 +59,8 @@ import {
   type Signature,
   type SynapseCheckRequest,
   type SynapseCheckResponse,
+  type SynapseFeedbackRequest,
+  type SynapseFeedbackResponse,
   type TeamState,
   type SynapsePushRequest,
   type SynapseReportRequest,
@@ -133,6 +136,9 @@ switch (command) {
     break;
   case "push":
     await runPush(args.slice(1));
+    break;
+  case "feedback":
+    await runFeedback(args.slice(1));
     break;
   case "session":
     await runSession(args.slice(1));
@@ -372,6 +378,33 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
         return;
       }
 
+      if (request.method === "POST" && url.pathname === "/tools/synapse_feedback") {
+        const body = (await readJson(request)) as Partial<SynapseFeedbackRequest>;
+        if (!body.conflictId) {
+          writeJson(response, 400, { error: "conflictId is required" });
+          return;
+        }
+        if (body.outcome !== "acted" && body.outcome !== "dismissed") {
+          writeJson(response, 400, { error: "outcome must be acted or dismissed" });
+          return;
+        }
+
+        const feedback = createConflictFeedback(config, {
+          conflictId: body.conflictId,
+          outcome: body.outcome,
+          note: body.note,
+          rule: body.rule,
+          targetSymbol: body.targetSymbol
+        });
+        sendToServer("conflict.feedback", { repoId: config.repoId, feedback });
+
+        writeJson(response, 200, {
+          ok: true,
+          feedback
+        } satisfies SynapseFeedbackResponse);
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/tools/synapse_session") {
         const body = (await readJson(request)) as Partial<SynapseSessionRequest>;
         const action = body.action ?? "heartbeat";
@@ -475,6 +508,30 @@ async function runPush(rawArgs: string[]): Promise<void> {
     summary: flags.summary ?? `Pushed ${files.join(", ")}`,
     files,
     symbols
+  });
+  console.log(JSON.stringify(response, null, 2));
+}
+
+async function runFeedback(rawArgs: string[]): Promise<void> {
+  const flags = parseFlags(rawArgs);
+  const defaults = commandDefaults(flags);
+  const conflictId = flags["conflict-id"] ?? flags.conflictId;
+  const outcome = flags.outcome as SynapseFeedbackRequest["outcome"] | undefined;
+  if (!conflictId) {
+    throw new Error("--conflict-id is required");
+  }
+  if (outcome !== "acted" && outcome !== "dismissed") {
+    throw new Error("--outcome must be acted or dismissed");
+  }
+
+  const response = await postJson(`http://localhost:${defaults.daemonPort}/tools/synapse_feedback`, {
+    repoId: defaults.repoId,
+    sessionId: defaults.sessionId,
+    conflictId,
+    outcome,
+    note: flags.note,
+    rule: flags.rule,
+    targetSymbol: flags.symbol ? { raw: flags.symbol } : undefined
   });
   console.log(JSON.stringify(response, null, 2));
 }
@@ -1127,6 +1184,9 @@ function buildWhatsupResponse(
   const sessionSummaries = [...state.sessionSummaries].sort((a, b) =>
     b.endedAt.localeCompare(a.endedAt)
   );
+  const conflictFeedback = [...state.conflictFeedback].sort((a, b) =>
+    b.createdAt.localeCompare(a.createdAt)
+  );
 
   return {
     repoId: state.repoId,
@@ -1139,7 +1199,8 @@ function buildWhatsupResponse(
       `${recentPushes.length} recent push${recentPushes.length === 1 ? "" : "es"}`,
       `${recentRepoEvents.length} GitHub repo event${recentRepoEvents.length === 1 ? "" : "s"}`,
       `${resolutions.length} shared resolution${resolutions.length === 1 ? "" : "s"}`,
-      `${sessionSummaries.length} session summar${sessionSummaries.length === 1 ? "y" : "ies"}`
+      `${sessionSummaries.length} session summar${sessionSummaries.length === 1 ? "y" : "ies"}`,
+      `${conflictFeedback.length} conflict feedback event${conflictFeedback.length === 1 ? "" : "s"}`
     ],
     sessions: activeSessions.slice(0, limit).map((session) => ({
       id: session.id,
@@ -1167,7 +1228,8 @@ function buildWhatsupResponse(
     recentPushes: recentPushes.slice(0, limit),
     recentRepoEvents: recentRepoEvents.slice(0, limit),
     resolutions: resolutions.slice(0, limit),
-    sessionSummaries: sessionSummaries.slice(0, limit)
+    sessionSummaries: sessionSummaries.slice(0, limit),
+    conflictFeedback: conflictFeedback.slice(0, limit)
   };
 }
 
@@ -1745,6 +1807,25 @@ function createContractDelta(
   };
 }
 
+function createConflictFeedback(
+  config: RuntimeConfig,
+  input: Pick<SynapseFeedbackRequest, "conflictId" | "outcome"> &
+    Partial<Pick<SynapseFeedbackRequest, "note" | "rule" | "targetSymbol">>
+): ConflictFeedback {
+  return {
+    id: randomUUID(),
+    repoId: config.repoId,
+    conflictId: input.conflictId,
+    sessionId: config.sessionId,
+    memberId: config.member,
+    outcome: input.outcome,
+    note: input.note,
+    rule: input.rule,
+    targetSymbol: input.targetSymbol,
+    createdAt: new Date().toISOString()
+  };
+}
+
 function summarizeDelta(delta: ContractDelta): ContractDeltaSummary {
   return {
     id: delta.id,
@@ -2044,6 +2125,7 @@ Commands:
   check    Call the local synapse_check endpoint
   report   Call the local synapse_report endpoint
   push     Notify Synapse that files were pushed
+  feedback Record explicit acted/dismissed feedback for a conflict warning
   session  Start, heartbeat, or end a local session
   whatsup  Show the daemon's current team-state briefing
   why      Search Synapse memory with source citations
@@ -2059,6 +2141,7 @@ Examples:
   synapse report --port 4011 --file src/auth/token.ts --symbol ts:src/auth/token.ts#TokenValidator.validate
   synapse push --port 4011 --file src/auth/token.ts --sha abc123 --summary "Pushed auth token changes"
   synapse check --port 4012 --file src/auth/token.ts --symbol ts:src/auth/token.ts#TokenValidator.validate
+  synapse feedback --port 4012 --conflict-id conflict:abc123 --outcome acted --note "Adjusted caller"
   synapse whatsup --port 4012
   synapse why --port 4012 --question "why did auth validation change?"
   synapse analyze --file packages/analyzer-ts/src/index.ts

@@ -1,5 +1,6 @@
 import {
   type ClientMessage,
+  type ConflictFeedback,
   type ContractDelta,
   type ContractResolution,
   type EditLock,
@@ -90,6 +91,9 @@ export function applyMessage(
     case "session.summary":
       storeSessionSummary(state, message.payload.summary);
       break;
+    case "conflict.feedback":
+      addConflictFeedback(state, message.payload.feedback);
+      break;
     case "query.briefing":
       break;
     default:
@@ -115,6 +119,8 @@ export function repoIdFor(message: ClientMessage): string | null {
     case "resolution.propose":
       return message.payload.repoId;
     case "session.summary":
+      return message.payload.repoId;
+    case "conflict.feedback":
       return message.payload.repoId;
     default:
       assertNever(message);
@@ -289,6 +295,18 @@ function storeSessionSummary(state: TeamState, summary: SessionSummary): void {
   );
   state.sessionSummaries.unshift(summary);
   state.sessionSummaries = state.sessionSummaries.slice(0, 50);
+}
+
+/**
+ * Keep explicit warning feedback bounded and most-recent-first. Re-sending the
+ * same feedback id replaces the prior entry so clients can safely retry.
+ */
+function addConflictFeedback(state: TeamState, feedback: ConflictFeedback): void {
+  state.conflictFeedback = state.conflictFeedback.filter(
+    (candidate) => candidate.id !== feedback.id
+  );
+  state.conflictFeedback.unshift(feedback);
+  state.conflictFeedback = state.conflictFeedback.slice(0, 100);
 }
 
 function unique(values: string[]): string[] {

@@ -26,6 +26,7 @@
     "verify:contract-compat": "npm run build && node scripts/verify-contract-compat.mjs",
     "verify:resolution": "npm run build && node scripts/verify-resolution.mjs",
     "verify:mcp-adapter": "npm run build && node scripts/verify-mcp-adapter.mjs",
+    "verify:feedback": "npm run build && node scripts/verify-feedback.mjs",
     "verify:github-webhook": "npm run build && node scripts/verify-github-webhook.mjs",
     "verify:github-briefing": "npm run build && node scripts/verify-github-briefing.mjs",
     "verify:persistence": "npm run build && node scripts/verify-persistence.mjs",

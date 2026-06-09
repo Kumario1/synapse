@@ -38,6 +38,33 @@ test("warns on same-symbol unpushed contract delta", () => {
     conflicts.map((conflict) => conflict.rule),
     ["same_symbol_unpushed"]
   );
+  assert.match(conflicts[0].id, /^conflict:[0-9a-f]{16}$/u);
+});
+
+test("conflict ids are stable for the same warning input", () => {
+  const state = teamState({
+    sessions: [session("alice"), session("bob")],
+    unpushedDeltas: [
+      delta({
+        sessionId: "alice",
+        symbolId: tokenValidator,
+        summary: "validate now returns Result<Token, AuthError>"
+      })
+    ]
+  });
+
+  const first = evaluateConflicts({
+    selfSessionId: "bob",
+    targets: [{ filePath: "src/auth/token.ts", symbolId: tokenValidator }],
+    state
+  });
+  const second = evaluateConflicts({
+    selfSessionId: "bob",
+    targets: [{ filePath: "src/auth/token.ts", symbolId: tokenValidator }],
+    state
+  });
+
+  assert.equal(first[0]?.id, second[0]?.id);
 });
 
 test("suppresses same-file noise when another target has a specific conflict", () => {
@@ -171,6 +198,7 @@ function teamState(partial: Partial<TeamState>): TeamState {
     recentRepoEvents: [],
     resolutions: [],
     sessionSummaries: [],
+    conflictFeedback: [],
     ...partial
   };
 }
