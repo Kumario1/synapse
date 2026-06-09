@@ -38,6 +38,26 @@ try {
   assert.equal(report.ok, true);
 
   await waitForState(serverPort, (state) => state.unpushedDeltas.length === 1);
+  const check = await postJson(`http://localhost:${bobPort}/tools/synapse_check`, {
+    repoId: "local",
+    sessionId: "bob",
+    files: [filePath],
+    symbols: [{ raw: symbol }],
+    task: "update auth validation caller"
+  });
+  assert.equal(check.verdict, "warn");
+  assert.equal(check.conflicts.length, 1);
+  await postJson(`http://localhost:${bobPort}/tools/synapse_feedback`, {
+    repoId: "local",
+    sessionId: "bob",
+    conflictId: check.conflicts[0].id,
+    outcome: "acted",
+    rule: check.conflicts[0].rule,
+    targetSymbol: check.conflicts[0].targetSymbol,
+    note: "Adjusted auth validation caller to match Alice's contract."
+  });
+  await waitForDaemonState(bobPort, (state) => state.conflictFeedback.length === 1);
+
   await postGitHub("pull_request", {
     action: "opened",
     repository: { full_name: "acme/widgets" },
@@ -70,6 +90,7 @@ try {
   assert.ok(why.sources.length >= 2);
   assert.ok(why.sources.some((source) => source.kind === "session_summary"));
   assert.ok(why.sources.some((source) => source.kind === "unpushed_delta"));
+  assert.ok(why.sources.some((source) => source.kind === "conflict_feedback"));
   assert.ok(why.sources.every((source) => source.score > 0));
 
   const repoWhy = await postJson(`http://localhost:${bobPort}/tools/synapse_why`, {

@@ -341,8 +341,9 @@ search.
 
 `synapse why` is the first deterministic slice of Layer III. It searches the daemon's warm team-state
 cache — session summaries, GitHub PR/review/comment events, recent pushes, shared resolutions,
-unpushed contract deltas, and active sessions — and returns a short answer with cited sources. It is
-not vector/RAG yet; pgvector and Slack/Notion ingestion remain the planned memory backend.
+conflict feedback, unpushed contract deltas, and active sessions — and returns a short answer with
+cited sources. It is not vector/RAG yet; pgvector and Slack/Notion ingestion remain the planned memory
+backend.
 
 ```bash
 npm run dev --workspace @synapse/cli -- why --port 4012 --question "why did auth validation change?"
