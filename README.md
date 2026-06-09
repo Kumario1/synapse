@@ -30,7 +30,7 @@ The repository now has the local realtime loop in place:
 
 The server is single-process with an in-memory hot path backed by a durable store. Postgres/Redis
 (for multi-instance fan-out) can implement the same `StateStore` later without touching server logic.
-Auth is still ahead.
+The daemon↔server channel supports optional shared-token auth; GitHub OAuth is the planned upgrade.
 
 ## Architecture Shape
 
@@ -277,6 +277,21 @@ same database, and asserts the state resumed from disk):
 
 ```bash
 npm run verify:persistence
+```
+
+## Server Auth (shared token)
+
+The daemon↔server channel can require a shared token. Set `SYNAPSE_AUTH_TOKEN` to the **same** value
+on the server and on each daemon (`--token`, or the `SYNAPSE_AUTH_TOKEN` env — it is never written to
+`.synapse/config.json`, so the secret stays off disk). When set, the server rejects WSS connections
+and `GET /state` that don't present it (via `?token=` or `Authorization: Bearer`), using a constant-time
+comparison. `/health` stays open, and the GitHub webhook keeps its own HMAC. Unset = open, which keeps
+local/dev and the verify scripts hermetic. GitHub OAuth + per-connection JWT is the intended upgrade.
+
+```bash
+SYNAPSE_AUTH_TOKEN=secret npm run dev --workspace @synapse/server
+npm run dev --workspace @synapse/cli -- daemon --token secret
+npm run verify:auth
 ```
 
 Expose the same daemon tools to MCP-capable agents:

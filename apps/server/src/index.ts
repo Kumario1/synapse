@@ -15,6 +15,11 @@ import { applyMessage, pruneExpiredLocks, repoIdFor } from "./state.js";
 import { createStateStore } from "./store.js";
 
 const port = Number(process.env.SYNAPSE_SERVER_PORT ?? 4010);
+// Optional shared-token auth for the daemon<->server channel. When
+// SYNAPSE_AUTH_TOKEN is set, every WSS connection and GET /state must present a
+// matching token; unset means open (local/dev and hermetic tests). GitHub OAuth
+// is the intended upgrade — see the README.
+const authToken = process.env.SYNAPSE_AUTH_TOKEN ?? "";
 // Durable per-repo state. In-memory cache is the hot-path working copy; the
 // store persists every mutation so a restart resumes live state. With no
 // SYNAPSE_DB_PATH the store is in-memory and behavior is identical to before.
@@ -35,6 +40,10 @@ async function handleHttp(request: IncomingMessage, response: ServerResponse): P
   }
 
   if (request.method === "GET" && url.pathname === "/state") {
+    if (!authorized(request, url)) {
+      writeJson(response, 401, { error: "unauthorized" });
+      return;
+    }
     writeJson(response, 200, getState(url.searchParams.get("repoId") ?? "local"));
     return;
   }
@@ -47,7 +56,19 @@ async function handleHttp(request: IncomingMessage, response: ServerResponse): P
   writeJson(response, 404, { error: "not_found" });
 }
 
-const wsServer = new WebSocketServer({ server: httpServer });
+const wsServer = new WebSocketServer({
+  server: httpServer,
+  // Reject the handshake itself when the token is missing/wrong, so an
+  // unauthenticated client never enters a repo room.
+  verifyClient: (info, done) => {
+    const url = new URL(info.req.url ?? "/", "ws://localhost");
+    if (authorized(info.req, url)) {
+      done(true);
+    } else {
+      done(false, 401, "Unauthorized");
+    }
+  }
+});
 
 wsServer.on("connection", (socket, request) => {
   const url = new URL(request.url ?? "/", "ws://localhost");
@@ -232,6 +253,29 @@ async function readBody(request: IncomingMessage): Promise<string> {
   }
 
   return body;
+}
+
+/**
+ * True when auth is disabled (no token configured) or the request presents the
+ * matching token — via `?token=` or an `Authorization: Bearer` header. The
+ * comparison is constant-time to avoid leaking the token through timing.
+ */
+function authorized(request: IncomingMessage, url: URL): boolean {
+  if (!authToken) {
+    return true;
+  }
+
+  const fromQuery = url.searchParams.get("token");
+  const header = headerValue(request, "authorization");
+  const fromHeader = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : null;
+  const provided = fromQuery ?? fromHeader;
+  if (!provided) {
+    return false;
+  }
+
+  const a = Buffer.from(provided);
+  const b = Buffer.from(authToken);
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 function validGitHubSignature(rawBody: string, signature: string | null, secret: string): boolean {
