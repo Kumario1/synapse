@@ -1,0 +1,288 @@
+# Synapse Future Plan v2 — Milestone-by-Milestone Execution Plan
+
+> v2 · 2026-06-09 · Supersedes the v1 track-based plan (which is now partially stale).
+> Ground truth: verified against `main` @ `e353296` ("Ship server via Docker with per-project
+> key auth and tenancy (#31)") by reading the code, not the docs.
+> Companions: `synapse-build-plan.md` (engineering outline), `synapse-technical-spec.md` (spec),
+> `synapse-context.md` (vision), `plan.md` (resolver plan — shipped, historical).
+
+---
+
+## 1. Status ledger (what is actually done on `main`)
+
+Verified by inspection this session:
+
+| Area | Status | Evidence |
+|------|--------|----------|
+| Core loop M0–M3 (protocol, daemon, conflict engine, analyzers TS+Py, MCP, hooks, briefings, why, feedback capture) | ✅ | 30 `verify:*` scripts + `eval:conflicts`, all hermetic |
+| LLM resolver (converged contract, first-writer-wins) | ✅ | `plan.md` executed; `verify:resolution` |
+| SQLite `StateStore` (snapshot per repo) | ✅ | `apps/server/src/store.ts` |
+| **Docker Compose self-host (was B2)** | ✅ | `apps/server/Dockerfile`, `docker-compose.yml`, `verify:docker` |
+| **`synapse doctor` (was B4)** | ✅ | `verify:doctor` |
+| **`synapse up` + quick tunnel + `keygen`** (not in v1 plan) | ✅ | `verify:up`, `verify:up-tunnel` |
+| **Per-project key auth + real tenancy** | ✅ | `deriveProjectKey(masterSecret, repoId)`, per-message repo check (`apps/server/src/index.ts:142`), `verify:tenancy` |
+| CI pipeline (G1) | ❌ | no `.github/workflows/` |
+| Publishable npm CLI (B1) | ❌ | `apps/cli/package.json` still `"private": true`, workspace deps at `0.0.0` |
+| Resilient channel (G2) | ❌ | fixed `setTimeout(connect, 1000)` (`apps/cli/src/index.ts:261`); `sendToServer` drops messages when socket closed (`:208`); no transport ping |
+| Observability (G3) | ❌ | `console.log` only; no `/metrics` |
+| Per-entity store + Postgres (A1) | ❌ | store is still full-snapshot last-writer-wins |
+| Redis fan-out (A2), multi-instance (A5) | ❌ | in-process `roomClients` only |
+| GitHub OAuth + JWT (A3) | ❌ | project-key mode is the shipped interim (a deliberate design change vs. v1 — see Decision D1) |
+| RAG memory (C), Go analyzer (D2), VS Code (E1), dashboard (E2), adaptive severity (F1), file watcher (F3), security pass (G4), protocol negotiation (G5), fuzzing (G6) | ❌ | — |
+
+Auth note: the v1 plan assumed OAuth/JWT for tenancy; what shipped instead is
+**HMAC-derived per-project keys** (`SYNAPSE_MASTER_SECRET` → `deriveProjectKey(secret, repoId)`).
+This already delivers per-repo isolation with zero DB and zero third-party dependency. OAuth is
+therefore *re-scoped* as a SaaS-phase identity feature, not a tenancy prerequisite (Decision D1).
+
+---
+
+## 2. Codebase findings — where the big improvements are
+
+From reading the source this session (8.6k LOC product):
+
+1. **`apps/cli/src/index.ts` is a 2,880-line monolith** — daemon HTTP surface, WS client, hot-path
+   check, hooks installer, `up`/`doctor`/`keygen`/tunnel, why/whatsup rendering, all in one file.
+   Every breadth feature (watcher, VS Code, languages) makes it worse. → Milestone M7 (refactor
+   split) before Phase-3 breadth work.
+2. **Message loss is real today**: `sendToServer` silently no-ops when the socket isn't OPEN, and
+   reconnect is a fixed 1s loop. An agent's `contract.delta` emitted during a server blip is gone
+   forever (the team never learns about the change). Highest-value robustness fix. → M2.
+3. **The CLI depends on `@synapse/server`** (`synapse up` resolves and spawns the built server
+   entrypoint, `apps/cli/src/index.ts:797`). Any npm-publish story must inline or co-publish the
+   server, or `up` breaks from a tarball install. The v1 plan missed this. → M5.
+4. **No server-side input validation**: `handleMessage` casts `JSON.parse(raw) as ClientMessage`
+   and `applyMessage` trusts the shape. Any authorized (or, in open mode, any) client can poison
+   persisted state with malformed payloads. Cheap to fix with zod at ingress; pulled forward from
+   the v1 "G4 security pass". → M4.
+5. **Write + broadcast amplification**: every mutation rewrites the repo's entire JSON snapshot to
+   SQLite (`persist()`) and re-broadcasts the entire `state.snapshot` to every room client. Fine at
+   demo scale; it is the scaling ceiling. Per-entity store ops (M8) fix the write side; incremental
+   `state.delta` fan-out (Decision D3) would fix the broadcast side.
+6. **Token in the query string** (`?token=`): leaks into proxy/access logs; header path already
+   exists. Default the daemon to header-only and keep `?token=` as a deprecated fallback. Folded
+   into M4.
+7. **`conflictFeedback` is collected and never used** — the "tunable + learns" promise of the spec
+   (§9 fatigue controls) is one deterministic aggregation away. Cheapest "product gets smarter"
+   win. → M6.
+8. **No file watcher**: the daemon only learns about edits when an agent reports them; manual edits
+   between agent turns are invisible (spec §1 promises a git watcher). → M10.
+9. **`Synapse/` (Vite landing page) sits untracked at the repo root** with its own
+   `node_modules` — it's invisible to CI and not part of the workspace. → Decision D4, then M13.
+10. **Protocol version field exists but is never negotiated** (`WireEnvelope.v`); a future wire
+    change would fail opaquely. → M15.
+
+---
+
+## 3. Decision points — owner sign-off required before implementing
+
+Per owner direction, design/product changes are flagged here *before* being made. Milestones
+marked “(D-gated)” do not start until the decision is confirmed. Everything else follows the
+already-documented design.
+
+- **D1 — Auth roadmap: keep project keys as the primary story; re-scope OAuth.**
+  Proposal: treat per-project keys as the supported self-host + small-team SaaS auth
+  indefinitely; build GitHub OAuth/JWT (M14) only when a hosted multi-tenant offering with
+  per-user identity is actually being launched. Implication: A3 moves from Phase 2 to the SaaS
+  launch phase; tenancy is already done. *Default if unconfirmed: plan assumes D1 accepted
+  (matches what was already shipped in #31).*
+- **D2 — Store evolution shape.** v1 chose "per-entity row ops wired through `applyMessage`".
+  Confirmed as still the right call (it's the only way two instances don't clobber snapshots), but
+  with a concrete amendment: keep `SqliteStateStore` on the *new* interface via per-entity tables,
+  and add `PostgresStateStore` behind `SYNAPSE_DATABASE_URL`. No alternative proposed — listed
+  because it rewrites the persistence seam. *Default: proceed as v1 documented (M8).*
+- **D3 — Incremental `state.delta` broadcast (new proposal).** Replace full-snapshot fan-out with
+  per-mutation deltas + periodic snapshot resync (the protocol doc already reserves `state.delta`).
+  Cuts broadcast cost from O(state×clients×mutations) to O(mutation). It is a wire-protocol
+  addition (backward-compatible: servers can keep sending snapshots to old clients once M15
+  negotiation exists). *Not started until approved; sequenced after M15.*
+- **D4 — Web home for the landing page (new proposal).** Fold `Synapse/` into the monorepo as
+  `apps/web` (workspace + CI + shared types for the future read-only dashboard), deploy via
+  Vercel. Alternative: keep it a separate repo. *Not started until approved.*
+- **D5 — First new language is Go** (v1 default). Swap to Rust/Java here if user demand differs.
+  *Default: Go (M12).*
+
+---
+
+## 4. Milestones
+
+Conventions (unchanged from v1, they're good): every milestone ships a hermetic
+`scripts/verify-<name>.mjs` + root `package.json` entry in the established style; all new infra is
+env-gated and off by default; mutations stay in `apps/server/src/state.ts`, transport/store in
+`apps/server/src/index.ts`; hot-path budget p95 ≤ 50ms warm stays enforced.
+
+### Phase A — Foundation hardening (this session's execution target: M1–M4, then M5/M6 as time allows)
+
+**M1 — CI gate** *(was G1; unblocks everything)*
+- `scripts/ci-verify-all.mjs`: one entrypoint that runs build → typecheck → unit tests → every
+  hermetic `verify:*` + `eval:conflicts` in sequence, aggregating failures into one report;
+  skips environment-dependent scripts (`verify:docker` needs Docker; `verify:up-tunnel` needs
+  cloudflared/ngrok) with an explicit SKIP line unless the binary is present.
+- `.github/workflows/ci.yml`: PR + push-to-main. Job 1 (fast): `npm ci`, build, typecheck, test.
+  Job 2 (verify): `setup:analyzer-py` then `node scripts/ci-verify-all.mjs`. Node 20, npm cache +
+  `packages/analyzer-py/.venv` cache keyed on `requirements.txt`. Latency gates are the existing
+  scripts' own exit codes — no new budget mechanism.
+- Exit: workflow green on a no-op PR; `node scripts/ci-verify-all.mjs` green locally.
+
+**M2 — Resilient daemon↔server channel** *(was G2; fixes finding #2)*
+- `apps/cli/src/index.ts`: exponential backoff + full jitter (base 500ms, cap 30s, reset on open)
+  replacing the fixed 1s retry; module-level outbox — `sendToServer` enqueues instead of dropping
+  when not OPEN (cap ~500, drop-oldest), flushed in order on open after `session.start`.
+- `apps/server/src/index.ts`: transport `ws` ping every 20s; a socket that misses a pong is
+  terminated so half-open connections leave the room (daemon's backoff reconnects it).
+- Exit: `verify:reconnect` — report lands, kill server, report while down, restart, both deltas in
+  `GET /state`; no silent loss.
+
+**M3 — Observability** *(was G3)*
+- Tiny in-process metrics registry (no heavy dep): counters (messages by type, conflicts by
+  rule/severity, reconnects, ws connections, llm calls by outcome) + histograms (check latency,
+  message apply time). `GET /metrics` in Prometheus text format next to `/health` (kept unauthenticated
+  read-only or gated — match `/health`).
+- Structured JSON logs (single tiny logger util, level via `SYNAPSE_LOG_LEVEL`, default `info`)
+  for connect/close/auth-reject/message/webhook/llm events on the server; reconnect/outbox events
+  on the daemon.
+- Exit: `verify:metrics` — drive a check + a conflict, scrape `/metrics`, assert counters moved.
+
+**M4 — Server ingress validation + auth hygiene** *(pulled forward from G4; findings #4, #6)*
+- zod schemas for every `ClientMessage` variant living in `@synapse/protocol` (single source,
+  shared by cli + server), applied in `handleMessage` before `applyMessage`; invalid → `ack`
+  error, never a cast. Cap WS message + webhook body size (e.g. 1 MB) with a clear error.
+- Daemon sends the credential via `Authorization: Bearer` header only; server keeps accepting
+  `?token=` for back-compat but it's no longer emitted.
+- Exit: unit tests for rejected malformed payloads; all existing verifies stay green.
+
+**M5 — Publishable `@synapse/cli`** *(was B1; amended for finding #3)*
+- esbuild bundle (`apps/cli/scripts/bundle.mjs`) producing self-contained `dist/` that inlines
+  `@synapse/{protocol,conflict-engine,analyzer-ts,analyzer-py,server}` (server inlined as a
+  spawnable compiled entry so `synapse up` works from a tarball). External deps stay real:
+  `ws`, `zod`, `@modelcontextprotocol/sdk`, `better-sqlite3`, `typescript`/`ts-morph`.
+- Ship `packages/analyzer-py/{python,requirements.txt,scripts}` as package assets; resolve them
+  relative to the bundle.
+- `package.json`: un-private, real version (`0.1.0`), `files`, `publishConfig.access=public`.
+- Exit: `verify:npm-pack` — `npm pack` → install tarball in temp dir → `synapse --help`, `join` in
+  a scratch git repo writes `.synapse/config.json` + `.claude/settings.json`, daemon answers a
+  file-only `synapse_check`.
+
+**M6 — Adaptive severity from feedback** *(was F1; finding #7)*
+- Deterministic policy in the daemon's verdict step: per `(repoId, rule)`, compute
+  dismissed/acted counts from `teamState.conflictFeedback`; when dismissals ≥ N (default 5) and
+  dismiss-rate ≥ 80%, demote that rule's `warn` → `info` for subsequent conflicts (never demote
+  `block` recommendations from resolutions; never promote). Config knob
+  `SYNAPSE_ADAPTIVE_SEVERITY=0` to disable.
+- Exit: `verify:adaptive-severity` — feed N dismissals for a rule via `synapse_feedback`, assert
+  the next check reports `info` and that a differently-ruled conflict still warns.
+
+### Phase B — Structure + scale-out backbone
+
+**M7 — CLI decomposition** *(new; finding #1 — do before breadth)*
+- Split `apps/cli/src/index.ts` into modules with unchanged behavior: `daemon.ts` (HTTP surface +
+  WS client + outbox), `commands/{join,up,doctor,keygen,session,check,report,push,feedback}.ts`,
+  `briefings.ts` (whatsup/why/render), `tunnel.ts`, `hooks.ts`. `index.ts` becomes the dispatcher.
+- Exit: zero new behavior; full verify matrix green is the test.
+
+**M8 — Per-entity `StateStore` + Postgres** *(was A1; Decision D2 default)*
+- Interface: keep `load(repoId)` for boot hydration; replace `save` with per-entity ops mirroring
+  `TeamState` arrays (`upsertSession/endSession`, `upsertEditLock/deleteEditLock`,
+  `upsertDelta/clearDeltasForPush`, `appendPush`, `appendRepoEvent`, `appendSummary`,
+  `upsertResolution/deleteResolution`, `appendFeedback`, `pruneExpired`).
+- `applyMessage` takes the store and emits the matching store op alongside each in-memory
+  mutation (in-memory stays the source of truth; persistence becomes incremental).
+- `SqliteStateStore` re-implemented on per-entity tables; `PostgresStateStore` (node-postgres)
+  selected by `SYNAPSE_DATABASE_URL`; SQLite remains default.
+- Exit: `store.test.ts`/`state.test.ts` parameterized over both backends; `verify:persistence`
+  still green; `verify:persistence-pg` runs when `SYNAPSE_DATABASE_URL` is present (CI service),
+  SKIPs offline.
+
+**M9 — Redis fan-out + multi-instance** *(was A2+A5)*
+- `SYNAPSE_REDIS_URL` set → on mutation, `PUBLISH repo:<id>`; every instance subscribes, re-reads
+  the repo from the shared store, re-broadcasts to its local room. Locks/session liveness get
+  Redis TTLs mirroring the 90s in-memory TTL. Unset → today's single-instance path.
+- Exit: `verify:multi-instance` — two servers + shared Postgres/Redis, daemons split across them,
+  a report on A is visible in `GET /state` on B and pushed to B's daemon. CI-gated by services;
+  SKIPs offline.
+
+### Phase C — Capability breadth (parallelizable after M7)
+
+**M10 — File watcher** *(was F3)* — chokidar in the daemon over `worktreeRoot` (gitignore-aware,
+  debounced); a changed tracked file flows through the existing `synapse_report` path so manual
+  edits emit deltas. Exit: `verify:file-watcher` — touch a file, delta appears with no explicit
+  report call.
+
+**M11 — JS/JSX/TSX audit** *(was D1)* — fixtures for `.jsx/.tsx/.js/.mjs/.cjs` through
+  `extractTypeScriptContracts` + the dependency graph; close gaps (JSX components as contracts,
+  default exports). Exit: `verify:tsx-check`.
+
+**M12 — Go analyzer** *(was D2; D5-gated)* — `packages/analyzer-go` warm sidecar (tree-sitter +
+  `go/packages`) speaking the same JSON-RPC analyzer protocol, `go:`-prefixed `SymbolId`s,
+  bootstrap mirroring `setup-venv.mjs`. Exit: `verify:go-check` mirroring `verify-python-check.mjs`.
+
+**M13 — Web app + dashboard** *(was B3/E2; D4-gated)* — fold `Synapse/` → `apps/web`; then a
+  read-only team view (sessions, deltas, pushes, resolutions, feedback) over `GET /state` with a
+  project key. Opt-in, read-only (principle #6).
+
+**M14 — GitHub OAuth + JWT identity** *(was A3; D1-gated, SaaS launch phase)* — OAuth callback
+  mints short-lived JWTs carrying `{githubLogin, allowedRepoIds}`; project-key mode remains for
+  self-host. Exit: `verify:oauth-jwt` with a stubbed identity provider.
+
+**M15 — Protocol version negotiation** *(was G5)* — versions exchanged at WS open; graceful
+  downgrade/refusal. Prerequisite for D3 (incremental deltas). Exit: `verify:protocol-compat`.
+
+### Phase D — Depth (after the above)
+
+- **RAG memory (C1/C2)** on M8's Postgres + pgvector: embed summaries/resolutions/events behind
+  the optional-provider seam; hybrid recall on top of the deterministic `why` floor with the
+  citation contract preserved; `degraded:true` without embeddings. Exit: `verify:why-rag`.
+- **Remaining G4**: rate limiting, webhook secret required in production, resolver privacy opt-out
+  note.
+- **G6 fuzzing/property tests**: malformed-source fuzz for both analyzers; `resolutionInputsHash`
+  symmetry properties.
+- **D3 incremental `state.delta`** (after M15, if approved), **C3/C4 external ingestion +
+  onboarding mode**, **F2/F4/F5 branch awareness, richer auto-resolution, rename tracking**,
+  **D3–D5 more languages/SCIP**, **E1 VS Code extension**, **E4 editor rules**.
+
+---
+
+## 5. Sequencing & dependency summary
+
+```
+M1 CI ──┬─→ M2 channel ─→ M3 observability ─→ M4 validation ─→ M5 packaging ─→ M6 severity
+        │                                                        (Phase A, this session order)
+        └─→ M7 cli split ─→ {M10 watcher, M11 tsx, M12 go(D5), M13 web(D4)}   (breadth)
+M8 store ─→ M9 redis/multi-instance ─→ RAG / M14 oauth(D1)                    (backbone)
+M15 negotiation ─→ D3 delta broadcast (if approved)
+```
+
+## 6. Execution log
+
+- 2026-06-09 — v2 plan written; ground-truthed against `main` @ `e353296`. Phase A execution begun
+  (M1 first). Decisions D1–D5 await owner confirmation; defaults noted above are being followed,
+  and no D-gated milestone is implemented before sign-off.
+- 2026-06-09 — **Phase A complete** (branch `foundation-hardening-m1-m4`):
+  - **M1** ✅ `.github/workflows/ci.yml` (check + verify jobs, npm/venv caching) +
+    `scripts/ci-verify-all.mjs` (one-build aggregate runner; `--only`, `SYNAPSE_VERIFY_SKIP`,
+    per-script timeout w/ process-group reaping) + root `verify:all`.
+  - **M2** ✅ exponential backoff + full jitter reconnect (`SYNAPSE_RECONNECT_{BASE,MAX}_MS`),
+    capped drop-oldest offline outbox flushed on open (heartbeats excluded), server ws ping with
+    dead-socket termination (`SYNAPSE_WS_PING_INTERVAL_MS`). `verify:reconnect` proves no message
+    loss across a server outage (pre-outage delta survives via SQLite; during-outage delta flushes
+    from the outbox).
+  - **M3** ✅ `MetricsRegistry` + `createLogger` in `@synapse/protocol`; `GET /metrics` on server
+    (connections, messages by type, apply histogram, auth rejections, webhooks) **and** daemon
+    (check-latency histogram, verdicts, conflicts by rule/severity, outbox, reconnects, demotions);
+    JSON logs on stderr gated by `SYNAPSE_LOG_LEVEL`. `verify:metrics`.
+  - **M4** ✅ zod wire schemas (`packages/protocol/src/wire-schema.ts`, loose objects for forward
+    compat) validated at server ingress before any mutation; 1MB payload caps (ws `maxPayload` +
+    webhook 413); daemon/doctor credentials moved to `Authorization: Bearer` (query-string accepted
+    for back-compat only). Unit-tested in protocol.
+  - **M6** ✅ `applyAdaptiveSeverity` in conflict-engine (≥5 dismissals & ≥80% dismiss rate per
+    rule → warn demotes to info; never promotes; `SYNAPSE_ADAPTIVE_SEVERITY=0` opt-out), wired into
+    the daemon check path. 7 unit tests + `verify:adaptive-severity` (warn → 5 dismissals → info,
+    opt-out daemon still warns).
+  - **M5** ✅ publishable `@synapse/cli@0.1.0`: bundleDependencies for the five workspace packages
+    materialized by `apps/cli/scripts/pack.mjs` (npm pack skips symlinked bundle deps, so the script
+    stages real copies — server dist + analyzer-py python/requirements/scripts, never `.venv`);
+    `better-sqlite3`/`ts-morph` promoted to direct deps (npm does not install deps-of-bundled-deps).
+    `verify:npm-pack`: pack → tarball completeness asserts → install in fresh project → help → join
+    (config + hooks) → bundled server + installed daemon answer a live check (SKIPs offline).
+  - README sections + `.env.example` knobs added for all of the above.
+  - M7 (CLI decomposition) is the next milestone; M8–M9 (store + Redis) follow per §5.

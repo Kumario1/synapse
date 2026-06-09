@@ -15,5 +15,8 @@
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
     "test": "node --test"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
   }
 }

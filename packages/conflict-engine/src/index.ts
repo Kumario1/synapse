@@ -334,6 +334,11 @@ export function symbolForFile(filePath: string): SymbolId {
 }
 
 export {
+  applyAdaptiveSeverity,
+  type AdaptiveSeverityOptions,
+  type AdaptiveSeverityResult
+} from "./adaptive.js";
+export {
   compareSignatures,
   contractChangeFor,
   describeCompatibility,

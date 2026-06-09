@@ -1,7 +1,6 @@
 {
   "name": "@synapse/cli",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
   "type": "module",
   "bin": {
     "synapse": "dist/index.js"
@@ -22,9 +21,26 @@
     "@synapse/protocol": "0.0.0",
     "@synapse/server": "0.0.0",
     "ws": "^8.18.2",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "better-sqlite3": "^12.10.0",
+    "ts-morph": "^28.0.0"
   },
   "devDependencies": {
     "@types/ws": "^8.18.1"
-  }
+  },
+  "description": "Synapse \u2014 realtime contract-level coordination for teams of coding agents",
+  "license": "MIT",
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "bundleDependencies": [
+    "@synapse/protocol",
+    "@synapse/conflict-engine",
+    "@synapse/analyzer-ts",
+    "@synapse/analyzer-py",
+    "@synapse/server"
+  ]
 }
