@@ -246,8 +246,14 @@ interface TeamState {           // what a daemon's warm cache replicates
   editLocks: EditLock[];
   unpushedDeltas: ContractDelta[];   // pushedAt === null
   recentPushes: RecentPush[];        // last 24h
+  resolutions: ContractResolution[]; // shared merged contracts (implemented)
+  sessionSummaries: SessionSummary[];// Layer II, on session end (implemented)
 }
 ```
+
+> Current implementation: `TeamState` also carries `resolutions` (shared contract resolutions, keyed
+> by `symbol + inputsHash`) and `sessionSummaries` (Layer II narratives produced on session end). The
+> server holds it in memory and persists it through a `StateStore` (SQLite) so a restart resumes it.
 
 ---
 
@@ -290,15 +296,21 @@ session.start | session.heartbeat | session.end
 edit.intent          { symbolId, filePath }      // acquire/renew an EditLock
 contract.delta       { delta: ContractDelta }     // raw code NOT included
 push.notify          { sha, summary, files[] }    // local detected a git push
+resolution.propose   { resolution }               // shared merged contract (implemented)
+session.summary      { summary: SessionSummary }   // Layer II, on session end (implemented)
 query.briefing       { since? }
 ```
-Server → Client:
+Server → Client (implemented subset):
 ```
-state.snapshot       { teamState: TeamState }     // on connect / resync
-state.delta          { add?, remove?, update? }   // incremental fan-out of others' activity
-conflict.alert       { conflict: Conflict }       // proactive (someone started touching your area)
+state.snapshot       { teamState: TeamState }     // on connect / resync AND after each mutation
 ack                  { forId, ok, error? }
 ```
+(`state.delta` incremental fan-out and proactive `conflict.alert` remain on the design board; today the
+server re-broadcasts a full `state.snapshot` after every mutation.)
+
+> Auth (current): when `SYNAPSE_AUTH_TOKEN` is set, the WSS handshake and `GET /state` require a
+> matching token (`?token=` or `Authorization: Bearer`, constant-time compared). Unset = open. GitHub
+> OAuth + per-connection JWT is the planned upgrade (§15.6).
 
 The warm cache means `synapse_check` is normally answered **locally** against the replica + local
 graph. The server is the fan-out hub + source of truth, not in the hot path.
@@ -456,7 +468,13 @@ hot path cheap, fast, and free of hallucinated contracts.
 
 ## 13. Storage Schemas
 
-### Postgres (durable)
+> **Current implementation (2026-06-08):** the server persists through a storage-agnostic `StateStore`
+> (`apps/server/src/store.ts`). The shipped implementation is **SQLite** (`better-sqlite3`, WAL),
+> storing one JSON `TeamState` snapshot per repo (`team_state(repo_id, state, updated_at)`), selected
+> by `SYNAPSE_DB_PATH` (unset = in-memory). The normalized Postgres schema and Redis live-state below
+> are the multi-instance target — a future `StateStore` implementation, not yet built.
+
+### Postgres (durable) — planned, not yet implemented
 ```sql
 team(id, name, plan, created_at)
 member(id, team_id, github_login, github_id, role, created_at)
@@ -499,18 +517,18 @@ survives restarts and feeds Layer II/III. Once a delta's `pushed_at` is set, it'
 
 ---
 
-## 15. Open Spec Questions (need answers before/while building)
+## 15. Open Spec Questions (status as of 2026-06-08)
 
-1. **Session lifecycle precision** — when exactly does a session start/end/idle? (Daemon start? First
-   agent prompt? Idle timeout value?) Affects locks and briefings.
-2. **EditLock granularity** — lock at the symbol level (precise, more churn) or file level (coarse,
-   simpler) for v1? (Spec currently assumes symbol-level.)
-3. **Python resolver** — pyright (most accurate, heavier, Node-based LSP) vs. jedi (pure-Python, embeds
-   cleanly in the sidecar, slightly less accurate). Lean jedi for the sidecar; revisit if accuracy bites.
-4. **Graph rebuild cost** — acceptable base-graph build time on `join` for, say, a 50k-LOC repo? Sets
-   whether we need a persisted graph cache on disk (likely yes).
-5. **Self-host packaging** — bundle the Python sidecar via a shipped venv, a container, or PyOxidizer
-   binary? Affects `synapse join` install weight.
-6. **Wire-protocol auth** — short-lived JWT per daemon connection refreshed via REST; confirm rotation
-   strategy.
+1. **Session lifecycle precision** — ⬜ open. Session starts on daemon `session.start` and ends on
+   `session.end` (which now also emits a Layer II summary). Precise idle-timeout semantics still TBD;
+   affects locks and briefings.
+2. **EditLock granularity** — ✅ symbol-level for v1 (`edit.intent` acquires a per-symbol lock, TTL 90s).
+3. **Python resolver** — ✅ resolved: **jedi** in the sidecar (with tree-sitter for parsing). pyright
+   remains an option if cross-file accuracy bites. See `packages/analyzer-py`.
+4. **Graph rebuild cost** — ⬜ open. The graph is rebuilt per check from the worktree; a persisted
+   on-disk graph cache is not yet implemented. Needs benchmarking on a large repo.
+5. **Self-host packaging** — 🟡 partial: the Python sidecar uses a **shipped venv created on `join`**
+   (`setup-venv.mjs`, pinned deps). A container/binary bundle is a later option.
+6. **Wire-protocol auth** — 🟡 partial: an **optional shared token** gates WSS + `/state` (PR #21).
+   Short-lived per-connection JWT via GitHub OAuth (with rotation) is the planned upgrade.
 ```
