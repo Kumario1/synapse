@@ -10,6 +10,8 @@ import { fileURLToPath } from "node:url";
 // End-to-end Layer II: a session makes a contract change, then ends. The daemon
 // distills the session's deltas into a durable SessionSummary (deterministic,
 // no key) and publishes it; the server stores it and `whatsup` surfaces it.
+// Hermetic: pin the coordination room so git-remote derivation does not pick up the host repo.
+process.env.SYNAPSE_REPO_ID ??= "local";
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const children = [];
 

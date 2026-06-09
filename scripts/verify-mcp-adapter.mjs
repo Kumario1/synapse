@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
+// Hermetic: pin the coordination room so git-remote derivation does not pick up the host repo.
+process.env.SYNAPSE_REPO_ID ??= "local";
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const children = [];
 

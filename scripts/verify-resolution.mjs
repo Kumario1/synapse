@@ -10,6 +10,8 @@ import { fileURLToPath } from "node:url";
 // End-to-end, fully deterministic (no OPENROUTER_API_KEY): two agents edit the
 // SAME symbol to incompatible contracts in SEPARATE worktrees, and we assert
 // the daemon attaches an escalate resolution (no LLM, no guessed merge).
+// Hermetic: pin the coordination room so git-remote derivation does not pick up the host repo.
+process.env.SYNAPSE_REPO_ID ??= "local";
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const children = [];
 

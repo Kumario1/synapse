@@ -1,5 +1,6 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createRequire } from "node:module";
 import { URL } from "node:url";
 import {
   createEmptyTeamState,
@@ -15,6 +16,9 @@ import { applyMessage, pruneExpiredLocks, repoIdFor } from "./state.js";
 import { createStateStore } from "./store.js";
 
 const port = Number(process.env.SYNAPSE_SERVER_PORT ?? 4010);
+// Reported on /health so `synapse doctor` can compare client/server versions.
+const SERVER_VERSION =
+  (createRequire(import.meta.url)("../package.json") as { version?: string }).version ?? "0.0.0";
 // Optional shared-token auth for the daemon<->server channel. When
 // SYNAPSE_AUTH_TOKEN is set, every WSS connection and GET /state must present a
 // matching token; unset means open (local/dev and hermetic tests). GitHub OAuth
@@ -35,7 +39,13 @@ async function handleHttp(request: IncomingMessage, response: ServerResponse): P
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
 
   if (request.method === "GET" && url.pathname === "/health") {
-    writeJson(response, 200, { ok: true, service: "synapse-server" });
+    // Stays open (no auth) so doctor can reach it before proving the token.
+    writeJson(response, 200, {
+      ok: true,
+      service: "synapse-server",
+      version: SERVER_VERSION,
+      protocolVersion: PROTOCOL_VERSION
+    });
     return;
   }
 

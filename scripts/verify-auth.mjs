@@ -12,6 +12,8 @@ import { WebSocket } from "ws";
 // rejects an unauthenticated WSS handshake and GET /state, accepts both with the
 // token, and the daemon (configured with the token) connects and reports
 // normally. /health stays open.
+// Hermetic: pin the coordination room so git-remote derivation does not pick up the host repo.
+process.env.SYNAPSE_REPO_ID ??= "local";
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const children = [];
 const token = "s3cr3t-token";

@@ -6,7 +6,8 @@ dist/
 .env.*
 !.env.example
 .DS_Store
-.synapse/
+.synapse/*
+!.synapse/team.json
 coverage/
 .venv/
 __pycache__/

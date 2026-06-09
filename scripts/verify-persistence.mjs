@@ -12,6 +12,8 @@ import { fileURLToPath } from "node:url";
 // file-backed SQLite store, create state over HTTP (a GitHub push webhook),
 // kill the process, restart it against the same database, and assert the state
 // resumed — nothing re-sent it, so it can only have come from disk.
+// Hermetic: pin the coordination room so git-remote derivation does not pick up the host repo.
+process.env.SYNAPSE_REPO_ID ??= "local";
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const dbDir = await mkdtemp(join(tmpdir(), "synapse-persist-"));
 const dbPath = join(dbDir, "state.db");

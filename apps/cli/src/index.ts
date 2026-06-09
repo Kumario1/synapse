@@ -1,12 +1,14 @@
 #!/usr/bin/env node
-import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { randomBytes, randomUUID } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createRequire } from "node:module";
+import { networkInterfaces } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { normalizeRemoteUrl } from "./identity.js";
 import {
   diffTypeScriptContracts,
   extractTypeScriptContracts,
@@ -96,6 +98,13 @@ interface LocalConfig {
   worktreeRoot?: string;
 }
 
+/** Committed, shared, non-secret team config (`.synapse/team.json`). */
+interface TeamConfig {
+  schemaVersion?: number;
+  serverUrl?: string;
+  repoId?: string;
+}
+
 interface AnalysisCache {
   symbolsByFile: Map<string, CachedSymbols>;
   graph: CachedGraph | null;
@@ -155,6 +164,12 @@ switch (command) {
   case "join":
     await runJoin(args.slice(1));
     break;
+  case "up":
+    await runUp(args.slice(1));
+    break;
+  case "doctor":
+    await runDoctor(args.slice(1));
+    break;
   case "hook":
     await runHook(args.slice(1));
     break;
@@ -193,6 +208,21 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
     socket.send(JSON.stringify(envelope(type, payload)));
   };
 
+  // A daemon that cannot reach the server reconnects forever; without a signal
+  // a misconfig (wrong token, unreachable server, repoId mismatch) looks exactly
+  // like "working." Surface the first failure once, and every auth rejection,
+  // pointing at `synapse doctor` — but stay quiet on the 1s reconnect loop.
+  let connectionWarned = false;
+  const warnConnection = (detail: string, opts?: { auth?: boolean }): void => {
+    if (connectionWarned && !opts?.auth) {
+      return;
+    }
+    connectionWarned = true;
+    console.warn(
+      `synapse: daemon cannot reach ${config.serverUrl} (${detail}); retrying. Run \`synapse doctor\` to diagnose.`
+    );
+  };
+
   const connect = (): void => {
     const tokenParam = config.authToken
       ? `&token=${encodeURIComponent(config.authToken)}`
@@ -202,6 +232,7 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
     );
 
     socket.on("open", () => {
+      connectionWarned = false;
       sendToServer("session.start", { session: makeSession(config) });
     });
 
@@ -212,11 +243,21 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
       }
     });
 
+    socket.on("unexpected-response", (_request, response) => {
+      const auth = response.statusCode === 401;
+      warnConnection(
+        auth ? "401 unauthorized — check SYNAPSE_AUTH_TOKEN" : `HTTP ${response.statusCode}`,
+        { auth }
+      );
+    });
+
     socket.on("close", () => {
       setTimeout(connect, 1000);
     });
 
-    socket.on("error", () => {
+    socket.on("error", (error) => {
+      const code = (error as { code?: string }).code;
+      warnConnection(code ?? (error instanceof Error ? error.message : "connection error"));
       socket?.close();
     });
   };
@@ -583,7 +624,15 @@ async function runWhy(rawArgs: string[]): Promise<void> {
 }
 
 async function runJoin(rawArgs: string[]): Promise<void> {
-  const config = configFromArgs(rawArgs);
+  await performJoin(configFromArgs(rawArgs));
+  console.log(`start the daemon with: npm run dev --workspace @synapse/cli -- daemon`);
+}
+
+/**
+ * Write `.synapse/config.json`, install the Claude Code hooks, and prepare the
+ * Python analyzer venv. Idempotent — safe to re-run. Shared by `join` and `up`.
+ */
+async function performJoin(config: RuntimeConfig): Promise<void> {
   const dir = join(commandCwd(), ".synapse");
   await mkdir(dir, { recursive: true });
   await writeFile(
@@ -613,8 +662,534 @@ async function runJoin(rawArgs: string[]): Promise<void> {
   // Best-effort: prepare the Python analyzer venv so `.py` files are analyzed on
   // first run. Never fails the join — missing Python just degrades to file-level.
   setupPythonAnalyzerVenv();
+}
 
-  console.log(`start the daemon with: npm run dev --workspace @synapse/cli -- daemon`);
+/**
+ * One-command setup for a machine joining a Synapse team. Resolves a git-derived
+ * identity, joins (config + hooks + venv), runs a `doctor` preflight, then starts
+ * the daemon in-process. With `--serve` it also spawns the coordination server as
+ * a child; with `--tunnel` it exposes that server over a public `wss://` URL,
+ * records it in the committed `.synapse/team.json`, and prints the teammate
+ * onboarding command. SIGINT/SIGTERM tears down every spawned child.
+ */
+async function runUp(rawArgs: string[]): Promise<void> {
+  const flags = parseFlags(rawArgs);
+  const serve = flags.serve === "true";
+  const tunnel = flags.tunnel === "true";
+  if (tunnel && !serve) {
+    throw new Error("--tunnel requires --serve (the tunnel exposes the server this host runs).");
+  }
+
+  const children: ChildProcess[] = [];
+  const cleanup = (): void => {
+    for (const child of children) {
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // best effort — we are shutting down anyway
+      }
+    }
+  };
+  // Register before startDaemon so a Ctrl-C kills the server/tunnel children too
+  // (startDaemon installs its own handler that closes the daemon and exits).
+  process.once("SIGINT", cleanup);
+  process.once("SIGTERM", cleanup);
+
+  let config = configFromArgs(rawArgs);
+  if (config.repoId === "local") {
+    console.warn(
+      'synapse: repoId is "local" — machines on different clones will NOT coordinate. ' +
+        "Add a git remote, pass --repo-id, or set repoId in .synapse/team.json."
+    );
+  }
+
+  // In public (tunnel) mode the server is internet-reachable, so a token is
+  // mandatory; generate one if the operator did not supply it.
+  let authToken = config.authToken;
+  if (tunnel && !authToken) {
+    authToken = randomBytes(24).toString("base64url");
+    console.log("synapse: generated a shared auth token for this session.");
+  }
+
+  let serverUrl = config.serverUrl;
+
+  if (serve) {
+    const serverPort = numberDefault(flags["server-port"], process.env.SYNAPSE_SERVER_PORT, 4010);
+    const healthUrl = `http://localhost:${serverPort}/health`;
+    if (await isHealthy(healthUrl)) {
+      console.log(`synapse: reusing the server already listening on :${serverPort}`);
+    } else {
+      children.push(startServerChild(serverPort, authToken, config.worktreeRoot));
+      await waitForHealth(healthUrl, 10_000);
+      console.log(`synapse: server listening on :${serverPort}`);
+    }
+    // The host's own daemon talks to the server over localhost — no NAT round
+    // trip. Only teammates use the tunnel URL.
+    serverUrl = `ws://localhost:${serverPort}`;
+
+    if (tunnel) {
+      const publicUrl = await startTunnel(serverPort, children);
+      if (publicUrl) {
+        await writeTeamConfig({
+          serverUrl: publicUrl,
+          repoId: config.repoId === "local" ? undefined : config.repoId
+        });
+        printTeammateInstructions(publicUrl, authToken);
+      }
+    }
+  }
+
+  config = { ...config, serverUrl, authToken };
+
+  // Surface a server child dying (the daemon is useless without it).
+  const serverChild = children[0];
+  serverChild?.once("exit", (code, signal) => {
+    if (signal !== "SIGTERM") {
+      console.error(`synapse: server exited (${code ?? signal}); shutting down.`);
+      cleanup();
+      process.exit(1);
+    }
+  });
+
+  await performJoin(config);
+
+  const preflight = await runDoctor([], { mode: "preflight", config });
+  printDoctor(preflight.checks);
+  if (!preflight.ok) {
+    cleanup();
+    throw new Error("synapse doctor preflight failed (see above). Fix the FAILs and re-run `synapse up`.");
+  }
+
+  await startDaemon(config);
+}
+
+/** Resolve the built @synapse/server entrypoint, or throw a clear build hint. */
+function resolveServerEntry(): string {
+  try {
+    const pkg = createRequire(import.meta.url).resolve("@synapse/server/package.json");
+    const entry = join(dirname(pkg), "dist/index.js");
+    if (existsSync(entry)) {
+      return entry;
+    }
+  } catch {
+    // not resolvable as a dependency — fall back to the monorepo layout
+  }
+
+  const fallback = resolve(dirname(fileURLToPath(import.meta.url)), "../../server/dist/index.js");
+  if (existsSync(fallback)) {
+    return fallback;
+  }
+
+  throw new Error(
+    "Could not find the @synapse/server build. Run `npm run build` (or install @synapse/server) and retry."
+  );
+}
+
+function startServerChild(serverPort: number, authToken: string, worktreeRoot: string): ChildProcess {
+  const entry = resolveServerEntry();
+  const child = spawn(process.execPath, [entry], {
+    cwd: commandCwd(),
+    env: {
+      ...process.env,
+      SYNAPSE_SERVER_PORT: String(serverPort),
+      // Durable by default in serve mode so a restart resumes live team state.
+      SYNAPSE_DB_PATH: join(worktreeRoot, ".synapse-server", "state.db"),
+      ...(authToken ? { SYNAPSE_AUTH_TOKEN: authToken } : {})
+    },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  child.stdout?.on("data", (chunk) => process.stdout.write(`[server] ${chunk}`));
+  child.stderr?.on("data", (chunk) => process.stderr.write(`[server] ${chunk}`));
+  return child;
+}
+
+/**
+ * Spawn a quick tunnel (cloudflared, else ngrok) wrapping the local server and
+ * return its public `wss://` URL. Overridable via SYNAPSE_TUNNEL_CMD for tests.
+ * Falls back to a LAN URL hint (and returns null) when no tunnel binary exists.
+ */
+async function startTunnel(serverPort: number, children: ChildProcess[]): Promise<string | null> {
+  const override = process.env.SYNAPSE_TUNNEL_CMD;
+  const spec = override
+    ? { cmd: "sh", args: ["-c", override] }
+    : detectTunnel(serverPort);
+
+  if (!spec) {
+    console.warn("synapse: no tunnel binary found (install cloudflared: `brew install cloudflared`).");
+    const lan = lanFallbackUrl(serverPort);
+    if (lan) {
+      console.warn(`synapse: teammates on the same network can use --server ${lan} (LAN only).`);
+    }
+    return null;
+  }
+
+  const child = spawn(spec.cmd, spec.args, {
+    cwd: commandCwd(),
+    env: { ...process.env },
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  children.push(child);
+  child.stdout?.on("data", (chunk) => process.stdout.write(`[tunnel] ${chunk}`));
+  child.stderr?.on("data", (chunk) => process.stderr.write(`[tunnel] ${chunk}`));
+
+  const httpUrl = await captureTunnelUrl(child);
+  if (!httpUrl) {
+    console.warn("synapse: could not determine the tunnel URL within the timeout.");
+    return null;
+  }
+
+  // The tunnel terminates TLS, so the daemon speaks wss to the public host.
+  return httpUrl.replace(/^http/u, "ws");
+}
+
+function detectTunnel(serverPort: number): { cmd: string; args: string[] } | null {
+  if (hasBinary("cloudflared")) {
+    return { cmd: "cloudflared", args: ["tunnel", "--url", `http://localhost:${serverPort}`] };
+  }
+  if (hasBinary("ngrok")) {
+    return { cmd: "ngrok", args: ["http", String(serverPort), "--log", "stdout"] };
+  }
+  return null;
+}
+
+function hasBinary(name: string): boolean {
+  const lookup = process.platform === "win32" ? "where" : "which";
+  try {
+    return spawnSync(lookup, [name], { stdio: "ignore" }).status === 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Watch a tunnel child's output for its public https URL (timeout → null). */
+function captureTunnelUrl(child: ChildProcess, timeoutMs = 20_000): Promise<string | null> {
+  return new Promise((resolvePromise) => {
+    let settled = false;
+    let buffer = "";
+    const pattern =
+      /https:\/\/[a-z0-9-]+\.(?:trycloudflare\.com|ngrok-free\.app|ngrok\.io|ngrok\.app)\b[^\s"']*/iu;
+
+    const settle = (url: string | null): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      child.stdout?.off("data", onData);
+      child.stderr?.off("data", onData);
+      resolvePromise(url);
+    };
+
+    const onData = (chunk: Buffer): void => {
+      buffer += chunk.toString();
+      const match = pattern.exec(buffer);
+      if (match) {
+        settle(match[0]);
+      }
+    };
+
+    const timer = setTimeout(() => settle(null), timeoutMs);
+    child.stdout?.on("data", onData);
+    child.stderr?.on("data", onData);
+  });
+}
+
+/** First non-internal IPv4 address as a ws URL, for the no-tunnel LAN fallback. */
+function lanFallbackUrl(serverPort: number): string | null {
+  for (const infos of Object.values(networkInterfaces())) {
+    for (const info of infos ?? []) {
+      if (info.family === "IPv4" && !info.internal) {
+        return `ws://${info.address}:${serverPort}`;
+      }
+    }
+  }
+  return null;
+}
+
+/** Merge updates into the committed `.synapse/team.json` (read-merge-write). */
+async function writeTeamConfig(update: { serverUrl?: string; repoId?: string }): Promise<void> {
+  const dir = join(commandCwd(), ".synapse");
+  await mkdir(dir, { recursive: true });
+  const existing = readTeamConfig();
+  const merged: TeamConfig = {
+    schemaVersion: 1,
+    serverUrl: update.serverUrl ?? existing.serverUrl,
+    repoId: update.repoId ?? existing.repoId
+  };
+  await writeFile(
+    join(dir, "team.json"),
+    `${JSON.stringify(omitUndefined(merged), null, 2)}\n`
+  );
+  console.log(`wrote ${join(dir, "team.json")} (commit this so teammates inherit the server URL)`);
+}
+
+function omitUndefined<T extends object>(value: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, v]) => v !== undefined)
+  ) as Partial<T>;
+}
+
+function printTeammateInstructions(publicUrl: string, authToken: string): void {
+  console.log("\n── Share with teammates ──────────────────────────────");
+  console.log(`server URL (in .synapse/team.json): ${publicUrl}`);
+  console.log("1. Commit the updated .synapse/team.json.");
+  console.log("2. Each teammate pulls, then runs in their clone of the repo:");
+  const tokenPart = authToken ? `SYNAPSE_AUTH_TOKEN=${authToken} ` : "";
+  console.log(`     ${tokenPart}npx @synapse/cli up`);
+  if (authToken) {
+    console.log("   The token is secret — share it over Slack/1Password, never commit it.");
+  }
+  console.log("──────────────────────────────────────────────────────\n");
+}
+
+async function isHealthy(url: string): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 1500);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function waitForHealth(url: string, timeoutMs: number): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (await isHealthy(url)) {
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(`server did not become healthy at ${url} within ${timeoutMs}ms`);
+}
+
+interface DoctorCheck {
+  name: string;
+  status: "pass" | "warn" | "fail";
+  detail: string;
+}
+
+interface DoctorResult {
+  checks: DoctorCheck[];
+  ok: boolean;
+}
+
+/**
+ * Preflight diagnostics: turn the silent failures that block cross-machine
+ * coordination into loud, specific messages. In `cli` mode it prints and sets a
+ * non-zero exit on any FAIL; in `preflight` mode it returns the result for `up`.
+ */
+async function runDoctor(
+  rawArgs: string[],
+  opts: { mode: "cli" | "preflight"; config?: RuntimeConfig } = { mode: "cli" }
+): Promise<DoctorResult> {
+  const config = opts.config ?? configFromArgs(rawArgs);
+  const checks: DoctorCheck[] = [];
+
+  checks.push({
+    name: "identity",
+    status: "pass",
+    detail: `repoId=${config.repoId} member=${config.member} server=${config.serverUrl} token=${config.authToken ? "set" : "unset"}`
+  });
+
+  if (config.repoId === "local") {
+    checks.push({
+      name: "repoId",
+      status: "warn",
+      detail:
+        'repoId is "local" — machines on different clones will NOT coordinate. Add a git remote, pass --repo-id, or set repoId in .synapse/team.json.'
+    });
+  } else {
+    checks.push({ name: "repoId", status: "pass", detail: `coordinating on ${config.repoId}` });
+  }
+
+  const localHost = /^wss?:\/\/(localhost|127\.0\.0\.1)(?::|\/|$)/u.test(config.serverUrl);
+  if (config.serverUrl.startsWith("ws://") && !localHost) {
+    checks.push({
+      name: "transport",
+      status: "warn",
+      detail: "serverUrl is ws:// to a remote host — the token travels in cleartext. Prefer wss:// (a tunnel terminates TLS)."
+    });
+  } else {
+    checks.push({
+      name: "transport",
+      status: "pass",
+      detail: config.serverUrl.startsWith("wss://") ? "wss (encrypted)" : "local"
+    });
+  }
+
+  const health = await probeHealth(`${httpFromWs(config.serverUrl)}/health`);
+  checks.push(health.check);
+
+  if (health.body) {
+    const serverProtocol = numberValue((health.body as Record<string, unknown>).protocolVersion);
+    if (serverProtocol === undefined) {
+      checks.push({ name: "protocol", status: "warn", detail: "server /health did not report protocolVersion (older server?)" });
+    } else if (serverProtocol !== PROTOCOL_VERSION) {
+      checks.push({
+        name: "protocol",
+        status: "warn",
+        detail: `server protocol v${serverProtocol}, client v${PROTOCOL_VERSION} — upgrade the older side.`
+      });
+    } else {
+      checks.push({ name: "protocol", status: "pass", detail: `protocol v${PROTOCOL_VERSION}` });
+    }
+  }
+
+  checks.push(await probeWsHandshake(config));
+  checks.push(await probePeers(config));
+
+  const ok = checks.every((check) => check.status !== "fail");
+
+  if (opts.mode === "cli") {
+    printDoctor(checks);
+    if (!ok) {
+      process.exitCode = 1;
+    }
+  }
+
+  return { checks, ok };
+}
+
+function printDoctor(checks: DoctorCheck[]): void {
+  const icon = { pass: "✓", warn: "⚠", fail: "✗" } as const;
+  console.log("synapse doctor:");
+  for (const check of checks) {
+    console.log(`  ${icon[check.status]} ${check.name}: ${check.detail}`);
+  }
+}
+
+/** ws://host → http://host, wss://host → https://host (for /health and /state). */
+function httpFromWs(serverUrl: string): string {
+  return serverUrl.replace(/^ws/u, "http");
+}
+
+async function probeHealth(url: string): Promise<{ check: DoctorCheck; body: unknown | null }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) {
+      return { check: { name: "server", status: "fail", detail: `GET ${url} → HTTP ${response.status}` }, body: null };
+    }
+    const body = await response.json().catch(() => null);
+    return { check: { name: "server", status: "pass", detail: `reachable at ${url}` }, body };
+  } catch (error) {
+    return { check: { name: "server", status: "fail", detail: describeFetchError(url, error) }, body: null };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function probeWsHandshake(config: RuntimeConfig): Promise<DoctorCheck> {
+  const tokenParam = config.authToken ? `&token=${encodeURIComponent(config.authToken)}` : "";
+  const url = `${config.serverUrl}?repoId=${encodeURIComponent(config.repoId)}&sessionId=synapse-doctor${tokenParam}`;
+  return new Promise((resolvePromise) => {
+    const ws = new WebSocket(url);
+    let settled = false;
+    const settle = (check: DoctorCheck): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      try {
+        ws.close();
+      } catch {
+        // ignore
+      }
+      resolvePromise(check);
+    };
+    const timer = setTimeout(
+      () => settle({ name: "websocket", status: "fail", detail: "WS handshake timed out — server unreachable (NAT/tunnel down?)." }),
+      5000
+    );
+    ws.on("open", () => settle({ name: "websocket", status: "pass", detail: "WS handshake authenticated" }));
+    ws.on("unexpected-response", (_request, response) =>
+      settle({
+        name: "websocket",
+        status: "fail",
+        detail:
+          response.statusCode === 401
+            ? "WS handshake rejected 401 — auth token missing or wrong."
+            : `WS handshake rejected — HTTP ${response.statusCode}.`
+      })
+    );
+    ws.on("error", (error) => settle({ name: "websocket", status: "fail", detail: describeWsError(error) }));
+  });
+}
+
+async function probePeers(config: RuntimeConfig): Promise<DoctorCheck> {
+  const tokenParam = config.authToken ? `&token=${encodeURIComponent(config.authToken)}` : "";
+  const url = `${httpFromWs(config.serverUrl)}/state?repoId=${encodeURIComponent(config.repoId)}${tokenParam}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) {
+      return {
+        name: "peers",
+        status: response.status === 401 ? "fail" : "warn",
+        detail: `GET /state → HTTP ${response.status}`
+      };
+    }
+    const state = (await response.json()) as TeamState;
+    const others = state.sessions.filter(
+      (session) => session.id !== config.sessionId && session.status !== "ended"
+    );
+    if (others.length === 0) {
+      return { name: "peers", status: "pass", detail: "connected, no other peers yet" };
+    }
+    const names = others.map((session) => session.memberLogin ?? session.memberId ?? session.id);
+    return { name: "peers", status: "pass", detail: `connected, ${others.length} peer(s): ${names.join(", ")}` };
+  } catch (error) {
+    return { name: "peers", status: "warn", detail: describeFetchError(url, error) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function describeFetchError(url: string, error: unknown): string {
+  if (error instanceof Error && error.name === "AbortError") {
+    return `${url} timed out — server unreachable (NAT/tunnel down?).`;
+  }
+  const code = fetchErrorCode(error);
+  if (code === "ECONNREFUSED") {
+    return `${url} refused the connection — is the server running / the tunnel up?`;
+  }
+  if (code === "ENOTFOUND") {
+    return `${url} host not found — check the serverUrl / DNS.`;
+  }
+  return `${url} failed: ${error instanceof Error ? error.message : String(error)}`;
+}
+
+function fetchErrorCode(error: unknown): string | undefined {
+  const cause = error instanceof Error ? (error as { cause?: unknown }).cause : undefined;
+  if (cause instanceof Error && "code" in cause) {
+    return (cause as { code?: string }).code;
+  }
+  if (error instanceof Error && "code" in error) {
+    return (error as { code?: string }).code;
+  }
+  return undefined;
+}
+
+function describeWsError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/\b401\b/u.test(message)) {
+    return "WS handshake rejected 401 — auth token missing or wrong.";
+  }
+  const code = error instanceof Error && "code" in error ? (error as { code?: string }).code : undefined;
+  if (code === "ECONNREFUSED") {
+    return "WS connection refused — is the server running / the tunnel up?";
+  }
+  if (code === "ENOTFOUND") {
+    return "WS host not found — check the serverUrl.";
+  }
+  return `WS handshake failed: ${message}`;
 }
 
 /** Absolute path to this CLI's entrypoint, for embedding in hook commands. */
@@ -959,11 +1534,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function configFromArgs(rawArgs: string[]): RuntimeConfig {
   const flags = parseFlags(rawArgs);
   const localConfig = readLocalConfig();
+  const teamConfig = readTeamConfig();
   const member =
-    flags.member ?? process.env.SYNAPSE_MEMBER ?? localConfig.member ?? process.env.USER ?? "local";
+    flags.member ?? process.env.SYNAPSE_MEMBER ?? localConfig.member ?? gitMember();
 
   return {
-    repoId: flags["repo-id"] ?? process.env.SYNAPSE_REPO_ID ?? localConfig.repoId ?? "local",
+    repoId:
+      flags["repo-id"] ??
+      process.env.SYNAPSE_REPO_ID ??
+      localConfig.repoId ??
+      teamConfig.repoId ??
+      (gitRepoId() || "local"),
     member,
     sessionId:
       flags.session ??
@@ -973,12 +1554,16 @@ function configFromArgs(rawArgs: string[]): RuntimeConfig {
     agentType: agentType(flags.agent ?? process.env.SYNAPSE_AGENT ?? localConfig.agentType ?? "other"),
     daemonPort: numberDefault(flags.port, process.env.SYNAPSE_DAEMON_PORT, localConfig.daemonPort, 4011),
     serverUrl:
-      flags.server ?? process.env.SYNAPSE_SERVER_URL ?? localConfig.serverUrl ?? "ws://localhost:4010",
+      flags.server ??
+      process.env.SYNAPSE_SERVER_URL ??
+      localConfig.serverUrl ??
+      teamConfig.serverUrl ??
+      "ws://localhost:4010",
     worktreeRoot: resolve(
       flags["worktree-root"] ??
         process.env.SYNAPSE_WORKTREE_ROOT ??
         localConfig.worktreeRoot ??
-        commandCwd()
+        gitWorktreeRoot()
     ),
     // Sourced from flag/env only — never persisted to .synapse/config.json so a
     // secret token does not land on disk.
@@ -992,12 +1577,69 @@ function commandDefaults(flags: Record<string, string>): {
   daemonPort: number;
 } {
   const localConfig = readLocalConfig();
+  const teamConfig = readTeamConfig();
 
   return {
-    repoId: flags["repo-id"] ?? process.env.SYNAPSE_REPO_ID ?? localConfig.repoId ?? "local",
+    // Same chain as configFromArgs so the hook-driven check/report resolve the
+    // exact room the daemon joined. `.synapse/config.json` (written by join/up)
+    // carries repoId, so the hot path never shells out to git in steady state.
+    repoId:
+      flags["repo-id"] ??
+      process.env.SYNAPSE_REPO_ID ??
+      localConfig.repoId ??
+      teamConfig.repoId ??
+      (gitRepoId() || "local"),
     sessionId: flags.session ?? process.env.SYNAPSE_SESSION_ID ?? localConfig.sessionId ?? "local",
     daemonPort: numberDefault(flags.port, process.env.SYNAPSE_DAEMON_PORT, localConfig.daemonPort, 4011)
   };
+}
+
+/** Run a read-only git command from the command cwd; "" on any failure. */
+function git(gitArgs: string[]): string {
+  try {
+    const result = spawnSync("git", gitArgs, {
+      cwd: commandCwd(),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+    return result.status === 0 ? (result.stdout ?? "").trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Canonical `host/owner/repo` slug from the git origin remote (falling back to
+ * the first remote), or "" when there is no usable remote. This is what lets two
+ * clones of the same repo share a coordination room with zero configuration.
+ */
+function gitRepoId(): string {
+  const origin = git(["config", "--get", "remote.origin.url"]);
+  const url = origin || firstRemoteUrl();
+  return url ? normalizeRemoteUrl(url) : "";
+}
+
+function firstRemoteUrl(): string {
+  const remotes = git(["remote"])
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return remotes.length > 0 ? git(["config", "--get", `remote.${remotes[0]}.url`]) : "";
+}
+
+/** The git worktree root, or the command cwd when not inside a git tree. */
+function gitWorktreeRoot(): string {
+  return git(["rev-parse", "--show-toplevel"]) || commandCwd();
+}
+
+/** Best display name for this member: git identity, then $USER, then "local". */
+function gitMember(): string {
+  return (
+    git(["config", "user.name"]) ||
+    git(["config", "user.email"]) ||
+    process.env.USER ||
+    "local"
+  );
 }
 
 function readLocalConfig(): LocalConfig {
@@ -1024,6 +1666,33 @@ function readLocalConfig(): LocalConfig {
     daemonPort: numberValue(parsed.daemonPort),
     serverUrl: stringValue(parsed.serverUrl),
     worktreeRoot: stringValue(parsed.worktreeRoot)
+  };
+}
+
+/**
+ * Read `.synapse/team.json` — the committed, shared, non-secret team config that
+ * carries the coordination server URL (and optional repoId) so a teammate
+ * inherits them on checkout. A missing file is fine (returns {}); a malformed
+ * committed file is loud (rethrows) so the team notices a bad commit.
+ */
+function readTeamConfig(): TeamConfig {
+  const path = join(commandCwd(), ".synapse", "team.json");
+  let parsed: Record<string, unknown>;
+
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return {};
+    }
+
+    throw error;
+  }
+
+  return {
+    schemaVersion: numberValue(parsed.schemaVersion),
+    serverUrl: stringValue(parsed.serverUrl),
+    repoId: stringValue(parsed.repoId)
   };
 }
 
@@ -2145,10 +2814,15 @@ Commands:
   why      Search Synapse memory with source citations
   mcp      Run a stdio MCP server that forwards tools to the local daemon
   join     Write .synapse/config.json and install Claude Code hooks
+  up       One command: join + preflight + start daemon (--serve / --tunnel for the host)
+  doctor   Preflight a setup: identity, server reachability, auth, and live peers
   hook     Claude Code hook entrypoint (pre|post); reads hook JSON on stdin
   analyze  Extract TypeScript contract symbols from a file
 
 Examples:
+  synapse up                                   # teammate: inherits .synapse/team.json
+  synapse up --serve --tunnel                  # host: run the server + expose it publicly
+  synapse doctor                               # diagnose why two machines aren't coordinating
   synapse join --member alice --session alice --port 4011 --server ws://localhost:4010
   synapse daemon
   synapse mcp --port 4011
