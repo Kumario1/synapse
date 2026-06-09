@@ -426,7 +426,10 @@ interface Conflict {
     unpushedDeltas
 ```
 
-Latency budget: steps 2–5 ≈ <50ms (no network). Steps 8–10 are off the critical path (post-edit).
+Latency budget: steps 2–5 ≈ <50ms p95 (no network). Steps 8–10 are off the critical path
+(post-edit). `npm run verify:hot-path-latency` enforces the current synthetic local budget for the
+file-only PreToolUse path: two daemons, separate one-file worktrees, OpenRouter disabled, p95 <= 50ms
+and max <= 150ms for both no-conflict and warning checks.
 When `OPENROUTER_API_KEY` is set, the daemon may upgrade a conflict's deterministic `analysis` by
 sending the relevant self/counterpart contract-change payloads to OpenRouter. Failure, timeout, or a
 missing key keeps the deterministic analysis.
@@ -482,7 +485,7 @@ hot path cheap, fast, and free of hallucinated contracts.
 
 ## 13. Storage Schemas
 
-> **Current implementation (2026-06-08):** the server persists through a storage-agnostic `StateStore`
+> **Current implementation (2026-06-09):** the server persists through a storage-agnostic `StateStore`
 > (`apps/server/src/store.ts`). The shipped implementation is **SQLite** (`better-sqlite3`, WAL),
 > storing one JSON `TeamState` snapshot per repo (`team_state(repo_id, state, updated_at)`), selected
 > by `SYNAPSE_DB_PATH` (unset = in-memory). The normalized Postgres schema and Redis live-state below
@@ -531,7 +534,7 @@ survives restarts and feeds Layer II/III. Once a delta's `pushed_at` is set, it'
 
 ---
 
-## 15. Open Spec Questions (status as of 2026-06-08)
+## 15. Open Spec Questions (status as of 2026-06-09)
 
 1. **Session lifecycle precision** — ⬜ open. Session starts on daemon `session.start` and ends on
    `session.end` (which now also emits a Layer II summary). Precise idle-timeout semantics still TBD;
@@ -539,8 +542,10 @@ survives restarts and feeds Layer II/III. Once a delta's `pushed_at` is set, it'
 2. **EditLock granularity** — ✅ symbol-level for v1 (`edit.intent` acquires a per-symbol lock, TTL 90s).
 3. **Python resolver** — ✅ resolved: **jedi** in the sidecar (with tree-sitter for parsing). pyright
    remains an option if cross-file accuracy bites. See `packages/analyzer-py`.
-4. **Graph rebuild cost** — ⬜ open. The graph is rebuilt per check from the worktree; a persisted
-   on-disk graph cache is not yet implemented. Needs benchmarking on a large repo.
+4. **Graph rebuild cost** — ⬜ open. The daemon keeps an mtime/size-based in-memory cache for file
+   symbols and the merged dependency graph, so unchanged hot-path checks avoid fresh analyzer work. A
+   persisted on-disk graph cache is not yet implemented. The synthetic hot-path verifier covers a
+   one-file repo; large-repo benchmarking is still needed.
 5. **Self-host packaging** — 🟡 partial: the Python sidecar uses a **shipped venv created on `join`**
    (`setup-venv.mjs`, pinned deps). A container/binary bundle is a later option.
 6. **Wire-protocol auth** — 🟡 partial: an **optional shared token** gates WSS + `/state` (PR #21).
