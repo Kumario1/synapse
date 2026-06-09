@@ -28,7 +28,7 @@ try {
   await execFileAsync("git", ["init", "-q", worktree]);
   await execFileAsync("git", ["-C", worktree, "remote", "add", "origin", "git@github.com:acme/widgets.git"]);
 
-  startProcess(
+  const host = startProcess(
     "host",
     [cli, "up", "--serve", "--tunnel", "--server-port", String(serverPort), "--port", String(daemonPort), "--member", "alice"],
     { INIT_CWD: worktree, SYNAPSE_TUNNEL_CMD: tunnelStub },
@@ -43,6 +43,12 @@ try {
 
   const raw = await readFile(teamConfigPath, "utf8");
   assert.ok(!/token/i.test(raw), "team.json never contains the auth token");
+
+  // The printed teammate command must be runnable — never the unpublished
+  // `npx @synapse/cli` form. (Instructions print just after team.json is written.)
+  await waitFor(() => host.output.includes(" synapse up"), 5000);
+  assert.ok(!host.output.includes("npx @synapse/cli"), "teammate command does not use unpublished npx @synapse/cli");
+  assert.match(host.output, /SYNAPSE_AUTH_TOKEN=\S+ synapse up/, "teammate command shows the token-prefixed `synapse up`");
 
   console.log("Up-tunnel verification passed:");
   console.log(JSON.stringify(team, null, 2));
@@ -64,7 +70,11 @@ function startProcess(label, args, env, cwd = rootDir) {
     stdio: ["ignore", "pipe", "pipe"]
   });
   children.push(child);
-  child.stdout.on("data", (chunk) => process.stdout.write(`[${label}] ${chunk}`));
+  child.output = "";
+  child.stdout.on("data", (chunk) => {
+    child.output += chunk;
+    process.stdout.write(`[${label}] ${chunk}`);
+  });
   child.stderr.on("data", (chunk) => process.stderr.write(`[${label}] ${chunk}`));
   child.once("exit", (code, signal) => {
     if (code !== 0 && signal !== "SIGTERM") {
@@ -72,6 +82,17 @@ function startProcess(label, args, env, cwd = rootDir) {
     }
   });
   return child;
+}
+
+async function waitFor(predicate, timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (await predicate()) {
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`Timed out after ${timeoutMs}ms`);
 }
 
 async function waitForFile(path, timeoutMs) {
