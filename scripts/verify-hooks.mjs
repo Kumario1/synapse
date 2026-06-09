@@ -12,6 +12,8 @@ import { fileURLToPath } from "node:url";
 // invoked with real hook JSON on stdin. We assert (1) join writes the hooks,
 // (2) `hook pre` surfaces a live conflict as an ask-decision, and (3)
 // `hook post` reports a contract change to the daemon. Fully deterministic.
+// Hermetic: pin the coordination room so git-remote derivation does not pick up the host repo.
+process.env.SYNAPSE_REPO_ID ??= "local";
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const cli = join(rootDir, "apps/cli/dist/index.js");
 const children = [];
