@@ -26,7 +26,7 @@ The core agent-coordination loop is implemented and runs as an installed tool. S
 | Claude Code hooks installed by `join` (Pre/PostToolUse, SessionStart) | ✅ Done | PR #18, #20 |
 | Briefings Layer II — `whatsup`, session-end summaries, session-start catch-up | ✅ Done | PR #19, #20 |
 | Daemon↔server auth — optional shared token (constant-time) | ✅ Done | PR #21 |
-| Hot-path latency benchmark — file-only pre-edit path | ✅ Done | `verify:hot-path-latency`, synthetic local repo |
+| Hot-path latency benchmark — file-only pre-edit path | ✅ Done | `verify:hot-path-latency`, `verify:large-repo-latency` |
 | **Redis** live state + pub/sub (multi-instance fan-out) | ⬜ Deferred | in-memory + SQLite today; `StateStore` is the swap seam |
 | **Postgres** durable store (multi-instance) | ⬜ Deferred | SQLite implements the same `StateStore` interface |
 | **GitHub OAuth + per-connection JWT** | ⬜ Planned | shared-token is the interim |
@@ -34,7 +34,7 @@ The core agent-coordination loop is implemented and runs as an installed tool. S
 | Memory Layer III — pgvector + `synapse_why` | ⬜ Not started | "when validated" |
 | Go analyzer; SCIP-grade indexing; telemetry/acted-on tuning | ⬜ Not started | — |
 
-Verification: every implemented area has a `npm run verify:*` script (21 total) plus unit tests and
+Verification: every implemented area has a `npm run verify:*` script (22 total) plus unit tests and
 `npm run eval:conflicts`; all green. See the README for the per-feature commands.
 
 ---
@@ -272,16 +272,18 @@ OAuth + JWT still ahead), self-host packaging (Docker compose — not yet), tele
 tiny eval harness for "did we correctly flag/ignore this conflict?" on recorded scenarios.
 Current eval harness: `npm run eval:conflicts` runs recorded JSON scenarios through the deterministic
 conflict engine and asserts verdicts, rules, recommendations, compatibility, and resolutions.
-Current latency harness: `npm run verify:hot-path-latency` measures the file-only PreToolUse path in a
-synthetic two-worktree repo and enforces p95 <= 50ms / max <= 150ms with OpenRouter disabled.
+Current latency harnesses: `npm run verify:hot-path-latency` measures the file-only PreToolUse path
+in a synthetic two-worktree repo, and `npm run verify:large-repo-latency` repeats that flow across 181
+generated TypeScript source files. Both enforce warm p95 <= 50ms / max <= 150ms with OpenRouter
+disabled; the large-repo verifier also records cold first-check time.
 
 ---
 
 ## 6. Key Technical Risks & Open Decisions
 
 1. Hot-path latency vs. accuracy — local warm cache + deterministic AST diff in place; TS analysis is
-   in-process, Python runs in a warm sidecar. The synthetic file-only hot-path benchmark is in place;
-   larger-repo graph/cache benchmarking remains open.
+   in-process, Python runs in a warm sidecar. Synthetic one-file and 181-file hot-path benchmarks are
+   in place; real production-repo profiling remains open.
 2. Cross-agent support — ✅ Claude Code via installed hooks; Cursor/Cline/Aider via the MCP adapter.
 3. Dep-graph accuracy vs. cost — ✅ resolved for v1: ts-morph (TS, in-process) + jedi (Python,
    sidecar). SCIP-grade indexing remains a later option.
