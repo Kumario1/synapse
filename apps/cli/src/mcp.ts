@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type {
@@ -10,6 +12,7 @@ import type {
   SynapseWhyRequest
 } from "@synapse/protocol";
 import { z } from "zod/v4";
+import { SYNAPSE_AGENT_GUIDANCE } from "./connect.js";
 
 const serverInfo = {
   name: "synapse",
@@ -27,10 +30,22 @@ const symbolsInput = z.union([z.array(z.string().min(1)), z.array(symbol)]).opti
 
 export async function runMcp(rawArgs: string[]): Promise<void> {
   const flags = parseFlags(rawArgs);
-  const defaultPort = Number(flags.port ?? process.env.SYNAPSE_DAEMON_PORT ?? 4011);
-  const defaultRepoId = flags["repo-id"] ?? process.env.SYNAPSE_REPO_ID ?? "local";
-  const defaultSessionId = flags.session ?? process.env.SYNAPSE_SESSION_ID ?? "local";
-  const server = new McpServer(serverInfo);
+  // Resolve the coordination room the same way the Claude Code hooks do: explicit
+  // flag, then env, then `.synapse/config.json` (written by `synapse join`/`up`),
+  // then a local fallback. This is what lets an MCP-launched agent land in the
+  // exact room the daemon joined with zero per-agent configuration.
+  const localConfig = readLocalConfig();
+  const defaultPort = Number(
+    flags.port ?? process.env.SYNAPSE_DAEMON_PORT ?? localConfig.daemonPort ?? 4011
+  );
+  const defaultRepoId =
+    flags["repo-id"] ?? process.env.SYNAPSE_REPO_ID ?? localConfig.repoId ?? "local";
+  const defaultSessionId =
+    flags.session ?? process.env.SYNAPSE_SESSION_ID ?? localConfig.sessionId ?? "local";
+  // The `instructions` field is the MCP-native equivalent of the Claude Code
+  // hooks: compliant clients surface it to the model, so any connecting agent is
+  // told to check before edits and report after — no rules file required.
+  const server = new McpServer(serverInfo, { instructions: SYNAPSE_AGENT_GUIDANCE });
 
   server.registerTool(
     "synapse_check",
@@ -339,6 +354,29 @@ function toolError(message: string) {
     isError: true,
     content: [{ type: "text" as const, text: message }]
   };
+}
+
+/**
+ * Best-effort read of `.synapse/config.json` for room defaults (repoId, session,
+ * daemon port). The agent launches this MCP server with the project root as cwd,
+ * so the config written by `synapse join`/`up` is found relative to it. Any
+ * problem (missing/malformed file) degrades silently to the built-in defaults.
+ */
+function readLocalConfig(): { repoId?: string; sessionId?: string; daemonPort?: number } {
+  const cwd = process.env.INIT_CWD ?? process.cwd();
+  try {
+    const parsed = JSON.parse(readFileSync(join(cwd, ".synapse", "config.json"), "utf8")) as Record<
+      string,
+      unknown
+    >;
+    return {
+      repoId: typeof parsed.repoId === "string" ? parsed.repoId : undefined,
+      sessionId: typeof parsed.sessionId === "string" ? parsed.sessionId : undefined,
+      daemonPort: typeof parsed.daemonPort === "number" ? parsed.daemonPort : undefined
+    };
+  } catch {
+    return {};
+  }
 }
 
 function parseFlags(rawArgs: string[]): Record<string, string> {
