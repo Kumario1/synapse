@@ -259,6 +259,25 @@ export interface SessionSummary {
   endedAt: string;
 }
 
+export type ConflictFeedbackOutcome = "acted" | "dismissed";
+
+/**
+ * Explicit feedback for a surfaced conflict warning. This is telemetry only:
+ * recording it does not change current conflict verdicts or tune thresholds.
+ */
+export interface ConflictFeedback {
+  id: string;
+  repoId: string;
+  conflictId: string;
+  sessionId: string;
+  memberId: string;
+  outcome: ConflictFeedbackOutcome;
+  note?: string;
+  rule?: Conflict["rule"];
+  targetSymbol?: SymbolId;
+  createdAt: string;
+}
+
 export interface TeamState {
   repoId: string;
   sessions: Session[];
@@ -270,9 +289,13 @@ export interface TeamState {
   resolutions: ContractResolution[];
   /** Narrative summaries of ended sessions (most recent first). */
   sessionSummaries: SessionSummary[];
+  /** Explicit warning feedback, most recent first, used later for threshold tuning. */
+  conflictFeedback: ConflictFeedback[];
 }
 
 export interface Conflict {
+  /** Deterministic id for recording feedback about this surfaced conflict. */
+  id: string;
   severity: Exclude<Severity, "none">;
   rule:
     | "same_symbol_active"
@@ -375,6 +398,21 @@ export interface SynapsePushResponse {
   files: string[];
 }
 
+export interface SynapseFeedbackRequest {
+  repoId: string;
+  sessionId: string;
+  conflictId: string;
+  outcome: ConflictFeedbackOutcome;
+  note?: string;
+  rule?: Conflict["rule"];
+  targetSymbol?: SymbolId;
+}
+
+export interface SynapseFeedbackResponse {
+  ok: true;
+  feedback: ConflictFeedback;
+}
+
 export interface SynapseWhatsupRequest {
   repoId: string;
   sessionId: string;
@@ -412,6 +450,7 @@ export interface SynapseWhatsupResponse {
   recentRepoEvents: RecentRepoEvent[];
   resolutions: ContractResolution[];
   sessionSummaries: SessionSummary[];
+  conflictFeedback: ConflictFeedback[];
 }
 
 export interface SynapseWhyRequest {
@@ -495,6 +534,7 @@ export type ClientMessage =
       { repoId: string; resolution: ContractResolution }
     >
   | WireEnvelope<"session.summary", { repoId: string; summary: SessionSummary }>
+  | WireEnvelope<"conflict.feedback", { repoId: string; feedback: ConflictFeedback }>
   | WireEnvelope<"query.briefing", { repoId: string; since?: string }>;
 
 export type ServerMessage =
@@ -511,7 +551,8 @@ export function createEmptyTeamState(repoId: string): TeamState {
     recentPushes: [],
     recentRepoEvents: [],
     resolutions: [],
-    sessionSummaries: []
+    sessionSummaries: [],
+    conflictFeedback: []
   };
 }
 

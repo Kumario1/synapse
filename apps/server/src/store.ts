@@ -117,6 +117,7 @@ function normalizeTeamState(value: unknown, repoId: string): TeamState {
     recentPushes: partial.recentPushes ?? base.recentPushes,
     recentRepoEvents: partial.recentRepoEvents ?? base.recentRepoEvents,
     resolutions: partial.resolutions ?? base.resolutions,
-    sessionSummaries: partial.sessionSummaries ?? base.sessionSummaries
+    sessionSummaries: partial.sessionSummaries ?? base.sessionSummaries,
+    conflictFeedback: partial.conflictFeedback ?? base.conflictFeedback
   };
 }

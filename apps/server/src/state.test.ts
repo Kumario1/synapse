@@ -120,6 +120,24 @@ test("repo.event stores recent GitHub activity most-recent-first and caps histor
   assert.equal(state.recentRepoEvents[49].summary, "GitHub PR #5 opened: Feature 5");
 });
 
+test("conflict.feedback stores most-recent-first, replaces retries, and caps history", () => {
+  const state = createEmptyTeamState("local");
+
+  applyMessage(state, "local", feedbackMessage("f-retry", "acted", 0));
+  applyMessage(state, "local", feedbackMessage("f-retry", "dismissed", 1));
+
+  assert.equal(state.conflictFeedback.length, 1);
+  assert.equal(state.conflictFeedback[0].outcome, "dismissed");
+
+  for (let index = 0; index < 105; index += 1) {
+    applyMessage(state, "local", feedbackMessage(`f-${index}`, "acted", index));
+  }
+
+  assert.equal(state.conflictFeedback.length, 100);
+  assert.equal(state.conflictFeedback[0].conflictId, "conflict-104");
+  assert.equal(state.conflictFeedback[99].conflictId, "conflict-5");
+});
+
 const now = "2026-06-07T00:00:00.000Z";
 
 function withDivergentDeltas(): TeamState {
@@ -231,6 +249,34 @@ function repoEventMessage(index: number): ClientMessage {
       number: index,
       url: `https://github.com/acme/widgets/pull/${index}`,
       summary: `GitHub PR #${index} opened: Feature ${index}`
+    }
+  };
+}
+
+function feedbackMessage(
+  id: string,
+  outcome: "acted" | "dismissed",
+  index: number
+): ClientMessage {
+  return {
+    v: PROTOCOL_VERSION,
+    type: "conflict.feedback",
+    id: `f-msg-${index}`,
+    ts: now,
+    payload: {
+      repoId: "local",
+      feedback: {
+        id,
+        repoId: "local",
+        conflictId: `conflict-${index}`,
+        sessionId: "bob",
+        memberId: "bob",
+        outcome,
+        rule: "same_symbol_unpushed",
+        targetSymbol: { raw: symbol },
+        note: `note ${index}`,
+        createdAt: new Date(Date.parse(now) + index).toISOString()
+      }
     }
   };
 }
