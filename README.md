@@ -85,7 +85,51 @@ npm run verify:join-config
 ```
 
 `synapse join` writes `.synapse/config.json`. Daemon and CLI commands read it as defaults, using this
-precedence: explicit flags, environment variables, `.synapse/config.json`, then built-in defaults.
+precedence: explicit flags, environment variables, `.synapse/config.json`, the committed
+`.synapse/team.json`, the git-derived repo id, then built-in defaults.
+
+## Seamless Multi-Machine Setup (`synapse up` + `synapse doctor`)
+
+Two machines coordinate only if their daemons use the **same `repoId`** against the **same server**.
+Synapse now makes that line up by itself:
+
+- **Git-derived identity.** When no `repoId` is set explicitly, it is derived from the git remote
+  (`git@github.com:acme/widgets.git` → `github.com/acme/widgets`), so two clones of the same repo share
+  a coordination room with zero configuration. Branch is intentionally **not** part of the key — you
+  still get warned about a teammate editing the same symbol on another branch.
+- **Committable team config.** `.synapse/team.json` (the one file under `.synapse/` that is **not**
+  gitignored) carries the shared, non-secret server URL (and an optional `repoId`), so a teammate
+  inherits it on checkout. Secrets never go here — the auth token is env-only.
+
+`synapse up` is one command per machine: it resolves identity, joins (config + Claude Code hooks +
+Python venv), runs a `synapse doctor` preflight, then starts the daemon — aborting with a clear message
+instead of silently reconnecting forever.
+
+Host (runs the server and exposes it over a public `wss://` tunnel — cloudflared or ngrok):
+
+```bash
+synapse up --serve --tunnel
+# → starts the server, opens a tunnel, writes the wss URL into .synapse/team.json,
+#   and prints the exact teammate command + a generated auth token (share it out-of-band).
+```
+
+Commit the updated `.synapse/team.json`, share the token over Slack/1Password (never in git), then each
+teammate pulls and runs:
+
+```bash
+SYNAPSE_AUTH_TOKEN=<token> synapse up
+```
+
+`synapse doctor` diagnoses a setup without starting anything — it prints the resolved identity, warns
+loudly when `repoId` is `"local"` (the #1 reason two machines don't see each other), checks that the
+server is reachable, distinguishes a 401 auth failure from an unreachable server, compares protocol
+versions, and lists the live peers in your room:
+
+```bash
+synapse doctor
+npm run verify:up        # two daemons, one git-derived room, mutual visibility
+npm run verify:doctor    # health/auth/peer checks, including the failure messages
+```
 
 ## Claude Code Hooks (automatic checks)
 
