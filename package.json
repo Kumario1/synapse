@@ -30,6 +30,7 @@
     "verify:github-webhook": "npm run build && node scripts/verify-github-webhook.mjs",
     "verify:github-briefing": "npm run build && node scripts/verify-github-briefing.mjs",
     "verify:persistence": "npm run build && node scripts/verify-persistence.mjs",
+    "verify:persistence-pg": "npm run build && node scripts/verify-persistence-pg.mjs",
     "verify:hooks": "npm run build && node scripts/verify-hooks.mjs",
     "verify:session-summary": "npm run build && node scripts/verify-session-summary.mjs",
     "verify:session-start": "npm run build && node scripts/verify-session-start.mjs",
