@@ -322,6 +322,19 @@ M15 negotiation ─→ D3 delta broadcast (if approved)
   `SYNAPSE_VERIFY_PG_URL`/`SYNAPSE_DATABASE_URL` is set); `verify:persistence` still green;
   new `verify:persistence-pg` (SIGKILL durability; SKIPs offline) + a `postgres:16` service on the
   CI verify job exposed as `SYNAPSE_VERIFY_PG_URL` so the rest of the matrix stays on SQLite.
+- 2026-06-10 — **M9** ✅ (branch `feat/redis-multi-instance`): `apps/server/src/fanout.ts` —
+  `SYNAPSE_REDIS_URL` set → after every mutation the instance `PUBLISH`es `synapse:repo:<id>`
+  (after `store.flush()`, so a subscriber's re-read can never miss the rows the mutation wrote);
+  every instance `PSUBSCRIBE`s, ignores its own `instanceId`, re-reads the repo from the shared
+  M8 store, swaps its cache, and re-broadcasts the snapshot to its local room. The `redis` driver
+  is imported lazily (like `pg`); unset → single-instance path untouched. *Amendment to the plan's
+  "Redis TTLs mirroring the 90s in-memory TTL" line:* Redis carries no state, so no Redis TTLs —
+  lock/session expiry stays timestamp-based (`acquiredAt + ttlSec`, `lastSeen`) evaluated at read
+  time against the shared rows by every instance, which is the same guarantee without a second
+  source of truth. Exit: `verify:multi-instance` — two servers on shared Postgres + Redis, alice's
+  daemon on A, bob's on B; both servers see both sessions; alice's contract delta is readable in
+  `GET /state` on B and lands in bob's daemon's cached state via B's room broadcast. Runs on the
+  CI `postgres:16` + `redis:7` services (`SYNAPSE_VERIFY_{PG,REDIS}_URL`), SKIPs offline.
 - 2026-06-09 — **Phase A complete** (branch `foundation-hardening-m1-m4`):
   - **M1** ✅ `.github/workflows/ci.yml` (check + verify jobs, npm/venv caching) +
     `scripts/ci-verify-all.mjs` (one-build aggregate runner; `--only`, `SYNAPSE_VERIFY_SKIP`,

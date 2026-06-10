@@ -48,6 +48,24 @@ const states = new Map<string, TeamState>();
 const roomClients = new Map<string, Set<WebSocket>>();
 const log = createLogger("synapse-server");
 const metrics = new MetricsRegistry();
+// Multi-instance fan-out (plan M9): with SYNAPSE_REDIS_URL set, a mutation on
+// any instance PUBLISHes the repo channel; the others re-read the repo from
+// the shared store and re-broadcast to their local rooms. Unset → null, and
+// everything below behaves exactly as the single-instance path always has.
+const instanceId = randomUUID();
+const fanout = process.env.SYNAPSE_REDIS_URL
+  ? await (await import("./fanout.js")).createRedisFanout({
+      redisUrl: process.env.SYNAPSE_REDIS_URL,
+      instanceId,
+      store,
+      onRemoteChange: async (repoId) => {
+        const fresh = (await store.load(repoId)) ?? createEmptyTeamState(repoId);
+        states.set(repoId, fresh);
+        metrics.count("synapse_fanout_refreshes_total");
+        broadcast(repoId, envelope("state.snapshot", { teamState: fresh }));
+      }
+    })
+  : null;
 
 const httpServer = createServer((request, response) => {
   void handleHttp(request, response);
@@ -172,7 +190,9 @@ httpServer.listen(port, () => {
 // resumes from consistent rows.
 const shutdown = (): void => {
   httpServer.close();
-  void store.close().finally(() => process.exit(0));
+  void Promise.allSettled([fanout?.close()])
+    .then(() => store.close())
+    .finally(() => process.exit(0));
 };
 process.once("SIGINT", shutdown);
 process.once("SIGTERM", shutdown);
@@ -229,6 +249,7 @@ async function handleMessage(socket: WebSocket, fallbackRepoId: string, raw: str
     log.debug("message.applied", { type: message.type, repoId });
     send(socket, envelope("ack", { forId: message.id, ok: true }));
     broadcast(repoId, envelope("state.snapshot", { teamState: state }));
+    fanout?.publish(repoId);
   } catch (error) {
     const reason = error instanceof Error ? error.message : "unknown_error";
     metrics.count("synapse_message_failures_total", { reason: "apply_error" });
@@ -278,6 +299,7 @@ async function handleGitHubWebhook(
       const state = await getState(repoEvent.repoId);
       applyMessage(state, repoEvent.repoId, clientEnvelope("repo.event", repoEvent.payload), store);
       broadcast(repoEvent.repoId, envelope("state.snapshot", { teamState: state }));
+      fanout?.publish(repoEvent.repoId);
       writeJson(response, 202, {
         ok: true,
         repoId: repoEvent.repoId,
@@ -292,6 +314,7 @@ async function handleGitHubWebhook(
     const state = await getState(push.repoId);
     applyMessage(state, push.repoId, clientEnvelope("push.notify", push.payload), store);
     broadcast(push.repoId, envelope("state.snapshot", { teamState: state }));
+    fanout?.publish(push.repoId);
     writeJson(response, 202, {
       ok: true,
       repoId: push.repoId,

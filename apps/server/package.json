@@ -16,6 +16,7 @@
     "@synapse/protocol": "0.0.0",
     "better-sqlite3": "^12.10.0",
     "pg": "^8.21.0",
+    "redis": "^6.0.0",
     "ws": "^8.18.2"
   },
   "devDependencies": {
