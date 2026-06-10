@@ -221,6 +221,13 @@ export interface Session {
   startedAt: string;
   lastSeen: string;
   status: "active" | "idle" | "ended";
+  /**
+   * The git branch this session is working on, when known. Optional and
+   * additive: old clients never send it, detached HEAD omits it. Captured at
+   * session start, so it can lag a mid-session checkout until the next
+   * (re)connect.
+   */
+  branch?: string;
 }
 
 export interface EditLock {
@@ -240,6 +247,8 @@ export interface RecentPush {
   symbols?: SymbolId[];
   sha: string;
   pushedAt: string;
+  /** The branch the push landed on, when known (e.g. from the webhook `ref`). */
+  branch?: string;
 }
 
 export type RepoEventKind = "pull_request" | "pull_request_review" | "issue_comment";
@@ -331,6 +340,8 @@ export interface Conflict {
     memberLogin: string;
     sessionId: string;
     agentType: AgentType;
+    /** The counterpart's branch, when known (session branch or push branch). */
+    branch?: string;
   };
   detail: string;
   suggestion: string;
@@ -536,6 +547,7 @@ export type ClientMessage =
         summary: string;
         files: string[];
         symbols?: SymbolId[];
+        branch?: string;
       }
     >
   | WireEnvelope<

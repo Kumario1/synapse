@@ -188,7 +188,8 @@ export function evaluateConflicts(context: ConflictCheckContext): Conflict[] {
           counterpart: {
             memberLogin: push.memberId,
             sessionId: "push",
-            agentType: "other"
+            agentType: "other",
+            branch: push.branch
           },
           detail: `A recent push touched code related to ${targetSymbol.raw}: ${push.summary}`,
           suggestion: "Pull the latest base before continuing."
@@ -306,13 +307,14 @@ function activeOtherSessions(sessions: Session[], selfSessionId: string): Sessio
 function counterpartFor(
   sessions: Session[],
   sessionId: string
-): { memberLogin: string; sessionId: string; agentType: AgentType } {
+): { memberLogin: string; sessionId: string; agentType: AgentType; branch?: string } {
   const session = sessions.find((candidate) => candidate.id === sessionId);
 
   return {
     memberLogin: session?.memberLogin ?? session?.memberId ?? sessionId,
     sessionId,
-    agentType: session?.agentType ?? "other"
+    agentType: session?.agentType ?? "other",
+    branch: session?.branch
   };
 }
 
@@ -338,6 +340,7 @@ export {
   type AdaptiveSeverityOptions,
   type AdaptiveSeverityResult
 } from "./adaptive.js";
+export { applyBranchAwareness, type BranchAwarenessResult } from "./branch-aware.js";
 export {
   compareSignatures,
   contractChangeFor,

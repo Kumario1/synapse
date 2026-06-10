@@ -67,7 +67,8 @@ export function applyMessage(
         filesAffected: message.payload.files,
         symbols: message.payload.symbols,
         sha: message.payload.sha,
-        pushedAt: now
+        pushedAt: now,
+        branch: message.payload.branch
       });
       clearPushedLiveState(state, message.payload.files, message.payload.symbols);
       break;
