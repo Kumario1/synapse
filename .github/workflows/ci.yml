@@ -41,7 +41,8 @@ jobs:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_PASSWORD: postgres
+          # Ephemeral job-local database: trust auth, no credential at all.
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
         options: >-
@@ -70,4 +71,4 @@ jobs:
           # Hermetic: the runner also forces these, belt and suspenders.
           OPENROUTER_API_KEY: ""
           SYNAPSE_LLM_EXPLAIN: "0"
-          SYNAPSE_VERIFY_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
+          SYNAPSE_VERIFY_PG_URL: postgres://postgres@localhost:5432/postgres
