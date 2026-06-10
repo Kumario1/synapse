@@ -294,6 +294,20 @@ M15 negotiation ─→ D3 delta broadcast (if approved)
   `counterpart.branch`). Also restored the `verify:{reconnect,metrics,adaptive-severity,npm-pack}`
   + `verify:all` npm aliases that PR #34's package.json rewrite dropped (CI was unaffected —
   `ci-verify-all.mjs` discovers `scripts/verify-*.mjs` directly).
+- 2026-06-10 — **M7** ✅ (branch `refactor/cli-decomposition`): `apps/cli/src/index.ts` (3,100
+  lines) split into a 119-line dispatcher + focused modules with zero behavior change:
+  `daemon.ts` (HTTP surface + WS client + outbox + state/report/resolution helpers), `config.ts`
+  (RuntimeConfig, flags, git identity, local/team config, `cliEntrypoint`), `analysis.ts`
+  (analyzer adapters, source scanning, dependency graph, check targets), `briefings.ts`
+  (whatsup/why/session-start render), `hooks.ts` (Claude Code hook install + runtime),
+  `tunnel.ts`, `http.ts`, and `commands/{check,report,push,feedback,session,whatsup,why,join,
+  connect,up,keygen,doctor,analyze}.ts`. Two deliberate location-sensitive adjustments, behavior
+  identical: `cliEntrypoint()` now resolves `dist/index.js` as a sibling of the compiled module
+  (it is embedded in hook commands and must keep pointing at the dispatcher), and
+  `resolveServerEntry()`'s monorepo fallback gained one `../` hop (`dist/commands/`). Line-level
+  audit: every non-empty line of the old file accounted for verbatim in the new modules except
+  those two functions and added `export` keywords. Exit per plan: no new behavior; full verify
+  matrix green.
 - 2026-06-09 — **Phase A complete** (branch `foundation-hardening-m1-m4`):
   - **M1** ✅ `.github/workflows/ci.yml` (check + verify jobs, npm/venv caching) +
     `scripts/ci-verify-all.mjs` (one-build aggregate runner; `--only`, `SYNAPSE_VERIFY_SKIP`,
