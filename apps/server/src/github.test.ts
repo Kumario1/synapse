@@ -6,6 +6,7 @@ test("converts GitHub push payloads into push.notify payloads", () => {
   const push = gitHubPushToNotify(
     {
       after: "abc123",
+      ref: "refs/heads/feature-x",
       repository: { full_name: "Kumario1/synapse" },
       sender: { login: "alice" },
       head_commit: { message: "Update token contract\n\nbody" },
@@ -26,8 +27,24 @@ test("converts GitHub push payloads into push.notify payloads", () => {
     memberId: "alice",
     sha: "abc123",
     summary: "GitHub push: Update token contract",
-    files: ["src/auth/token.ts", "src/auth/login.ts", "src/old.ts"]
+    files: ["src/auth/token.ts", "src/auth/login.ts", "src/old.ts"],
+    branch: "feature-x"
   });
+});
+
+test("omits branch for non-branch refs and missing refs", () => {
+  const tagPush = gitHubPushToNotify({
+    after: "abc123",
+    ref: "refs/tags/v1.0.0",
+    commits: [{ modified: ["README.md"] }]
+  });
+  assert.equal("branch" in tagPush.payload, false);
+
+  const noRefPush = gitHubPushToNotify({
+    after: "abc123",
+    commits: [{ modified: ["README.md"] }]
+  });
+  assert.equal("branch" in noRefPush.payload, false);
 });
 
 test("uses repository full_name as repo id when no override is provided", () => {

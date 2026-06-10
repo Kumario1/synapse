@@ -172,6 +172,26 @@ env-gated and off by default; mutations stay in `apps/server/src/state.ts`, tran
 - Exit: `verify:adaptive-severity` — feed N dismissals for a rule via `synapse_feedback`, assert
   the next check reports `info` and that a differently-ruled conflict still warns.
 
+**M6.5 — Branch-aware conflict severity** *(new; first slice of F2/F4/F5
+branch awareness, pulled forward ahead of M7)*
+- Add optional `branch` field to `Session`, `RecentPush`, and
+  `Conflict.counterpart` (additive, `looseObject`-compatible). CLI captures
+  the local branch via `git rev-parse --abbrev-ref HEAD`; the GitHub webhook
+  derives it from the push payload's `ref`.
+- New `applyBranchAwareness` pass (mirrors M6's `applyAdaptiveSeverity`):
+  when a conflict's counterpart is on a different branch than the current
+  session, demote `dependency_changed`/`stale_base` from `warn` to `info`
+  (less immediately pressing across branches). `same_symbol_active`,
+  `same_symbol_unpushed`, and `contract_divergent` are never demoted — they
+  represent incompatibilities that will surface at merge time regardless of
+  branch. Unknown branch on either side → no change (old clients, detached
+  HEAD). Config knob `SYNAPSE_BRANCH_AWARE_SEVERITY=0` to disable; runs before
+  M6's adaptive pass so feedback-based demotion still has the final say.
+- Exit: `verify:branch-aware-severity` — two sessions on different branches
+  with a stale `dependency_changed`/`stale_base` conflict report `info`;
+  same-branch sessions and `contract_divergent`/`same_symbol_active` still
+  report `warn`.
+
 ### Phase B — Structure + scale-out backbone
 
 **M7 — CLI decomposition** *(new; finding #1 — do before breadth)*
@@ -237,8 +257,8 @@ env-gated and off by default; mutations stay in `apps/server/src/state.ts`, tran
 - **G6 fuzzing/property tests**: malformed-source fuzz for both analyzers; `resolutionInputsHash`
   symmetry properties.
 - **D3 incremental `state.delta`** (after M15, if approved), **C3/C4 external ingestion +
-  onboarding mode**, **F2/F4/F5 branch awareness, richer auto-resolution, rename tracking**,
-  **D3–D5 more languages/SCIP**, **E1 VS Code extension**, **E4 editor rules**.
+  onboarding mode**, **F4/F5 richer auto-resolution, rename tracking** (branch-awareness M6.5
+  done), **D3–D5 more languages/SCIP**, **E1 VS Code extension**, **E4 editor rules**.
 
 ---
 
@@ -257,6 +277,23 @@ M15 negotiation ─→ D3 delta broadcast (if approved)
 - 2026-06-09 — v2 plan written; ground-truthed against `main` @ `e353296`. Phase A execution begun
   (M1 first). Decisions D1–D5 await owner confirmation; defaults noted above are being followed,
   and no D-gated milestone is implemented before sign-off.
+- 2026-06-10 — M6.5 (branch-aware conflict severity) added to Phase A, slotted before M7 per owner
+  direction. Pulls forward the first slice of the deferred F2/F4/F5 branch-awareness backlog item;
+  remaining richer auto-resolution/rename-tracking stays deferred to Phase D.
+- 2026-06-10 — **M6.5** ✅ (branch `feat/branch-aware-severity`): optional `branch` on
+  `Session`/`RecentPush`/`Conflict.counterpart`/`push.notify` (additive, looseObject-compatible);
+  daemon captures the branch by reading `.git/HEAD` directly (the `git rev-parse --abbrev-ref HEAD`
+  answer without a subprocess on the hot path; handles linked-worktree `gitdir:` pointers, detached
+  HEAD → unknown); webhook derives it from the push `ref` (`refs/heads/X` only).
+  `applyBranchAwareness` in conflict-engine demotes cross-branch `dependency_changed`/`stale_base`
+  `warn`→`info`, never touches `same_symbol_active`/`same_symbol_unpushed`/`contract_divergent`,
+  no-ops on unknown branch, runs before the adaptive pass; `SYNAPSE_BRANCH_AWARE_SEVERITY=0`
+  opt-out; `synapse_branch_severity_demotions_total` metric. 5 unit tests +
+  `verify:branch-aware-severity` (4 daemons on 2 branches: cross-branch stale_base → info, opt-out
+  + same-branch still warn, cross-branch same_symbol_unpushed still warns and surfaces
+  `counterpart.branch`). Also restored the `verify:{reconnect,metrics,adaptive-severity,npm-pack}`
+  + `verify:all` npm aliases that PR #34's package.json rewrite dropped (CI was unaffected —
+  `ci-verify-all.mjs` discovers `scripts/verify-*.mjs` directly).
 - 2026-06-09 — **Phase A complete** (branch `foundation-hardening-m1-m4`):
   - **M1** ✅ `.github/workflows/ci.yml` (check + verify jobs, npm/venv caching) +
     `scripts/ci-verify-all.mjs` (one-build aggregate runner; `--only`, `SYNAPSE_VERIFY_SKIP`,

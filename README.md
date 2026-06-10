@@ -239,6 +239,7 @@ Credentials are sent via `Authorization: Bearer` (the server still accepts `?tok
 | **Observability** | JSON logs gated by `SYNAPSE_LOG_LEVEL` (default `info`) + Prometheus counters at `GET /metrics` |
 | **Ingress validation** | Every wire message is validated against shared zod schemas before any state mutation; WS/webhook bodies capped at 1MB (`SYNAPSE_MAX_PAYLOAD_BYTES`) |
 | **Adaptive severity** | `synapse_feedback` telemetry demotes a noisy rule (≥5 dismissals, ≥80% dismiss rate) from `warn` to `info`; detection never changes. Opt out with `SYNAPSE_ADAPTIVE_SEVERITY=0` |
+| **Branch-aware severity** | Cross-branch `dependency_changed`/`stale_base` conflicts demote `warn` → `info` (they bite at merge time, not on the next keystroke); merge-blocking rules (`same_symbol_*`, `contract_divergent`) never demote. Sessions/pushes carry their git branch (webhook pushes derive it from `ref`); unknown branch → no change. Opt out with `SYNAPSE_BRANCH_AWARE_SEVERITY=0` |
 
 **Install as a package** — `@synapse/cli` packs as a self-contained tarball (all five workspace packages, server, and the Python sidecar bundled):
 
@@ -280,6 +281,7 @@ Run with `npm run <script>`. See [`package.json`](package.json) for the complete
 | `verify:reconnect` | A delta emitted while the server is down still reaches the team after restart |
 | `verify:metrics` | Structured logs and `/metrics` counters |
 | `verify:adaptive-severity` | Feedback-tuned demotion of noisy warnings |
+| `verify:branch-aware-severity` | Cross-branch `stale_base`/`dependency_changed` demote to `info`; merge-blocking rules and same-branch conflicts still warn |
 | `verify:docker` | Builds the server image, boots it, drives one edit→report |
 | `verify:npm-pack` | Packs the CLI, installs into a fresh project, joins, drives a check |
 | `verify:github-webhook` / `verify:github-briefing` | GitHub push/PR/review/comment webhooks and catch-ups |

@@ -4,6 +4,7 @@ type RepoEventPayload = Extract<ClientMessage, { type: "repo.event" }>["payload"
 
 interface GitHubPushPayload {
   after?: unknown;
+  ref?: unknown;
   repository?: { full_name?: unknown };
   pusher?: { name?: unknown };
   sender?: { login?: unknown };
@@ -95,6 +96,7 @@ export function gitHubPushToNotify(
     stringAt(push.pusher, "name") ||
     "github";
   const summary = summaryFor(push, files.length);
+  const branch = branchFromRef(push.ref);
 
   return {
     repoId,
@@ -103,9 +105,20 @@ export function gitHubPushToNotify(
       memberId,
       sha,
       summary,
-      files
+      files,
+      ...(branch ? { branch } : {})
     }
   };
+}
+
+/** `refs/heads/main` → `main`; tags and anything else stay unknown. */
+function branchFromRef(ref: unknown): string | undefined {
+  if (typeof ref !== "string") {
+    return undefined;
+  }
+
+  const match = /^refs\/heads\/(.+)$/u.exec(ref);
+  return match ? match[1] : undefined;
 }
 
 export function gitHubRepoEventToNotify(
