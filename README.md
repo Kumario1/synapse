@@ -227,7 +227,9 @@ Resolved at server startup. `/health` and the GitHub webhook (its own HMAC) stay
 | **shared-token** | `SYNAPSE_AUTH_TOKEN` | Any valid token reads/writes any project |
 | **project-key** | `SYNAPSE_MASTER_SECRET` | Real tenancy: key = `base64url(HMAC-SHA256(secret, repoId))`, authorizes only its project (checked at handshake + per-message) |
 
-Credentials are sent via `Authorization: Bearer` (the server still accepts `?token=` for back-compat), keeping tokens out of URL query strings and access logs. State store selected by `SYNAPSE_DB_PATH`: unset → ephemeral in-memory SQLite; a file path → file-backed SQLite (WAL) that survives restarts.
+Credentials are sent via `Authorization: Bearer` (the server still accepts `?token=` for back-compat), keeping tokens out of URL query strings and access logs.
+
+**State store** — persisted per entity (sessions, locks, deltas, pushes, events, resolutions, summaries, feedback as rows; every mutation writes only its own row). Backend selection: `SYNAPSE_DATABASE_URL` → Postgres (the shared-database backend for multi-instance deployments; the `pg` driver loads only when selected); else `SYNAPSE_DB_PATH` → file-backed SQLite (WAL) that survives restarts; neither → ephemeral in-memory SQLite. Pre-existing SQLite snapshot databases migrate to per-entity rows automatically on first boot.
 
 ---
 
@@ -277,7 +279,8 @@ Run with `npm run <script>`. See [`package.json`](package.json) for the complete
 | `verify:connect` | `synapse connect` wires up every agent (configs + rules), idempotently, and the MCP server advertises hook-equivalent `instructions` |
 | `verify:auth` / `verify:tenancy` | Shared-token and project-key auth paths |
 | `verify:up` / `verify:up-tunnel` / `verify:doctor` | Multi-machine setup, tunnels, and preflight diagnostics |
-| `verify:persistence` | State survives a server restart |
+| `verify:persistence` | State survives a server restart (SQLite, per-entity rows) |
+| `verify:persistence-pg` | Same durability proof on Postgres incl. SIGKILL; runs when `SYNAPSE_VERIFY_PG_URL`/`SYNAPSE_DATABASE_URL` is set (CI service), SKIPs offline |
 | `verify:reconnect` | A delta emitted while the server is down still reaches the team after restart |
 | `verify:metrics` | Structured logs and `/metrics` counters |
 | `verify:adaptive-severity` | Feedback-tuned demotion of noisy warnings |

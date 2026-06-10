@@ -1,41 +1,109 @@
-import { dirname } from "node:path";
 import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import Database from "better-sqlite3";
-import { createEmptyTeamState, type TeamState } from "@synapse/protocol";
+import {
+  createEmptyTeamState,
+  type ConflictFeedback,
+  type ContractDelta,
+  type ContractResolution,
+  type EditLock,
+  type RecentPush,
+  type RecentRepoEvent,
+  type Session,
+  type SessionSummary,
+  type TeamState
+} from "@synapse/protocol";
 
 /**
- * Durable home for per-repo {@link TeamState}. The server keeps an in-memory
- * write-through cache for the hot path and persists through this interface so a
- * restart does not lose live sessions, unpushed deltas, recent pushes, or
- * resolutions.
+ * Durable home for per-repo {@link TeamState}, persisted **per entity** (plan
+ * M8 / decision D2): every in-memory mutation in `state.ts` emits the matching
+ * row operation here, so two server instances on a shared database no longer
+ * clobber each other's snapshots and a write costs O(row), not O(state).
  *
- * The interface is deliberately storage-agnostic — the SQLite implementation
- * below stores one JSON snapshot per repo, but a future Postgres/Redis
- * implementation (for multi-instance fan-out) can satisfy the same contract
- * without touching server logic.
+ * In-memory `TeamState` remains the source of truth on the hot path;
+ * `load(repoId)` rebuilds it from rows for boot hydration. Mutation ops are
+ * synchronous fire-and-forget from the caller's perspective — the SQLite
+ * backend applies them inline, the Postgres backend serializes them on an
+ * internal queue (`flush()` awaits it). A crash can persist a partially
+ * applied message; that is acceptable for advisory coordination state (TTLs
+ * and caps self-heal) and is the same window a lost process always had.
  */
-export interface StateStore {
-  /** The persisted state for a repo, or `null` if none has been stored yet. */
-  load(repoId: string): TeamState | null;
-  /** Persist the full current state for a repo (last-writer-wins). */
-  save(repoId: string, state: TeamState): void;
-  /** Every repo id that has persisted state — used to hydrate on boot. */
-  listRepoIds(): string[];
-  /** Release the underlying handle. */
-  close(): void;
+export interface StateStoreOps {
+  upsertSession(repoId: string, session: Session): void;
+  upsertEditLock(repoId: string, lock: EditLock): void;
+  deleteEditLock(repoId: string, sessionId: string, symbolRaw: string): void;
+  deleteEditLocksForSession(repoId: string, sessionId: string): void;
+  upsertDelta(repoId: string, delta: ContractDelta): void;
+  deleteDelta(repoId: string, deltaId: string): void;
+  appendPush(repoId: string, push: RecentPush, cap: number): void;
+  appendRepoEvent(repoId: string, event: RecentRepoEvent, cap: number): void;
+  /** Replaces any prior resolution for the symbol (at most one per symbol). */
+  upsertResolution(repoId: string, resolution: ContractResolution): void;
+  deleteResolution(repoId: string, symbolRaw: string, inputsHash: string): void;
+  /** Replaces any prior summary for the session, trimmed to `cap` newest. */
+  appendSummary(repoId: string, summary: SessionSummary, cap: number): void;
+  /** Replaces any prior feedback with the same id, trimmed to `cap` newest. */
+  appendFeedback(repoId: string, feedback: ConflictFeedback, cap: number): void;
 }
 
+export interface StateStore extends StateStoreOps {
+  /** The persisted state for a repo rebuilt from rows, or `null` if none. */
+  load(repoId: string): Promise<TeamState | null>;
+  /** Every repo id with persisted rows — used to hydrate on boot. */
+  listRepoIds(): Promise<string[]>;
+  /** Resolves when every mutation op issued so far has been applied. */
+  flush(): Promise<void>;
+  /** Flush and release the underlying handle. */
+  close(): Promise<void>;
+}
+
+/** Default for callers that mutate state without persistence (tests, CLI). */
+export const noopStateStore: StateStoreOps = {
+  upsertSession: () => {},
+  upsertEditLock: () => {},
+  deleteEditLock: () => {},
+  deleteEditLocksForSession: () => {},
+  upsertDelta: () => {},
+  deleteDelta: () => {},
+  appendPush: () => {},
+  appendRepoEvent: () => {},
+  upsertResolution: () => {},
+  deleteResolution: () => {},
+  appendSummary: () => {},
+  appendFeedback: () => {}
+};
+
 /**
- * SQLite-backed {@link StateStore}. One row per repo holds the serialized
- * `TeamState`, so the well-tested pure mutation logic in `state.ts` is reused
- * verbatim and only its result is persisted. WAL mode keeps writes durable and
- * non-blocking for the concurrent read on `/state`.
+ * The shared logical schema, used verbatim by both backends. One row per
+ * entity, JSON payload, and a monotonically increasing order column (`seq` —
+ * SQLite's implicit rowid / a Postgres BIGSERIAL) so `load()` can rebuild the
+ * arrays in their in-memory order: append-ordered for sessions, locks, deltas,
+ * and resolutions; newest-first for pushes, repo events, summaries, feedback.
+ * Upserts preserve `seq` (in-memory replace-in-place); the `append*` ops
+ * delete + insert so a re-sent id moves to the front, exactly like the
+ * in-memory `unshift` path.
+ */
+export const ENTITY_TABLES = {
+  sessions: { keys: ["id"], newestFirst: false, field: "sessions" },
+  edit_locks: { keys: ["session_id", "symbol_raw"], newestFirst: false, field: "editLocks" },
+  deltas: { keys: ["id"], newestFirst: false, field: "unpushedDeltas" },
+  pushes: { keys: ["id"], newestFirst: true, field: "recentPushes" },
+  repo_events: { keys: ["id"], newestFirst: true, field: "recentRepoEvents" },
+  resolutions: { keys: ["symbol_raw"], newestFirst: false, field: "resolutions" },
+  summaries: { keys: ["session_id"], newestFirst: true, field: "sessionSummaries" },
+  feedback: { keys: ["id"], newestFirst: true, field: "conflictFeedback" }
+} as const;
+
+export type EntityTable = keyof typeof ENTITY_TABLES;
+
+/**
+ * SQLite-backed {@link StateStore} on per-entity tables. Synchronous under the
+ * hood (better-sqlite3), so ops are applied before the call returns and
+ * `flush()` is a no-op. Remains the default backend; `SYNAPSE_DATABASE_URL`
+ * selects Postgres instead (see `store-pg.ts`).
  */
 export class SqliteStateStore implements StateStore {
   private readonly db: Database.Database;
-  private readonly selectOne: Database.Statement<[string]>;
-  private readonly upsert: Database.Statement<[string, string, string]>;
-  private readonly selectIds: Database.Statement<[]>;
 
   constructor(path: string) {
     if (path !== ":memory:") {
@@ -44,80 +112,246 @@ export class SqliteStateStore implements StateStore {
     this.db = new Database(path);
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("busy_timeout = 5000");
-    this.db.exec(
-      `CREATE TABLE IF NOT EXISTS team_state (
-         repo_id    TEXT PRIMARY KEY,
-         state      TEXT NOT NULL,
-         updated_at TEXT NOT NULL
-       )`
-    );
 
-    this.selectOne = this.db.prepare("SELECT state FROM team_state WHERE repo_id = ?");
-    this.upsert = this.db.prepare(
-      `INSERT INTO team_state (repo_id, state, updated_at)
-       VALUES (?, ?, ?)
-       ON CONFLICT(repo_id) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at`
-    );
-    this.selectIds = this.db.prepare("SELECT repo_id FROM team_state");
-  }
-
-  load(repoId: string): TeamState | null {
-    const row = this.selectOne.get(repoId) as { state: string } | undefined;
-    if (!row) {
-      return null;
+    for (const [table, spec] of Object.entries(ENTITY_TABLES)) {
+      const keyColumns = spec.keys.map((key) => `${key} TEXT NOT NULL`).join(", ");
+      this.db.exec(
+        `CREATE TABLE IF NOT EXISTS ${table} (
+           repo_id TEXT NOT NULL,
+           ${keyColumns},
+           payload TEXT NOT NULL,
+           PRIMARY KEY (repo_id, ${spec.keys.join(", ")})
+         )`
+      );
     }
 
-    try {
-      return normalizeTeamState(JSON.parse(row.state), repoId);
-    } catch {
-      // A corrupt row should not crash the server; treat it as no state.
-      return null;
+    this.migrateLegacySnapshots();
+  }
+
+  upsertSession(repoId: string, session: Session): void {
+    this.upsertRow("sessions", repoId, [session.id], session);
+  }
+
+  upsertEditLock(repoId: string, lock: EditLock): void {
+    this.upsertRow("edit_locks", repoId, [lock.sessionId, lock.symbolId.raw], lock);
+  }
+
+  deleteEditLock(repoId: string, sessionId: string, symbolRaw: string): void {
+    this.db
+      .prepare("DELETE FROM edit_locks WHERE repo_id = ? AND session_id = ? AND symbol_raw = ?")
+      .run(repoId, sessionId, symbolRaw);
+  }
+
+  deleteEditLocksForSession(repoId: string, sessionId: string): void {
+    this.db
+      .prepare("DELETE FROM edit_locks WHERE repo_id = ? AND session_id = ?")
+      .run(repoId, sessionId);
+  }
+
+  upsertDelta(repoId: string, delta: ContractDelta): void {
+    this.upsertRow("deltas", repoId, [delta.id], delta);
+  }
+
+  deleteDelta(repoId: string, deltaId: string): void {
+    this.db.prepare("DELETE FROM deltas WHERE repo_id = ? AND id = ?").run(repoId, deltaId);
+  }
+
+  appendPush(repoId: string, push: RecentPush, cap: number): void {
+    this.appendRow("pushes", repoId, [push.id], push, cap);
+  }
+
+  appendRepoEvent(repoId: string, event: RecentRepoEvent, cap: number): void {
+    this.appendRow("repo_events", repoId, [event.id], event, cap);
+  }
+
+  upsertResolution(repoId: string, resolution: ContractResolution): void {
+    this.upsertRow("resolutions", repoId, [resolution.symbol.raw], resolution);
+  }
+
+  deleteResolution(repoId: string, symbolRaw: string, inputsHash: string): void {
+    // The hash guards against deleting a newer resolution that already
+    // replaced the invalidated one under the same symbol key.
+    this.db
+      .prepare(
+        "DELETE FROM resolutions WHERE repo_id = ? AND symbol_raw = ? AND payload ->> '$.inputsHash' = ?"
+      )
+      .run(repoId, symbolRaw, inputsHash);
+  }
+
+  appendSummary(repoId: string, summary: SessionSummary, cap: number): void {
+    this.appendRow("summaries", repoId, [summary.sessionId], summary, cap);
+  }
+
+  appendFeedback(repoId: string, feedback: ConflictFeedback, cap: number): void {
+    this.appendRow("feedback", repoId, [feedback.id], feedback, cap);
+  }
+
+  load(repoId: string): Promise<TeamState | null> {
+    const state = createEmptyTeamState(repoId);
+    let any = false;
+
+    for (const [table, spec] of Object.entries(ENTITY_TABLES)) {
+      const rows = this.db
+        .prepare(
+          `SELECT payload FROM ${table} WHERE repo_id = ? ORDER BY rowid ${spec.newestFirst ? "DESC" : "ASC"}`
+        )
+        .all(repoId) as { payload: string }[];
+      const parsed = rows.flatMap((row) => {
+        try {
+          return [JSON.parse(row.payload)];
+        } catch {
+          return []; // a corrupt row should not crash the server
+        }
+      });
+      if (parsed.length > 0) {
+        any = true;
+        (state as unknown as Record<string, unknown>)[spec.field] = parsed;
+      }
     }
+
+    return Promise.resolve(any ? state : null);
   }
 
-  save(repoId: string, state: TeamState): void {
-    this.upsert.run(repoId, JSON.stringify(state), new Date().toISOString());
+  listRepoIds(): Promise<string[]> {
+    const ids = new Set<string>();
+    for (const table of Object.keys(ENTITY_TABLES)) {
+      const rows = this.db.prepare(`SELECT DISTINCT repo_id FROM ${table}`).all() as {
+        repo_id: string;
+      }[];
+      for (const row of rows) {
+        ids.add(row.repo_id);
+      }
+    }
+    return Promise.resolve([...ids]);
   }
 
-  listRepoIds(): string[] {
-    return (this.selectIds.all() as { repo_id: string }[]).map((row) => row.repo_id);
+  flush(): Promise<void> {
+    return Promise.resolve();
   }
 
-  close(): void {
+  close(): Promise<void> {
     this.db.close();
+    return Promise.resolve();
+  }
+
+  private upsertRow(table: EntityTable, repoId: string, keys: string[], payload: unknown): void {
+    const spec = ENTITY_TABLES[table];
+    const placeholders = ["?", ...spec.keys.map(() => "?"), "?"].join(", ");
+    // ON CONFLICT UPDATE preserves rowid, mirroring replace-in-place order.
+    this.db
+      .prepare(
+        `INSERT INTO ${table} (repo_id, ${spec.keys.join(", ")}, payload)
+         VALUES (${placeholders})
+         ON CONFLICT(repo_id, ${spec.keys.join(", ")}) DO UPDATE SET payload = excluded.payload`
+      )
+      .run(repoId, ...keys, JSON.stringify(payload));
+  }
+
+  private appendRow(
+    table: EntityTable,
+    repoId: string,
+    keys: string[],
+    payload: unknown,
+    cap: number
+  ): void {
+    const spec = ENTITY_TABLES[table];
+    const keyPredicate = spec.keys.map((key) => `${key} = ?`).join(" AND ");
+    // Delete + insert (not upsert) so a re-sent key takes a fresh rowid and
+    // moves to the front, exactly like the in-memory unshift-after-filter.
+    this.db.prepare(`DELETE FROM ${table} WHERE repo_id = ? AND ${keyPredicate}`).run(repoId, ...keys);
+    this.db
+      .prepare(
+        `INSERT INTO ${table} (repo_id, ${spec.keys.join(", ")}, payload)
+         VALUES (?, ${spec.keys.map(() => "?").join(", ")}, ?)`
+      )
+      .run(repoId, ...keys, JSON.stringify(payload));
+    this.db
+      .prepare(
+        `DELETE FROM ${table} WHERE repo_id = ? AND rowid NOT IN (
+           SELECT rowid FROM ${table} WHERE repo_id = ? ORDER BY rowid DESC LIMIT ?
+         )`
+      )
+      .run(repoId, repoId, cap);
+  }
+
+  /**
+   * One-time upgrade from the pre-M8 layout (one JSON snapshot per repo in
+   * `team_state`): explode every snapshot into per-entity rows, then drop the
+   * legacy table so the migration never reruns. Self-hosts upgrading in place
+   * keep their live sessions, deltas, pushes, and resolutions.
+   */
+  private migrateLegacySnapshots(): void {
+    const legacy = this.db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'team_state'")
+      .get();
+    if (!legacy) {
+      return;
+    }
+
+    const rows = this.db.prepare("SELECT repo_id, state FROM team_state").all() as {
+      repo_id: string;
+      state: string;
+    }[];
+
+    const migrate = this.db.transaction(() => {
+      for (const row of rows) {
+        let snapshot: Partial<TeamState>;
+        try {
+          snapshot = JSON.parse(row.state) as Partial<TeamState>;
+        } catch {
+          continue; // a corrupt legacy row is dropped, as load() always treated it
+        }
+
+        for (const session of snapshot.sessions ?? []) {
+          this.upsertSession(row.repo_id, session);
+        }
+        for (const lock of snapshot.editLocks ?? []) {
+          this.upsertEditLock(row.repo_id, lock);
+        }
+        for (const delta of snapshot.unpushedDeltas ?? []) {
+          this.upsertDelta(row.repo_id, delta);
+        }
+        // Newest-first arrays insert oldest-first so seq order reproduces them.
+        for (const push of [...(snapshot.recentPushes ?? [])].reverse()) {
+          this.appendPush(row.repo_id, push, 50);
+        }
+        for (const event of [...(snapshot.recentRepoEvents ?? [])].reverse()) {
+          this.appendRepoEvent(row.repo_id, event, 50);
+        }
+        for (const resolution of snapshot.resolutions ?? []) {
+          this.upsertResolution(row.repo_id, resolution);
+        }
+        for (const summary of [...(snapshot.sessionSummaries ?? [])].reverse()) {
+          this.appendSummary(row.repo_id, summary, 50);
+        }
+        for (const feedback of [...(snapshot.conflictFeedback ?? [])].reverse()) {
+          this.appendFeedback(row.repo_id, feedback, 100);
+        }
+      }
+      this.db.exec("DROP TABLE team_state");
+    });
+    migrate();
   }
 }
 
 /**
- * Build the configured store. `SYNAPSE_DB_PATH` selects a durable file; unset
- * means an in-memory database, so tests and ephemeral runs stay hermetic with
- * the exact pre-persistence behavior.
+ * Build the configured store. `SYNAPSE_DATABASE_URL` selects Postgres (the
+ * multi-instance backend, plan M8/M9); else `SYNAPSE_DB_PATH` selects a durable
+ * SQLite file; unset means in-memory SQLite, so tests and ephemeral runs stay
+ * hermetic. The `pg` driver is imported lazily so installs without it (the
+ * bundled CLI tarball) never pay for — or crash on — a backend they don't use.
  */
-export function createStateStore(path: string | undefined = process.env.SYNAPSE_DB_PATH): StateStore {
+export async function createStateStore(
+  options: { databaseUrl?: string; path?: string } = {}
+): Promise<StateStore> {
+  const databaseUrl = options.databaseUrl ?? process.env.SYNAPSE_DATABASE_URL;
+  if (databaseUrl) {
+    const { PostgresStateStore } = await import("./store-pg.js");
+    const store = new PostgresStateStore(databaseUrl);
+    await store.init();
+    return store;
+  }
+
+  const path = options.path ?? process.env.SYNAPSE_DB_PATH;
   return new SqliteStateStore(path && path.length > 0 ? path : ":memory:");
-}
-
-/**
- * Defend against a snapshot written by an older shape: guarantee every
- * `TeamState` array exists so the server never reads `undefined` for a field a
- * future or past version omitted.
- */
-function normalizeTeamState(value: unknown, repoId: string): TeamState {
-  const base = createEmptyTeamState(repoId);
-  if (!value || typeof value !== "object") {
-    return base;
-  }
-
-  const partial = value as Partial<TeamState>;
-  return {
-    repoId,
-    sessions: partial.sessions ?? base.sessions,
-    editLocks: partial.editLocks ?? base.editLocks,
-    unpushedDeltas: partial.unpushedDeltas ?? base.unpushedDeltas,
-    recentPushes: partial.recentPushes ?? base.recentPushes,
-    recentRepoEvents: partial.recentRepoEvents ?? base.recentRepoEvents,
-    resolutions: partial.resolutions ?? base.resolutions,
-    sessionSummaries: partial.sessionSummaries ?? base.sessionSummaries,
-    conflictFeedback: partial.conflictFeedback ?? base.conflictFeedback
-  };
 }

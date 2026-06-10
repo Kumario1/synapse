@@ -39,10 +39,11 @@ const authMode: "project-key" | "shared-token" | "open" = masterSecret
   : authToken
     ? "shared-token"
     : "open";
-// Durable per-repo state. In-memory cache is the hot-path working copy; the
-// store persists every mutation so a restart resumes live state. With no
-// SYNAPSE_DB_PATH the store is in-memory and behavior is identical to before.
-const store = createStateStore();
+// Durable per-repo state. In-memory cache is the hot-path working copy; every
+// mutation in state.ts emits the matching per-entity store op (plan M8), so a
+// restart resumes live state row-by-row. SYNAPSE_DATABASE_URL selects
+// Postgres; SYNAPSE_DB_PATH a SQLite file; neither means in-memory SQLite.
+const store = await createStateStore();
 const states = new Map<string, TeamState>();
 const roomClients = new Map<string, Set<WebSocket>>();
 const log = createLogger("synapse-server");
@@ -81,7 +82,7 @@ async function handleHttp(request: IncomingMessage, response: ServerResponse): P
       writeJson(response, 401, { error: "unauthorized" });
       return;
     }
-    writeJson(response, 200, getState(repoId));
+    writeJson(response, 200, await getState(repoId));
     return;
   }
 
@@ -130,7 +131,9 @@ wsServer.on("connection", (socket, request) => {
   socketAlive.set(socket, true);
   metrics.count("synapse_ws_connections_total");
   log.info("ws.open", { repoId });
-  send(socket, envelope("state.snapshot", { teamState: getState(repoId) }));
+  void getState(repoId).then((state) =>
+    send(socket, envelope("state.snapshot", { teamState: state }))
+  );
 
   socket.on("pong", () => {
     socketAlive.set(socket, true);
@@ -165,15 +168,11 @@ httpServer.listen(port, () => {
   console.log(`synapse server listening on http://localhost:${port}`);
 });
 
-// Flush every cached repo and close the store cleanly on shutdown so a restart
-// resumes from a consistent snapshot.
+// Drain the store's op queue and close it cleanly on shutdown so a restart
+// resumes from consistent rows.
 const shutdown = (): void => {
-  for (const repoId of states.keys()) {
-    persist(repoId);
-  }
-  store.close();
   httpServer.close();
-  process.exit(0);
+  void store.close().finally(() => process.exit(0));
 };
 process.once("SIGINT", shutdown);
 process.once("SIGTERM", shutdown);
@@ -223,13 +222,13 @@ async function handleMessage(socket: WebSocket, fallbackRepoId: string, raw: str
 
     const repoId = messageRepoId ?? fallbackRepoId;
     const startedAt = performance.now();
-    applyMessage(getState(repoId), repoId, message);
-    persist(repoId);
+    const state = await getState(repoId);
+    applyMessage(state, repoId, message, store);
     metrics.count("synapse_messages_total", { type: message.type });
     metrics.observe("synapse_message_apply_ms", performance.now() - startedAt);
     log.debug("message.applied", { type: message.type, repoId });
     send(socket, envelope("ack", { forId: message.id, ok: true }));
-    broadcast(repoId, envelope("state.snapshot", { teamState: getState(repoId) }));
+    broadcast(repoId, envelope("state.snapshot", { teamState: state }));
   } catch (error) {
     const reason = error instanceof Error ? error.message : "unknown_error";
     metrics.count("synapse_message_failures_total", { reason: "apply_error" });
@@ -276,13 +275,9 @@ async function handleGitHubWebhook(
 
     if (event !== "push") {
       const repoEvent = gitHubRepoEventToNotify(event, payload, url.searchParams.get("repoId"));
-      applyMessage(
-        getState(repoEvent.repoId),
-        repoEvent.repoId,
-        clientEnvelope("repo.event", repoEvent.payload)
-      );
-      persist(repoEvent.repoId);
-      broadcast(repoEvent.repoId, envelope("state.snapshot", { teamState: getState(repoEvent.repoId) }));
+      const state = await getState(repoEvent.repoId);
+      applyMessage(state, repoEvent.repoId, clientEnvelope("repo.event", repoEvent.payload), store);
+      broadcast(repoEvent.repoId, envelope("state.snapshot", { teamState: state }));
       writeJson(response, 202, {
         ok: true,
         repoId: repoEvent.repoId,
@@ -294,13 +289,9 @@ async function handleGitHubWebhook(
     }
 
     const push = gitHubPushToNotify(payload, url.searchParams.get("repoId"));
-    applyMessage(
-      getState(push.repoId),
-      push.repoId,
-      clientEnvelope("push.notify", push.payload)
-    );
-    persist(push.repoId);
-    broadcast(push.repoId, envelope("state.snapshot", { teamState: getState(push.repoId) }));
+    const state = await getState(push.repoId);
+    applyMessage(state, push.repoId, clientEnvelope("push.notify", push.payload), store);
+    broadcast(push.repoId, envelope("state.snapshot", { teamState: state }));
     writeJson(response, 202, {
       ok: true,
       repoId: push.repoId,
@@ -317,24 +308,22 @@ function repoEventSupported(event: string): boolean {
   return event === "pull_request" || event === "pull_request_review" || event === "issue_comment";
 }
 
-function getState(repoId: string): TeamState {
+async function getState(repoId: string): Promise<TeamState> {
   let state = states.get(repoId);
   if (!state) {
-    // Cache miss: resume the persisted snapshot if one exists, else start fresh.
-    state = store.load(repoId) ?? createEmptyTeamState(repoId);
-    states.set(repoId, state);
+    // Cache miss: rebuild from persisted rows if any exist, else start fresh.
+    state = (await store.load(repoId)) ?? createEmptyTeamState(repoId);
+    // A concurrent hydration may have won while we awaited; keep the first.
+    const existing = states.get(repoId);
+    if (existing) {
+      state = existing;
+    } else {
+      states.set(repoId, state);
+    }
   }
 
-  pruneExpiredLocks(state);
+  pruneExpiredLocks(state, store);
   return state;
-}
-
-/** Persist a repo's state after a mutation so it survives a restart. */
-function persist(repoId: string): void {
-  const state = states.get(repoId);
-  if (state) {
-    store.save(repoId, state);
-  }
 }
 
 function joinRoom(repoId: string, socket: WebSocket): void {
