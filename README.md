@@ -99,6 +99,49 @@ SYNAPSE_AUTH_TOKEN=<token> synapse up
 
 ---
 
+## Try it: see a conflict (two-agent demo)
+
+The fastest way to watch Synapse work. Start with the local dry-run (one machine, no teammate, no Claude needed), then do the real two-machine run.
+
+### Local dry-run — two agents, one machine
+
+Two daemons against one local server, driven by the CLI. Proves the whole detect loop.
+
+```bash
+# 1. A throwaway project with a symbol to fight over
+mkdir -p /tmp/synapse-demo/src && cd /tmp/synapse-demo && git init -q
+printf 'export function area(w: number, h: number): number {\n  return w * h;\n}\n' > src/widget.ts
+git add -A && git -c user.email=demo@local -c user.name=demo commit -qm init
+
+# 2. Terminal 1 — server + Alice's daemon
+synapse up --serve --member alice --session alice --port 4011 --repo-id demo/playground
+
+# 3. Terminal 2 — Bob's daemon against the same server
+synapse daemon --member bob --session bob --port 4012 --server ws://localhost:4010 --repo-id demo/playground
+
+# 4. Terminal 3 — Alice records a change, Bob checks the same symbol first
+synapse report --port 4011 --file src/widget.ts --symbol ts:src/widget.ts#area --summary "area() now takes a Rect"
+synapse check  --port 4012 --file src/widget.ts --symbol ts:src/widget.ts#area
+#  → verdict: "warn", rule: "same_symbol_unpushed", counterpart: "alice"
+synapse whatsup --port 4012
+```
+
+### Two machines, with Claude Code
+
+Use the Quick Start above to bring up the host (`synapse up --serve --tunnel`) and teammate (`SYNAPSE_AUTH_TOKEN=<token> synapse up`). Then **restart Claude Code** in the repo, confirm the room with `synapse doctor` (it should list the other person as a peer), and drive it **in order**:
+
+- **Alice** asks her Claude: *"Edit `src/auth/token.ts` so `validate` returns `Token | null`."* Let it **save** — the PostToolUse hook reports the delta.
+- **Bob** asks his Claude: *"Edit `src/auth/token.ts` so `validate` returns `Promise<boolean>`."* Before it writes, Bob's PreToolUse hook surfaces *"⚠ Synapse: alice has an unpushed change to `validate` — coordinate before editing,"* and Claude asks Bob how to proceed.
+
+### Gotchas (why a demo can look like nothing happened)
+
+1. **Share a real token.** `--tunnel` requires auth; without `SYNAPSE_AUTH_TOKEN` a random token is generated and printed only once. Pass your own so the teammate can join. `synapse doctor` shows `token=unset → 401` when this is wrong.
+2. **Different sessions only.** A session never warns about its *own* change — editing twice from one machine/session shows nothing.
+3. **Order matters.** The editor must **save first** (PostToolUse reports) before the other agent's PreToolUse check can see it.
+4. **Restart Claude Code** after `synapse up` so it loads the freshly installed hooks. Don't commit `.claude/settings.json` — the hook path is machine-specific; each person's `synapse up` writes their own.
+
+---
+
 ## Works with any agent, not just Claude Code
 
 Claude Code gets `PreToolUse` / `PostToolUse` / `SessionStart` hooks that fire `synapse_check` before edits, `synapse_report` after edits, and a `synapse_whatsup` catch-up at session start. Every other agent gets the **same behavior** through MCP — `synapse join` (and `synapse connect`) sets it up automatically:
