@@ -308,6 +308,20 @@ M15 negotiation ─→ D3 delta broadcast (if approved)
   audit: every non-empty line of the old file accounted for verbatim in the new modules except
   those two functions and added `export` keywords. Exit per plan: no new behavior; full verify
   matrix green.
+- 2026-06-10 — **M8** ✅ (branch `feat/per-entity-store`): `StateStore` rewritten to per-entity row
+  ops (`upsertSession`, `upsertEditLock`/`deleteEditLock(+ForSession)`, `upsertDelta`/`deleteDelta`,
+  `appendPush`/`appendRepoEvent`/`appendSummary`/`appendFeedback` with the in-memory caps,
+  `upsertResolution`/`deleteResolution`; async `load`/`listRepoIds`/`flush`/`close`).
+  `applyMessage(state, repoId, message, store = noop)` emits the matching op alongside every
+  in-memory mutation (memory stays the source of truth); `pruneExpiredLocks` deletes expired lock
+  rows too. `SqliteStateStore` re-implemented on per-entity tables (rowid ordering; one-time
+  automatic migration from the legacy `team_state` snapshot table, then drops it).
+  `PostgresStateStore` (`store-pg.ts`, `pg` imported lazily so the bundled CLI never needs it)
+  selected by `SYNAPSE_DATABASE_URL`, ops serialized on an internal queue (`flush()` awaits).
+  `store.test.ts` parameterized over both backends (Postgres variants run when
+  `SYNAPSE_VERIFY_PG_URL`/`SYNAPSE_DATABASE_URL` is set); `verify:persistence` still green;
+  new `verify:persistence-pg` (SIGKILL durability; SKIPs offline) + a `postgres:16` service on the
+  CI verify job exposed as `SYNAPSE_VERIFY_PG_URL` so the rest of the matrix stays on SQLite.
 - 2026-06-09 — **Phase A complete** (branch `foundation-hardening-m1-m4`):
   - **M1** ✅ `.github/workflows/ci.yml` (check + verify jobs, npm/venv caching) +
     `scripts/ci-verify-all.mjs` (one-build aggregate runner; `--only`, `SYNAPSE_VERIFY_SKIP`,

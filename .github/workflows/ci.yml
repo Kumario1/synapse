@@ -34,6 +34,21 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    services:
+      # Backs verify-persistence-pg + the Postgres variants of store.test.ts.
+      # Exposed as SYNAPSE_VERIFY_PG_URL (not SYNAPSE_DATABASE_URL) so the rest
+      # of the matrix keeps exercising the default SQLite backend.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -55,3 +70,4 @@ jobs:
           # Hermetic: the runner also forces these, belt and suspenders.
           OPENROUTER_API_KEY: ""
           SYNAPSE_LLM_EXPLAIN: "0"
+          SYNAPSE_VERIFY_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
