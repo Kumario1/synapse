@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createRequire } from "node:module";
@@ -22,6 +22,7 @@ import {
 } from "@synapse/analyzer-py";
 import {
   applyAdaptiveSeverity,
+  applyBranchAwareness,
   contractChangeFor,
   emptyDependencyGraph,
   enrichConflicts,
@@ -407,13 +408,26 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
           state: teamState,
           graph
         });
+        // Branch awareness (M6.5): cross-branch dependency_changed/stale_base
+        // demote warn → info (they only bite at merge time); merge-blocking
+        // rules are never demoted. Runs before the adaptive pass so the team's
+        // explicit feedback has the final say. SYNAPSE_BRANCH_AWARE_SEVERITY=0
+        // disables.
+        const branchAware =
+          process.env.SYNAPSE_BRANCH_AWARE_SEVERITY === "0"
+            ? { conflicts: rawConflicts, demotedRules: [] }
+            : applyBranchAwareness(rawConflicts, currentGitBranch(config.worktreeRoot));
+        for (const rule of branchAware.demotedRules) {
+          metrics.count("synapse_branch_severity_demotions_total", { rule });
+          log.info("severity.branch_demoted", { rule });
+        }
         // Adaptive severity (F1): demote warn rules this team chronically
         // dismisses, from the explicit feedback already in shared state.
         // Deterministic, never promotes; SYNAPSE_ADAPTIVE_SEVERITY=0 disables.
         const adaptive =
           process.env.SYNAPSE_ADAPTIVE_SEVERITY === "0"
-            ? { conflicts: rawConflicts, demotedRules: [] }
-            : applyAdaptiveSeverity(rawConflicts, teamState.conflictFeedback);
+            ? { conflicts: branchAware.conflicts, demotedRules: [] }
+            : applyAdaptiveSeverity(branchAware.conflicts, teamState.conflictFeedback);
         const conflicts = adaptive.conflicts;
         for (const rule of adaptive.demotedRules) {
           metrics.count("synapse_severity_demotions_total", { rule });
@@ -498,7 +512,8 @@ async function startDaemon(config: RuntimeConfig): Promise<void> {
           sha,
           summary: body.summary ?? `Pushed ${files.join(", ")}`,
           files,
-          symbols: body.symbols
+          symbols: body.symbols,
+          branch: currentGitBranch(config.worktreeRoot)
         });
 
         writeJson(response, 200, {
@@ -1843,6 +1858,36 @@ function gitWorktreeRoot(): string {
   return git(["rev-parse", "--show-toplevel"]) || commandCwd();
 }
 
+/**
+ * The current branch of the daemon's worktree (the `git rev-parse --abbrev-ref
+ * HEAD` answer), or undefined when unknown: detached HEAD, not a git repo, or
+ * an unreadable layout. Reads `.git/HEAD` directly instead of spawning git
+ * because this also runs on the `synapse_check` hot path (p95 ≤ 50ms budget),
+ * and it must resolve against `worktreeRoot` — not the command cwd, which for
+ * a daemon can be a different directory entirely.
+ */
+function currentGitBranch(worktreeRoot: string): string | undefined {
+  try {
+    const dotGit = resolve(worktreeRoot, ".git");
+    let gitDir = dotGit;
+
+    if (statSync(dotGit).isFile()) {
+      // Linked worktree/submodule: `.git` is a pointer file, `gitdir: <path>`.
+      const pointer = /^gitdir:\s*(.+?)\s*$/mu.exec(readFileSync(dotGit, "utf8"));
+      if (!pointer) {
+        return undefined;
+      }
+      gitDir = resolve(worktreeRoot, pointer[1]);
+    }
+
+    const head = readFileSync(join(gitDir, "HEAD"), "utf8").trim();
+    const ref = /^ref:\s*refs\/heads\/(.+)$/u.exec(head);
+    return ref ? ref[1] : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Best display name for this member: git identity, then $USER, then "local". */
 function gitMember(): string {
   return (
@@ -1948,7 +1993,8 @@ function makeSession(config: RuntimeConfig, task: string | null = null): Session
     lastTask: task,
     startedAt: now,
     lastSeen: now,
-    status: "active"
+    status: "active",
+    branch: currentGitBranch(config.worktreeRoot)
   };
 }
 

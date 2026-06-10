@@ -56,7 +56,8 @@ const session = z.looseObject({
   lastTask: z.string().nullable(),
   startedAt: z.string(),
   lastSeen: z.string(),
-  status: z.enum(["active", "idle", "ended"])
+  status: z.enum(["active", "idle", "ended"]),
+  branch: z.string().optional()
 });
 
 const contractDelta = z.looseObject({
@@ -160,7 +161,8 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
       sha: z.string(),
       summary: z.string(),
       files: z.array(z.string()),
-      symbols: z.array(symbolId).optional()
+      symbols: z.array(symbolId).optional(),
+      branch: z.string().optional()
     })
   }),
   z.looseObject({
