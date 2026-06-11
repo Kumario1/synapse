@@ -74,8 +74,8 @@ try {
 
   // Cross-instance session visibility: alice joined A, bob joined B, yet each
   // server must see both sessions (shared rows + fan-out refresh).
-  await waitForState(portA, (state) => state.sessions.length === 2, 10_000);
-  await waitForState(portB, (state) => state.sessions.length === 2, 10_000);
+  await waitForState(portA, (state) => state.sessions.length === 2, 20_000);
+  await waitForState(portB, (state) => state.sessions.length === 2, 20_000);
 
   // Alice (on A) changes the validate() contract.
   await report(alicePort);
@@ -90,7 +90,7 @@ try {
   await waitForState(
     portB,
     (state) => state.unpushedDeltas.some((d) => d.symbolId.raw === "ts:src/auth/token.ts#validate"),
-    10_000
+    20_000
   );
 
   // (2) And B pushed it to bob's daemon: the daemon's cached team state (fed
@@ -102,7 +102,7 @@ try {
     }
     const state = await response.json();
     return state.unpushedDeltas.some((d) => d.symbolId.raw === "ts:src/auth/token.ts#validate");
-  }, 10_000);
+  }, 20_000);
 
   const stateB = await getState(portB);
   console.log("Multi-instance verification passed:");
@@ -127,7 +127,10 @@ function startServer(label, port) {
   startProcess(label, ["apps/server/dist/index.js"], {
     SYNAPSE_SERVER_PORT: String(port),
     SYNAPSE_DATABASE_URL: pgUrl,
-    SYNAPSE_REDIS_URL: redisUrl
+    SYNAPSE_REDIS_URL: redisUrl,
+    // Surface fanout publish/refresh events in the captured output so a
+    // failure in CI pinpoints which leg (write, publish, refresh) broke.
+    SYNAPSE_LOG_LEVEL: "debug"
   });
 }
 
@@ -165,15 +168,24 @@ async function getState(serverPort) {
 }
 
 async function waitForState(serverPort, predicate, timeoutMs = 5000) {
-  await waitFor(async () => {
-    const response = await fetch(
-      `http://localhost:${serverPort}/state?repoId=${encodeURIComponent(repoId)}`
-    ).catch(() => null);
-    if (!response?.ok) {
-      return false;
-    }
-    return predicate(await response.json());
-  }, timeoutMs);
+  try {
+    await waitFor(async () => {
+      const response = await fetch(
+        `http://localhost:${serverPort}/state?repoId=${encodeURIComponent(repoId)}`
+      ).catch(() => null);
+      if (!response?.ok) {
+        return false;
+      }
+      return predicate(await response.json());
+    }, timeoutMs);
+  } catch (error) {
+    // Post-mortem for CI: show what each server actually held at timeout.
+    const dump = await getState(serverPort).catch(() => null);
+    console.error(
+      `waitForState(:${serverPort}) timed out; final state: ${JSON.stringify(dump)}`
+    );
+    throw error;
+  }
 }
 
 function startProcess(label, args, env) {

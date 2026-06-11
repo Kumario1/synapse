@@ -335,6 +335,13 @@ M15 negotiation ─→ D3 delta broadcast (if approved)
   daemon on A, bob's on B; both servers see both sessions; alice's contract delta is readable in
   `GET /state` on B and lands in bob's daemon's cached state via B's room broadcast. Runs on the
   CI `postgres:16` + `redis:7` services (`SYNAPSE_VERIFY_{PG,REDIS}_URL`), SKIPs offline.
+  Two races found by stress-looping the verify against local Postgres+Redis (reproduced ~1-in-4,
+  then 20/20 green after the fixes): (1) concurrent `CREATE TABLE IF NOT EXISTS` from two booting
+  instances crashes one (Postgres catalog race) → DDL now serialized under `pg_advisory_lock`;
+  (2) a cache reload that started before a local mutation could complete after it and roll the
+  in-memory state back (lost update — a session vanished until the next heartbeat) → every
+  cache-touching path (message apply, webhook apply, snapshot reads, remote refresh) now runs
+  under a per-repo async mutex (`withRepo`), with dirty-marking + single-flight loads inside it.
 - 2026-06-09 — **Phase A complete** (branch `foundation-hardening-m1-m4`):
   - **M1** ✅ `.github/workflows/ci.yml` (check + verify jobs, npm/venv caching) +
     `scripts/ci-verify-all.mjs` (one-build aggregate runner; `--only`, `SYNAPSE_VERIFY_SKIP`,

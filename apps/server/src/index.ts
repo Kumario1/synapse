@@ -59,13 +59,39 @@ const fanout = process.env.SYNAPSE_REDIS_URL
       instanceId,
       store,
       onRemoteChange: async (repoId) => {
-        const fresh = (await store.load(repoId)) ?? createEmptyTeamState(repoId);
-        states.set(repoId, fresh);
+        // Mark-dirty + reload under the repo lock: the reload is serialized
+        // with local message applies, so it can never roll the cache back to
+        // a pre-mutation read (lost update).
+        const fresh = await withRepo(repoId, () => {
+          dirtyRepos.add(repoId);
+          return getState(repoId);
+        });
         metrics.count("synapse_fanout_refreshes_total");
+        log.debug("fanout.refreshed", { repoId, sessions: fresh.sessions.length });
         broadcast(repoId, envelope("state.snapshot", { teamState: fresh }));
       }
     })
   : null;
+// Repos whose cache must be re-read from the shared store (a remote instance
+// mutated them), and the one in-flight load per repo that everyone awaits.
+const dirtyRepos = new Set<string>();
+const loadsInFlight = new Map<string, Promise<TeamState>>();
+// Per-repo async mutex: every path that reads-then-writes the repo's cache
+// entry (message apply, webhook apply, snapshot reads, remote refresh) runs
+// inside it. Without this, a load that started before a local mutation can
+// complete after it and roll the cached state back (a lost update — observed
+// as a session vanishing until the next heartbeat).
+const repoLocks = new Map<string, Promise<unknown>>();
+
+function withRepo<T>(repoId: string, fn: () => Promise<T>): Promise<T> {
+  const previous = repoLocks.get(repoId) ?? Promise.resolve();
+  const next = previous.then(fn, fn);
+  repoLocks.set(
+    repoId,
+    next.catch(() => {})
+  );
+  return next;
+}
 
 const httpServer = createServer((request, response) => {
   void handleHttp(request, response);
@@ -100,7 +126,7 @@ async function handleHttp(request: IncomingMessage, response: ServerResponse): P
       writeJson(response, 401, { error: "unauthorized" });
       return;
     }
-    writeJson(response, 200, await getState(repoId));
+    writeJson(response, 200, await withRepo(repoId, () => getState(repoId)));
     return;
   }
 
@@ -149,7 +175,7 @@ wsServer.on("connection", (socket, request) => {
   socketAlive.set(socket, true);
   metrics.count("synapse_ws_connections_total");
   log.info("ws.open", { repoId });
-  void getState(repoId).then((state) =>
+  void withRepo(repoId, () => getState(repoId)).then((state) =>
     send(socket, envelope("state.snapshot", { teamState: state }))
   );
 
@@ -242,11 +268,14 @@ async function handleMessage(socket: WebSocket, fallbackRepoId: string, raw: str
 
     const repoId = messageRepoId ?? fallbackRepoId;
     const startedAt = performance.now();
-    const state = await getState(repoId);
-    applyMessage(state, repoId, message, store);
+    const state = await withRepo(repoId, async () => {
+      const current = await getState(repoId);
+      applyMessage(current, repoId, message, store);
+      return current;
+    });
     metrics.count("synapse_messages_total", { type: message.type });
     metrics.observe("synapse_message_apply_ms", performance.now() - startedAt);
-    log.debug("message.applied", { type: message.type, repoId });
+    log.debug("message.applied", { type: message.type, repoId, sessions: state.sessions.length });
     send(socket, envelope("ack", { forId: message.id, ok: true }));
     broadcast(repoId, envelope("state.snapshot", { teamState: state }));
     fanout?.publish(repoId);
@@ -296,8 +325,11 @@ async function handleGitHubWebhook(
 
     if (event !== "push") {
       const repoEvent = gitHubRepoEventToNotify(event, payload, url.searchParams.get("repoId"));
-      const state = await getState(repoEvent.repoId);
-      applyMessage(state, repoEvent.repoId, clientEnvelope("repo.event", repoEvent.payload), store);
+      const state = await withRepo(repoEvent.repoId, async () => {
+        const current = await getState(repoEvent.repoId);
+        applyMessage(current, repoEvent.repoId, clientEnvelope("repo.event", repoEvent.payload), store);
+        return current;
+      });
       broadcast(repoEvent.repoId, envelope("state.snapshot", { teamState: state }));
       fanout?.publish(repoEvent.repoId);
       writeJson(response, 202, {
@@ -311,8 +343,11 @@ async function handleGitHubWebhook(
     }
 
     const push = gitHubPushToNotify(payload, url.searchParams.get("repoId"));
-    const state = await getState(push.repoId);
-    applyMessage(state, push.repoId, clientEnvelope("push.notify", push.payload), store);
+    const state = await withRepo(push.repoId, async () => {
+      const current = await getState(push.repoId);
+      applyMessage(current, push.repoId, clientEnvelope("push.notify", push.payload), store);
+      return current;
+    });
     broadcast(push.repoId, envelope("state.snapshot", { teamState: state }));
     fanout?.publish(push.repoId);
     writeJson(response, 202, {
@@ -333,16 +368,25 @@ function repoEventSupported(event: string): boolean {
 
 async function getState(repoId: string): Promise<TeamState> {
   let state = states.get(repoId);
-  if (!state) {
-    // Cache miss: rebuild from persisted rows if any exist, else start fresh.
-    state = (await store.load(repoId)) ?? createEmptyTeamState(repoId);
-    // A concurrent hydration may have won while we awaited; keep the first.
-    const existing = states.get(repoId);
-    if (existing) {
-      state = existing;
-    } else {
-      states.set(repoId, state);
+  // Cache miss or remote change: rebuild from persisted rows. One load per
+  // repo is in flight at a time and every caller awaits the same promise, so
+  // a slow load can never overwrite a cache entry that a faster path (or a
+  // local mutation) refreshed in the meantime. Loop: a dirty mark set while a
+  // load was already in flight needs one more pass to be observed.
+  while (!state || dirtyRepos.has(repoId)) {
+    let inFlight = loadsInFlight.get(repoId);
+    if (!inFlight) {
+      inFlight = (async () => {
+        dirtyRepos.delete(repoId);
+        const fresh = (await store.load(repoId)) ?? createEmptyTeamState(repoId);
+        states.set(repoId, fresh);
+        loadsInFlight.delete(repoId);
+        log.debug("state.loaded", { repoId, sessions: fresh.sessions.length });
+        return fresh;
+      })();
+      loadsInFlight.set(repoId, inFlight);
     }
+    state = await inFlight;
   }
 
   pruneExpiredLocks(state, store);

@@ -66,7 +66,13 @@ export async function createRedisFanout(options: {
     publish(repoId: string): void {
       void options.store
         .flush()
-        .then(() => publisher.publish(`${CHANNEL_PREFIX}${repoId}`, options.instanceId))
+        .then(async () => {
+          const receivers = await publisher.publish(
+            `${CHANNEL_PREFIX}${repoId}`,
+            options.instanceId
+          );
+          log.debug("fanout.published", { repoId, receivers });
+        })
         .catch((error: unknown) => {
           log.error("fanout.publish_failed", {
             repoId,
