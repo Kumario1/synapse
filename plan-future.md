@@ -354,7 +354,8 @@ M15 negotiation ─→ D3 delta broadcast (if approved)
   CI `postgres:16` + `redis:7` services (`SYNAPSE_VERIFY_{PG,REDIS}_URL`), SKIPs offline.
   Two races found by stress-looping the verify against local Postgres+Redis (reproduced ~1-in-4,
   then 20/20 green after the fixes): (1) concurrent `CREATE TABLE IF NOT EXISTS` from two booting
-  instances crashes one (Postgres catalog race) → DDL now serialized under `pg_advisory_lock`;
+  instances crashes one (Postgres catalog race) → DDL now serialized under `pg_advisory_lock`, with
+  unlock attempted before the pooled client is released even when DDL fails;
   (2) a cache reload that started before a local mutation could complete after it and roll the
   in-memory state back (lost update — a session vanished until the next heartbeat) → every
   cache-touching path (message apply, webhook apply, snapshot reads, remote refresh) now runs
@@ -428,8 +429,9 @@ M15 negotiation ─→ D3 delta broadcast (if approved)
 - 2026-06-11 — **RAG memory (C1/C2)** ✅ (branch `feat/rag-memory`): `apps/server/src/embeddings.ts`
   (optional OpenAI-compatible provider seam: `SYNAPSE_EMBED_BASE_URL/_API_KEY/_MODEL/_DIM`,
   `SYNAPSE_RAG=0` kill switch) + `memory.ts` (`VectorMemory` on the M8 Postgres via pgvector:
-  advisory-locked DDL, fire-and-forget serialized indexing of session summaries / resolutions /
-  repo events — prose only, never code — and cosine top-k `recall`). New authed `POST /recall`
+  advisory-locked DDL using the same unlock-on-failure helper, fire-and-forget serialized indexing
+  of session summaries / resolutions / repo events — prose only, never code — and cosine top-k
+  `recall`). New authed `POST /recall`
   ({repoId, query} → {degraded, matches}). Daemon `synapse_why` is now hybrid: the deterministic
   lexical floor always answers; `mergeRecallIntoWhy` appends vector-only hits (deduped, capped,
   numbered-citation contract preserved, `rag: true`); any failure/degradation leaves the floor
