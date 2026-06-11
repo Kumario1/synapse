@@ -408,6 +408,18 @@ M15 negotiation ─→ D3 delta broadcast (if approved)
   Python/Go sidecars answer or reject each request with a structured error and report healthy
   after the corpus (one bad file never takes an analyzer down). Sidecar sections skip without
   their runtime; CI runs everything.
+- 2026-06-11 — **RAG memory (C1/C2)** ✅ (branch `feat/rag-memory`): `apps/server/src/embeddings.ts`
+  (optional OpenAI-compatible provider seam: `SYNAPSE_EMBED_BASE_URL/_API_KEY/_MODEL/_DIM`,
+  `SYNAPSE_RAG=0` kill switch) + `memory.ts` (`VectorMemory` on the M8 Postgres via pgvector:
+  advisory-locked DDL, fire-and-forget serialized indexing of session summaries / resolutions /
+  repo events — prose only, never code — and cosine top-k `recall`). New authed `POST /recall`
+  ({repoId, query} → {degraded, matches}). Daemon `synapse_why` is now hybrid: the deterministic
+  lexical floor always answers; `mergeRecallIntoWhy` appends vector-only hits (deduped, capped,
+  numbered-citation contract preserved, `rag: true`); any failure/degradation leaves the floor
+  untouched. CI postgres image → `pgvector/pgvector:pg16`. Exit: `verify:why-rag` — deterministic
+  synonym-group stub embeddings; a question with zero lexical overlap (no substring hits) recalls
+  the right memory and cites it first; the floor alone finds nothing; a provider-less server
+  answers `degraded: true`. SKIPs without Postgres/pgvector.
 - 2026-06-09 — **Phase A complete** (branch `foundation-hardening-m1-m4`):
   - **M1** ✅ `.github/workflows/ci.yml` (check + verify jobs, npm/venv caching) +
     `scripts/ci-verify-all.mjs` (one-build aggregate runner; `--only`, `SYNAPSE_VERIFY_SKIP`,

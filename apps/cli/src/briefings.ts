@@ -1,4 +1,5 @@
 import type {
+  RecallMatch,
   SynapseWhatsupResponse,
   SynapseWhyResponse,
   SynapseWhySource,
@@ -159,6 +160,52 @@ export function buildWhyResponse(
     answer,
     sources
   };
+}
+
+/**
+ * Hybrid recall (plan C1/C2): fold the server's vector-memory matches into a
+ * deterministic `why` answer. Strictly additive — the lexical floor's sources
+ * keep their rank; vector-only hits append after them (deduped by reference
+ * then title), and the answer is rebuilt with the same numbered-citation
+ * format so every line still cites a source.
+ */
+export function mergeRecallIntoWhy(
+  response: SynapseWhyResponse,
+  matches: RecallMatch[],
+  limit?: number
+): SynapseWhyResponse {
+  const cap = clampWhyLimit(limit);
+  const seen = new Set(
+    response.sources.map((source) => source.reference ?? source.title)
+  );
+  const added: SynapseWhySource[] = [];
+  for (const match of matches) {
+    const key = match.reference ?? match.title;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    added.push({
+      kind: match.kind,
+      title: match.title,
+      summary: match.summary,
+      createdAt: match.createdAt,
+      score: match.score,
+      ...(match.reference ? { reference: match.reference } : {})
+    });
+  }
+
+  if (added.length === 0) {
+    return response;
+  }
+
+  const sources = [...response.sources, ...added].slice(0, cap);
+  const answer = [
+    `Found ${sources.length} Synapse memor${sources.length === 1 ? "y" : "ies"} related to "${response.question}":`,
+    ...sources.map((source, index) => `${index + 1}. ${source.title} — ${source.summary}`)
+  ].join("\n");
+
+  return { ...response, rag: true, answer, sources };
 }
 
 function whySources(state: TeamState): SynapseWhySource[] {
