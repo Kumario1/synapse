@@ -259,7 +259,10 @@ export async function buildDependencyGraph(
  * which is already on `conflict.analysis.resolution`.
  */
 export function isTypeScriptLike(filePath: string): boolean {
-  return /\.(cts|mts|tsx?|jsx?)$/u.test(filePath);
+  // `.cjs` is deliberately excluded: `module.exports` assignments are invisible
+  // to the extractor, so treating .cjs as analyzable would silence its changes
+  // entirely — the file-level fallback at least reports that the file moved.
+  return /\.(cts|mts|tsx?|jsx?|mjs)$/u.test(filePath);
 }
 
 export function isPythonLike(filePath: string): boolean {

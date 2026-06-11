@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { dirname, posix } from "node:path";
 import {
+  ArrowFunction,
+  FunctionExpression,
   ClassDeclaration,
   EnumDeclaration,
   FunctionDeclaration,
@@ -65,12 +67,14 @@ export function extractTypeScriptDependencyGraph(
 ): ExtractTypeScriptDependencyGraphResult {
   const project = createProject();
   const fileSymbols = new Map<string, CodeSymbol[]>();
+  const fileExports = new Map<string, Map<string, SymbolId>>();
   const symbolById = new Map<string, CodeSymbol>();
 
   for (const file of input.files) {
     const sourceFile = project.createSourceFile(file.filePath, file.source, { overwrite: true });
     const symbols = extractSymbolsFromSourceFile(sourceFile, file.filePath);
     fileSymbols.set(normalizePath(file.filePath), symbols);
+    fileExports.set(normalizePath(file.filePath), exportedNameMap(sourceFile, file.filePath));
     for (const symbol of symbols) {
       symbolById.set(symbol.id.raw, symbol);
     }
@@ -81,7 +85,7 @@ export function extractTypeScriptDependencyGraph(
   for (const file of input.files) {
     const filePath = normalizePath(file.filePath);
     const sourceFile = project.getSourceFileOrThrow(filePath);
-    const imports = importedSymbolMap(sourceFile, filePath, fileSymbols);
+    const imports = importedSymbolMap(sourceFile, filePath, fileSymbols, fileExports);
     const symbols = fileSymbols.get(filePath) ?? [];
 
     for (const symbol of symbols) {
@@ -183,9 +187,9 @@ function createProject(): Project {
 function extractSymbolsFromSourceFile(sourceFile: SourceFile, filePath: string): CodeSymbol[] {
   const symbols = new Map<string, CodeSymbol>();
 
-  for (const declarations of sourceFile.getExportedDeclarations().values()) {
+  for (const [exportName, declarations] of sourceFile.getExportedDeclarations().entries()) {
     for (const declaration of declarations) {
-      for (const symbol of symbolsForDeclaration(sourceFile, filePath, declaration)) {
+      for (const symbol of symbolsForDeclaration(sourceFile, filePath, declaration, exportName)) {
         symbols.set(symbol.id.raw, symbol);
       }
     }
@@ -194,10 +198,33 @@ function extractSymbolsFromSourceFile(sourceFile: SourceFile, filePath: string):
   return [...symbols.values()].sort((a, b) => a.id.raw.localeCompare(b.id.raw));
 }
 
+/**
+ * Exported-name → symbol id for one file. Captures what the *importer* sees —
+ * in particular `default`, which can point at a declaration whose own name
+ * differs (`export default function Panel`), so default-import edges resolve
+ * to the real symbol instead of looking for one literally named "default".
+ */
+function exportedNameMap(sourceFile: SourceFile, filePath: string): Map<string, SymbolId> {
+  const exports = new Map<string, SymbolId>();
+
+  for (const [exportName, declarations] of sourceFile.getExportedDeclarations().entries()) {
+    for (const declaration of declarations) {
+      const [symbol] = symbolsForDeclaration(sourceFile, filePath, declaration, exportName);
+      if (symbol) {
+        exports.set(exportName, symbol.id);
+        break;
+      }
+    }
+  }
+
+  return exports;
+}
+
 function importedSymbolMap(
   sourceFile: SourceFile,
   filePath: string,
-  fileSymbols: Map<string, CodeSymbol[]>
+  fileSymbols: Map<string, CodeSymbol[]>,
+  fileExports: Map<string, Map<string, SymbolId>>
 ): Map<string, SymbolId> {
   const imports = new Map<string, SymbolId>();
 
@@ -212,21 +239,30 @@ function importedSymbolMap(
     }
 
     const targetSymbols = fileSymbols.get(targetPath) ?? [];
+    const targetExports = fileExports.get(targetPath) ?? new Map<string, SymbolId>();
 
     for (const namedImport of declaration.getNamedImports()) {
       const importedName = namedImport.getName();
       const localName = namedImport.getAliasNode()?.getText() ?? importedName;
-      const targetSymbol = targetSymbols.find((symbol) => symbol.name === importedName);
+      // Export-name lookup first (handles `export { X as Y }`), then the
+      // symbol's own name (pre-existing behavior for plain named exports).
+      const targetSymbol =
+        targetExports.get(importedName) ??
+        targetSymbols.find((symbol) => symbol.name === importedName)?.id;
       if (targetSymbol) {
-        imports.set(localName, targetSymbol.id);
+        imports.set(localName, targetSymbol);
       }
     }
 
     const defaultImport = declaration.getDefaultImport();
     if (defaultImport) {
-      const targetSymbol = targetSymbols.find((symbol) => symbol.name === "default");
+      // `export default function Panel` stores the symbol under "Panel"; the
+      // export map knows "default" points at it.
+      const targetSymbol =
+        targetExports.get("default") ??
+        targetSymbols.find((symbol) => symbol.name === "default")?.id;
       if (targetSymbol) {
-        imports.set(defaultImport.getText(), targetSymbol.id);
+        imports.set(defaultImport.getText(), targetSymbol);
       }
     }
   }
@@ -252,8 +288,12 @@ function resolveRelativeModule(
     `${base}.cts`,
     `${base}.js`,
     `${base}.jsx`,
+    `${base}.mjs`,
     `${base}/index.ts`,
-    `${base}/index.tsx`
+    `${base}/index.tsx`,
+    `${base}/index.js`,
+    `${base}/index.jsx`,
+    `${base}/index.mjs`
   ];
 
   return candidates.find((candidate) => fileSymbols.has(candidate)) ?? null;
@@ -297,7 +337,8 @@ function nodeForSymbol(sourceFile: SourceFile, symbol: CodeSymbol): Node | null 
 function symbolsForDeclaration(
   sourceFile: SourceFile,
   filePath: string,
-  declaration: Node
+  declaration: Node,
+  exportName?: string
 ): CodeSymbol[] {
   if (Node.isFunctionDeclaration(declaration)) {
     return symbolName(declaration) ? [functionSymbol(sourceFile, filePath, declaration)] : [];
@@ -321,6 +362,25 @@ function symbolsForDeclaration(
 
   if (Node.isVariableDeclaration(declaration)) {
     return [variableSymbol(sourceFile, filePath, declaration)];
+  }
+
+  // `export default (props) => …` / `export default function () {}`: the
+  // declaration is the expression itself (common for JSX components). Name it
+  // by its export so the contract is tracked instead of silently skipped.
+  if (
+    exportName &&
+    (Node.isArrowFunction(declaration) || Node.isFunctionExpression(declaration))
+  ) {
+    return [
+      buildSymbol({
+        sourceFile,
+        filePath,
+        node: declaration,
+        kind: "function",
+        name: exportName,
+        signature: callableSignature("function", exportName, declaration)
+      })
+    ];
   }
 
   return [];
@@ -472,7 +532,7 @@ function buildSymbol(input: {
 function callableSignature(
   label: "function" | "method",
   name: string,
-  declaration: FunctionDeclaration | MethodDeclaration
+  declaration: FunctionDeclaration | MethodDeclaration | ArrowFunction | FunctionExpression
 ): Signature {
   const params = declaration.getParameters().map((param): SignatureParam => {
     const type = param.getType().getText(param);
