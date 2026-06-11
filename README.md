@@ -231,6 +231,8 @@ Credentials are sent via `Authorization: Bearer` (the server still accepts `?tok
 
 **State store** — persisted per entity (sessions, locks, deltas, pushes, events, resolutions, summaries, feedback as rows; every mutation writes only its own row). Backend selection: `SYNAPSE_DATABASE_URL` → Postgres (the shared-database backend for multi-instance deployments; the `pg` driver loads only when selected); else `SYNAPSE_DB_PATH` → file-backed SQLite (WAL) that survives restarts; neither → ephemeral in-memory SQLite. Pre-existing SQLite snapshot databases migrate to per-entity rows automatically on first boot.
 
+**Multi-instance** — set `SYNAPSE_REDIS_URL` (alongside a shared `SYNAPSE_DATABASE_URL`) to run several server instances behind a load balancer: after a mutation, the instance publishes the repo's Redis channel; the others re-read that repo from the shared store and re-broadcast the fresh snapshot to their local rooms. Redis carries no state — it is purely the wake-up signal (the `redis` driver loads only when selected), and lock/session expiry stays timestamp-based against the shared rows, so every instance evaluates the same liveness. Unset → the single-instance path, unchanged.
+
 ---
 
 ## Reliability & operations
@@ -281,6 +283,7 @@ Run with `npm run <script>`. See [`package.json`](package.json) for the complete
 | `verify:up` / `verify:up-tunnel` / `verify:doctor` | Multi-machine setup, tunnels, and preflight diagnostics |
 | `verify:persistence` | State survives a server restart (SQLite, per-entity rows) |
 | `verify:persistence-pg` | Same durability proof on Postgres incl. SIGKILL; runs when `SYNAPSE_VERIFY_PG_URL`/`SYNAPSE_DATABASE_URL` is set (CI service), SKIPs offline |
+| `verify:multi-instance` | Two servers on shared Postgres + Redis, daemons split across them; a report on A is readable in `GET /state` on B and pushed to B's daemon. Needs `SYNAPSE_VERIFY_PG_URL` + `SYNAPSE_VERIFY_REDIS_URL` (CI services), SKIPs offline |
 | `verify:reconnect` | A delta emitted while the server is down still reaches the team after restart |
 | `verify:metrics` | Structured logs and `/metrics` counters |
 | `verify:adaptive-severity` | Feedback-tuned demotion of noisy warnings |
