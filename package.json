@@ -38,6 +38,7 @@
     "verify:tsx-check": "npm run build && node scripts/verify-tsx-check.mjs",
     "verify:go-check": "npm run build && npm run setup:analyzer-go && node scripts/verify-go-check.mjs",
     "verify:protocol-compat": "npm run build && node scripts/verify-protocol-compat.mjs",
+    "verify:security": "npm run build && node scripts/verify-security.mjs",
     "verify:hooks": "npm run build && node scripts/verify-hooks.mjs",
     "verify:session-summary": "npm run build && node scripts/verify-session-summary.mjs",
     "verify:session-start": "npm run build && node scripts/verify-session-start.mjs",
