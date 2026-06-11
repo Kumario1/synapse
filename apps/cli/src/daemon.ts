@@ -414,6 +414,12 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
           neighborsOf,
           sendToServer
         );
+        await seedContractSnapshotsForFiles(
+          config,
+          contractSnapshots,
+          body,
+          analysisCache
+        );
 
         writeJson(response, 200, {
           verdict: verdictFor(conflicts),
@@ -832,6 +838,31 @@ function contractParses(proposedContract: string | null): boolean {
   }
 }
 
+async function seedContractSnapshotsForFiles(
+  config: RuntimeConfig,
+  contractSnapshots: Map<string, CodeSymbol[]>,
+  body: Partial<SynapseCheckRequest>,
+  cache?: AnalysisCache
+): Promise<void> {
+  const seen = new Set<string>();
+
+  for (const [index, filePath] of (body.files ?? []).entries()) {
+    if (seen.has(filePath) || !isAnalyzable(filePath)) {
+      continue;
+    }
+    seen.add(filePath);
+
+    try {
+      contractSnapshots.set(filePath, await extractSymbolsForFile(config, filePath, cache));
+    } catch (error) {
+      if (body.symbols?.[index]) {
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
 async function reportContractChanges(
   config: RuntimeConfig,
   contractSnapshots: Map<string, CodeSymbol[]>,
@@ -961,4 +992,3 @@ function summarizeSymbolChange(changeKind: ContractDelta["changeKind"], rawSymbo
       return `Renamed ${rawSymbolId}`;
   }
 }
-
