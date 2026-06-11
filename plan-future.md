@@ -376,6 +376,18 @@ M15 negotiation ─→ D3 delta broadcast (if approved)
   `verify:go-check` mirroring `verify-python-check` — two worktrees rewrite `Validate` to
   incompatible return types → `contract_divergent` + deterministic block resolution; SKIPs without
   the built binary. 4 wrapper unit tests (skip without toolchain).
+- 2026-06-11 — **M15** ✅ (branch `feat/protocol-negotiation`): versions exchanged at the WS
+  handshake. `negotiateProtocolVersion` + `MIN_SUPPORTED_PROTOCOL_VERSION` in `@synapse/protocol`
+  (agreed = `min(client, server)` on overlap; refusal with reason otherwise; no announcement = v1
+  for pre-negotiation clients). Daemon announces `&v=` on connect, verifies the server's advertised
+  dialect from the upgrade headers, and renders a 426 refusal as a clear "upgrade the older side"
+  warning. Server refuses out-of-range clients at the handshake (HTTP 426 +
+  `x-synapse-protocol{,-min}` headers, `synapse_protocol_refusals_total` metric), advertises its
+  range on every upgrade, records the agreed dialect per socket (the D3 downgrade seam), and
+  reports `minProtocolVersion` on `/health`; `synapse doctor` now FAILs on non-overlapping ranges
+  and warns on compatible-but-different. 6 unit tests + `verify:protocol-compat` (current client,
+  legacy client, newer-client downgrade, out-of-range 426 refusal). D3 (incremental `state.delta`)
+  is now unblocked pending owner approval.
 - 2026-06-09 — **Phase A complete** (branch `foundation-hardening-m1-m4`):
   - **M1** ✅ `.github/workflows/ci.yml` (check + verify jobs, npm/venv caching) +
     `scripts/ci-verify-all.mjs` (one-build aggregate runner; `--only`, `SYNAPSE_VERIFY_SKIP`,

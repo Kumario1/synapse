@@ -3,8 +3,10 @@ import { z } from "zod";
 // would be a runtime cycle (PROTOCOL_VERSION would still be in its TDZ).
 import type { ClientMessage } from "./index.js";
 
-// Must equal PROTOCOL_VERSION in index.ts (kept literal to avoid the cycle);
-// protocol-version negotiation (plan M15) will replace this with a range.
+// Must equal PROTOCOL_VERSION in index.ts (kept literal to avoid the cycle).
+// Version negotiation happens at the WS handshake (M15, `negotiateProtocolVersion`);
+// by the time a message reaches this schema both sides have agreed on the
+// dialect, so the per-message check stays a strict literal.
 const WIRE_VERSION = 1 as const;
 
 /**

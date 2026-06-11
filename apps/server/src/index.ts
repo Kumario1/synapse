@@ -7,6 +7,8 @@ import {
   createLogger,
   deriveProjectKey,
   MetricsRegistry,
+  MIN_SUPPORTED_PROTOCOL_VERSION,
+  negotiateProtocolVersion,
   parseClientMessage,
   PROTOCOL_VERSION,
   type ClientMessage,
@@ -106,7 +108,8 @@ async function handleHttp(request: IncomingMessage, response: ServerResponse): P
       ok: true,
       service: "synapse-server",
       version: SERVER_VERSION,
-      protocolVersion: PROTOCOL_VERSION
+      protocolVersion: PROTOCOL_VERSION,
+      minProtocolVersion: MIN_SUPPORTED_PROTOCOL_VERSION
     });
     return;
   }
@@ -151,6 +154,24 @@ const wsServer = new WebSocketServer({
   verifyClient: (info, done) => {
     const url = new URL(info.req.url ?? "/", "ws://localhost");
     const repoId = url.searchParams.get("repoId") ?? "local";
+
+    // Protocol negotiation (plan M15): refuse an incompatible dialect at the
+    // handshake with an explicit reason, instead of failing opaquely on every
+    // message. No `v` param = a pre-negotiation client = version 1.
+    const announced = url.searchParams.get("v");
+    const negotiated = negotiateProtocolVersion(
+      announced === null ? undefined : Number(announced)
+    );
+    if (!negotiated.ok) {
+      metrics.count("synapse_protocol_refusals_total");
+      log.warn("protocol.refused", { announced, reason: negotiated.reason });
+      done(false, 426, negotiated.reason, {
+        "x-synapse-protocol": String(PROTOCOL_VERSION),
+        "x-synapse-protocol-min": String(MIN_SUPPORTED_PROTOCOL_VERSION)
+      });
+      return;
+    }
+
     if (authorized(info.req, url, repoId)) {
       done(true);
     } else {
@@ -166,11 +187,31 @@ const wsServer = new WebSocketServer({
 // to both sides. The server pings every client; one missed pong window means
 // the socket is dead — terminate it so the daemon's backoff reconnects cleanly.
 const socketAlive = new WeakMap<WebSocket, boolean>();
+// Agreed wire version per socket (plan M15) — the downgrade seam for D3.
+const socketProtocol = new WeakMap<WebSocket, number>();
 const pingIntervalMs = Number(process.env.SYNAPSE_WS_PING_INTERVAL_MS ?? 20_000);
+
+wsServer.on("headers", (headers) => {
+  headers.push(
+    `x-synapse-protocol: ${PROTOCOL_VERSION}`,
+    `x-synapse-protocol-min: ${MIN_SUPPORTED_PROTOCOL_VERSION}`
+  );
+});
 
 wsServer.on("connection", (socket, request) => {
   const url = new URL(request.url ?? "/", "ws://localhost");
   const repoId = url.searchParams.get("repoId") ?? "local";
+  const announced = url.searchParams.get("v");
+  const negotiated = negotiateProtocolVersion(announced === null ? undefined : Number(announced));
+  // The seam for graceful downgrade: outbound messages to this socket should
+  // use its agreed dialect. Today there is exactly one dialect (v1), so this
+  // is recorded (and observable) but never branches.
+  socketProtocol.set(socket, negotiated.ok ? negotiated.agreed : PROTOCOL_VERSION);
+  log.debug("protocol.negotiated", {
+    repoId,
+    announced,
+    agreed: negotiated.ok ? negotiated.agreed : PROTOCOL_VERSION
+  });
   joinRoom(repoId, socket);
   socketAlive.set(socket, true);
   metrics.count("synapse_ws_connections_total");
