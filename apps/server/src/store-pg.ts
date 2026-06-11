@@ -12,6 +12,7 @@ import {
   type TeamState
 } from "@synapse/protocol";
 import type { Pool } from "pg";
+import { withPgAdvisoryLock } from "./pg-advisory-lock.js";
 import { ENTITY_TABLES, type EntityTable, type StateStore } from "./store.js";
 
 const log = createLogger("synapse-store-pg");
@@ -44,20 +45,25 @@ export class PostgresStateStore implements StateStore {
     // create while the others wait, then find the tables present.
     const client = await this.pool.connect();
     try {
-      await client.query("SELECT pg_advisory_lock(727269783)"); // 'synapse'
-      for (const [table, spec] of Object.entries(ENTITY_TABLES)) {
-        const keyColumns = spec.keys.map((key) => `${key} TEXT NOT NULL`).join(", ");
-        await client.query(
-          `CREATE TABLE IF NOT EXISTS synapse_${table} (
-             repo_id TEXT NOT NULL,
-             ${keyColumns},
-             payload JSONB NOT NULL,
-             seq BIGSERIAL,
-             PRIMARY KEY (repo_id, ${spec.keys.join(", ")})
-           )`
-        );
-      }
-      await client.query("SELECT pg_advisory_unlock(727269783)");
+      await withPgAdvisoryLock(
+        client,
+        727269783,
+        async () => {
+          for (const [table, spec] of Object.entries(ENTITY_TABLES)) {
+            const keyColumns = spec.keys.map((key) => `${key} TEXT NOT NULL`).join(", ");
+            await client.query(
+              `CREATE TABLE IF NOT EXISTS synapse_${table} (
+                 repo_id TEXT NOT NULL,
+                 ${keyColumns},
+                 payload JSONB NOT NULL,
+                 seq BIGSERIAL,
+                 PRIMARY KEY (repo_id, ${spec.keys.join(", ")})
+               )`
+            );
+          }
+        },
+        log
+      );
     } finally {
       client.release();
     }

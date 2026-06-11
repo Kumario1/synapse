@@ -506,13 +506,14 @@ hot path cheap, fast, and free of hallucinated contracts.
 
 ## 13. Storage Schemas
 
-> **Current implementation (2026-06-09):** the server persists through a storage-agnostic `StateStore`
-> (`apps/server/src/store.ts`). The shipped implementation is **SQLite** (`better-sqlite3`, WAL),
-> storing one JSON `TeamState` snapshot per repo (`team_state(repo_id, state, updated_at)`), selected
-> by `SYNAPSE_DB_PATH` (unset = in-memory). The normalized Postgres schema and Redis live-state below
-> are the multi-instance target — a future `StateStore` implementation, not yet built.
+> **Current implementation (2026-06-11):** the server persists through a storage-agnostic `StateStore`
+> (`apps/server/src/store.ts`). SQLite stores per-entity rows when `SYNAPSE_DB_PATH` is set
+> (unset = in-memory); Postgres is selected by `SYNAPSE_DATABASE_URL` for shared deployments.
+> Postgres table creation and pgvector memory setup are serialized with session advisory locks, and
+> failed DDL still attempts unlock before the pooled connection is released. Redis is optional fan-out
+> only; durable live state remains in the selected `StateStore`.
 
-### Postgres (durable) — planned, not yet implemented
+### Postgres (durable)
 ```sql
 team(id, name, plan, created_at)
 member(id, team_id, github_login, github_id, role, created_at)
@@ -533,8 +534,8 @@ lock:{repoId}:{symbolId}     -> sessionId                              TTL ~90s
 room:{repoId}                pub/sub channel for fan-out
 ```
 
-The split: Redis answers "what is happening *right now*" fast; Postgres is the durable record that
-survives restarts and feeds Layer II/III. Once a delta's `pushed_at` is set, it's out of live state.
+The split: Redis wakes other instances after writes; Postgres is the durable record that survives
+restarts and feeds Layer II/III. Once a delta's `pushed_at` is set, it's out of live state.
 
 ---
 
