@@ -21,14 +21,21 @@ Verified by inspection this session:
 | **`synapse doctor` (was B4)** | ✅ | `verify:doctor` |
 | **`synapse up` + quick tunnel + `keygen`** (not in v1 plan) | ✅ | `verify:up`, `verify:up-tunnel` |
 | **Per-project key auth + real tenancy** | ✅ | `deriveProjectKey(masterSecret, repoId)`, per-message repo check (`apps/server/src/index.ts:142`), `verify:tenancy` |
-| CI pipeline (G1) | ❌ | no `.github/workflows/` |
-| Publishable npm CLI (B1) | ❌ | `apps/cli/package.json` still `"private": true`, workspace deps at `0.0.0` |
-| Resilient channel (G2) | ❌ | fixed `setTimeout(connect, 1000)` (`apps/cli/src/index.ts:261`); `sendToServer` drops messages when socket closed (`:208`); no transport ping |
-| Observability (G3) | ❌ | `console.log` only; no `/metrics` |
-| Per-entity store + Postgres (A1) | ❌ | store is still full-snapshot last-writer-wins |
-| Redis fan-out (A2), multi-instance (A5) | ❌ | in-process `roomClients` only |
-| GitHub OAuth + JWT (A3) | ❌ | project-key mode is the shipped interim (a deliberate design change vs. v1 — see Decision D1) |
-| RAG memory (C), Go analyzer (D2), VS Code (E1), dashboard (E2), adaptive severity (F1), file watcher (F3), security pass (G4), protocol negotiation (G5), fuzzing (G6) | ❌ | — |
+| CI pipeline (G1) | ✅ | `.github/workflows/ci.yml` + `scripts/ci-verify-all.mjs` (M1, PR #32) |
+| Publishable npm CLI (B1) | ✅ | `@synapse/cli@0.1.0`, `verify:npm-pack` + `verify:package` (M5, PRs #32/#34) |
+| Resilient channel (G2) | ✅ | backoff+jitter, offline outbox, server pings (M2, PR #32) |
+| Observability (G3) | ✅ | `/metrics` on server+daemon, JSON logs (M3, PR #32) |
+| Per-entity store + Postgres (A1) | ✅ | per-entity row ops + `PostgresStateStore` (M8, PR #39) |
+| Redis fan-out (A2), multi-instance (A5) | ✅ | `fanout.ts` + per-repo cache mutex (M9, PR #40) |
+| GitHub OAuth + JWT (A3) | ⏸ | re-scoped to the SaaS launch phase per D1 default (M14 stays decision-gated) |
+| RAG memory (C1/C2) | ✅ | pgvector + hybrid `why` (PR #47) |
+| Go analyzer (D2) | ✅ | `packages/analyzer-go` (M12, PR #43) |
+| Adaptive severity (F1) | ✅ | M6 (PR #32); branch-aware M6.5 (PR #37) |
+| File watcher (F3) | ✅ | M10 (PR #41) |
+| Security pass (G4) | ✅ | ingress validation M4 (PR #32) + rate limits/webhook posture (PR #45) |
+| Protocol negotiation (G5) | ✅ | M15 (PR #44) |
+| Fuzzing (G6) | ✅ | property tests + analyzer fuzz (PR #46) |
+| VS Code (E1), dashboard/web (M13/E2), D3 delta broadcast, C3/C4, F4/F5 | ⏸ | decision-gated (D3/D4) or deferred backlog — owner sign-off required |
 
 Auth note: the v1 plan assumed OAuth/JWT for tenancy; what shipped instead is
 **HMAC-derived per-project keys** (`SYNAPSE_MASTER_SECRET` → `deriveProjectKey(secret, repoId)`).
@@ -273,6 +280,16 @@ M15 negotiation ─→ D3 delta broadcast (if approved)
 ```
 
 ## 6. Execution log
+
+- 2026-06-11 — **Roadmap complete (autonomous run).** Every non-decision-gated milestone in §4 is
+  merged to `main`: M1–M6 (PR #32), M6.5 (#37), M7 (#38), M8 (#39), M9 (#40), M10 (#41), M11
+  (#42), M12 (#43), M15 (#44), G4 remainder (#45), G6 (#46), RAG C1/C2 (#47) — verify matrix
+  46/46, CI green on every PR. **Awaiting owner decisions** (per §3, these were not started):
+  **D3** incremental `state.delta` broadcast (now unblocked by M15; "not started until approved"),
+  **D4** fold `Synapse/` into `apps/web` → M13 dashboard, **D1/M14** GitHub OAuth (re-scoped to
+  the SaaS launch phase by the plan's own default — build when a hosted offering launches).
+  Remaining deferred backlog (no milestone specs): C3/C4 external ingestion + onboarding, F4/F5
+  richer auto-resolution + rename tracking, more languages/SCIP, E1 VS Code, E4 editor rules.
 
 - 2026-06-09 — v2 plan written; ground-truthed against `main` @ `e353296`. Phase A execution begun
   (M1 first). Decisions D1–D5 await owner confirmation; defaults noted above are being followed,
