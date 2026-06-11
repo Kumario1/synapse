@@ -189,6 +189,35 @@ const wsServer = new WebSocketServer({
 const socketAlive = new WeakMap<WebSocket, boolean>();
 // Agreed wire version per socket (plan M15) — the downgrade seam for D3.
 const socketProtocol = new WeakMap<WebSocket, number>();
+
+// Ingress rate limiting (G4): a sliding one-minute window per WS connection
+// and a global one for the webhook endpoint. The defaults are far above any
+// legitimate flow (a daemon heartbeats twice a minute and bursts a handful of
+// messages per edit), so only a runaway or hostile client ever hits them; an
+// over-limit message is acked as an error and dropped before any mutation.
+// Set a limit to 0 to disable it.
+const WS_RATE_LIMIT_PER_MIN = Number(process.env.SYNAPSE_RATE_LIMIT_PER_MIN ?? 600);
+const WEBHOOK_RATE_LIMIT_PER_MIN = Number(process.env.SYNAPSE_WEBHOOK_RATE_LIMIT_PER_MIN ?? 120);
+
+interface RateWindow {
+  windowStartedAt: number;
+  count: number;
+}
+
+const socketRates = new WeakMap<WebSocket, RateWindow>();
+const webhookRate: RateWindow = { windowStartedAt: 0, count: 0 };
+
+function overRateLimit(window: RateWindow, limitPerMinute: number, now: number): boolean {
+  if (limitPerMinute <= 0) {
+    return false;
+  }
+  if (now - window.windowStartedAt >= 60_000) {
+    window.windowStartedAt = now;
+    window.count = 0;
+  }
+  window.count += 1;
+  return window.count > limitPerMinute;
+}
 const pingIntervalMs = Number(process.env.SYNAPSE_WS_PING_INTERVAL_MS ?? 20_000);
 
 wsServer.on("headers", (headers) => {
@@ -265,6 +294,20 @@ process.once("SIGINT", shutdown);
 process.once("SIGTERM", shutdown);
 
 async function handleMessage(socket: WebSocket, fallbackRepoId: string, raw: string): Promise<void> {
+  let rate = socketRates.get(socket);
+  if (!rate) {
+    rate = { windowStartedAt: 0, count: 0 };
+    socketRates.set(socket, rate);
+  }
+  if (overRateLimit(rate, WS_RATE_LIMIT_PER_MIN, Date.now())) {
+    metrics.count("synapse_rate_limited_total", { surface: "ws" });
+    if (rate.count === WS_RATE_LIMIT_PER_MIN + 1) {
+      log.warn("rate.limited", { surface: "ws", repoId: fallbackRepoId, limit: WS_RATE_LIMIT_PER_MIN });
+    }
+    send(socket, envelope("ack", { forId: "unknown", ok: false, error: "rate_limited" }));
+    return;
+  }
+
   let parsed: unknown;
 
   try {
@@ -333,6 +376,29 @@ async function handleGitHubWebhook(
   response: ServerResponse,
   url: URL
 ): Promise<void> {
+  if (overRateLimit(webhookRate, WEBHOOK_RATE_LIMIT_PER_MIN, Date.now())) {
+    metrics.count("synapse_rate_limited_total", { surface: "webhook" });
+    log.warn("rate.limited", { surface: "webhook", limit: WEBHOOK_RATE_LIMIT_PER_MIN });
+    writeJson(response, 429, { ok: false, error: "rate_limited" });
+    return;
+  }
+
+  const secret = process.env.SYNAPSE_GITHUB_WEBHOOK_SECRET;
+  // G4: a server running with auth (shared token or project keys) is a
+  // production posture — an unsigned, internet-reachable webhook that mutates
+  // team state is not acceptable there. Open mode (local/dev) stays unchanged.
+  if (authMode !== "open" && !secret) {
+    metrics.count("synapse_webhook_rejections_total", { reason: "secret_required" });
+    log.warn("webhook.secret_required", { authMode });
+    writeJson(response, 403, {
+      ok: false,
+      error: "webhook_secret_required",
+      detail:
+        "This server runs with auth enabled; set SYNAPSE_GITHUB_WEBHOOK_SECRET (and configure the same secret on the GitHub webhook) to accept webhooks."
+    });
+    return;
+  }
+
   let raw: string;
   try {
     raw = await readBody(request);
@@ -341,7 +407,6 @@ async function handleGitHubWebhook(
     writeJson(response, 413, { ok: false, error: "payload_too_large" });
     return;
   }
-  const secret = process.env.SYNAPSE_GITHUB_WEBHOOK_SECRET;
   if (secret && !validGitHubSignature(raw, headerValue(request, "x-hub-signature-256"), secret)) {
     writeJson(response, 401, { ok: false, error: "invalid_signature" });
     return;
