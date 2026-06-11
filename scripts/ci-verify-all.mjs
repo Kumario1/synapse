@@ -58,7 +58,8 @@ const stages = [
   ["npm", ["run", "build"]],
   ["npm", ["run", "typecheck"]],
   ["npm", ["test"]],
-  ["npm", ["run", "setup:analyzer-py"]]
+  ["npm", ["run", "setup:analyzer-py"]],
+  ["npm", ["run", "setup:analyzer-go"]]
 ];
 
 for (const [command, args] of stages) {

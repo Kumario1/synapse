@@ -363,6 +363,19 @@ M15 negotiation ─→ D3 delta broadcast (if approved)
   already worked (covered by new tests). 5 new analyzer tests (9 total) + `verify:tsx-check` —
   default-export `.tsx` props change → symbol delta + `dependency_changed` for the importing
   component via the default-import edge; `.mjs` helper joins the same graph.
+- 2026-06-11 — **M12** ✅ (branch `feat/go-analyzer`, D5 default: Go): `packages/analyzer-go` —
+  a warm Go sidecar (stdlib `go/parser` + `go/ast`, zero module deps, static binary) speaking the
+  same newline-delimited JSON-RPC protocol as analyzer-py (`health`/`extractFile`/`indexGraph`).
+  `go:`-prefixed SymbolIds; exported = uppercase (Go's own rule): functions, methods (`T.Name`),
+  structs (class + exported fields), interfaces, type aliases, consts. Graph edges: same-package
+  bare identifiers + cross-package `pkg.Sym` selectors via import-path↔directory suffix matching.
+  `scripts/setup-go.mjs` builds the binary (source-hash stamp; no toolchain → warn + exit 0),
+  mirroring `setup-venv.mjs`; wired into join, `ci-verify-all` stages, packaging (sources, never
+  the platform-specific `bin/`), and CI (`actions/setup-go`). Daemon routes `.go` through
+  extract/diff/graph alongside ts/py (`lang: "go"` added to the protocol union). Exit:
+  `verify:go-check` mirroring `verify-python-check` — two worktrees rewrite `Validate` to
+  incompatible return types → `contract_divergent` + deterministic block resolution; SKIPs without
+  the built binary. 4 wrapper unit tests (skip without toolchain).
 - 2026-06-09 — **Phase A complete** (branch `foundation-hardening-m1-m4`):
   - **M1** ✅ `.github/workflows/ci.yml` (check + verify jobs, npm/venv caching) +
     `scripts/ci-verify-all.mjs` (one-build aggregate runner; `--only`, `SYNAPSE_VERIFY_SKIP`,

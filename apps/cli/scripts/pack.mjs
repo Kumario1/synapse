@@ -33,6 +33,7 @@ const bundled = {
   "@synapse/conflict-engine": ["package.json", "dist"],
   "@synapse/analyzer-ts": ["package.json", "dist"],
   "@synapse/analyzer-py": ["package.json", "dist", "python", "requirements.txt", "scripts"],
+  "@synapse/analyzer-go": ["package.json", "dist", "go", "scripts"],
   "@synapse/server": ["package.json", "dist"]
 };
 

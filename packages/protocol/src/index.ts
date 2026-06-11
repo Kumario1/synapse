@@ -71,7 +71,7 @@ export interface CodeSymbol {
     startLine: number;
     endLine: number;
   };
-  lang: "ts" | "py";
+  lang: "ts" | "py" | "go";
 }
 
 export type ChangeKind =

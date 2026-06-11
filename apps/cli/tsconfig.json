@@ -10,6 +10,9 @@
       "path": "../../packages/protocol"
     },
     {
+      "path": "../../packages/analyzer-go"
+    },
+    {
       "path": "../../packages/analyzer-py"
     },
     {

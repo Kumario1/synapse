@@ -29,6 +29,11 @@ const BUNDLED = [
   { name: "@synapse/conflict-engine", dir: "packages/conflict-engine", copy: ["dist"] },
   { name: "@synapse/analyzer-ts", dir: "packages/analyzer-ts", copy: ["dist"] },
   {
+    name: "@synapse/analyzer-go",
+    dir: "packages/analyzer-go",
+    copy: ["dist", "go", "scripts/setup-go.mjs"]
+  },
+  {
     name: "@synapse/analyzer-py",
     dir: "packages/analyzer-py",
     copy: ["dist", "python", "requirements.txt", "scripts/setup-venv.mjs"]
