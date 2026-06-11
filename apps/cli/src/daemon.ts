@@ -22,6 +22,7 @@ import {
   createEmptyTeamState,
   createLogger,
   MetricsRegistry,
+  MIN_SUPPORTED_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   type ClientMessage,
   type CodeSymbol,
@@ -151,9 +152,22 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
     // Credential travels in the Authorization header, not the query string,
     // so it never lands in proxy/access logs along the way.
     socket = new WebSocket(
-      `${config.serverUrl}?repoId=${encodeURIComponent(config.repoId)}&sessionId=${encodeURIComponent(config.sessionId)}`,
+      `${config.serverUrl}?repoId=${encodeURIComponent(config.repoId)}&sessionId=${encodeURIComponent(config.sessionId)}&v=${PROTOCOL_VERSION}`,
       config.authToken ? { headers: { authorization: `Bearer ${config.authToken}` } } : undefined
     );
+
+    // Protocol negotiation (M15): the server advertises its dialect range on
+    // the upgrade response; verify compatibility from this side too so a
+    // too-new server is a loud, specific warning instead of mystery failures.
+    socket.on("upgrade", (response) => {
+      const serverMax = Number(response.headers["x-synapse-protocol"]);
+      if (Number.isInteger(serverMax) && serverMax < MIN_SUPPORTED_PROTOCOL_VERSION) {
+        warnConnection(
+          `server speaks protocol v${serverMax}, older than this client's oldest supported v${MIN_SUPPORTED_PROTOCOL_VERSION} — upgrade the server`,
+          { auth: true }
+        );
+      }
+    });
 
     socket.on("open", () => {
       connectionWarned = false;
@@ -171,6 +185,15 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
 
     socket.on("unexpected-response", (_request, response) => {
       const auth = response.statusCode === 401;
+      if (response.statusCode === 426) {
+        const max = response.headers["x-synapse-protocol"] ?? "?";
+        const min = response.headers["x-synapse-protocol-min"] ?? "?";
+        warnConnection(
+          `protocol v${PROTOCOL_VERSION} refused — the server supports v${min}–v${max}; upgrade the older side`,
+          { auth: true }
+        );
+        return;
+      }
       warnConnection(
         auth
           ? "401 unauthorized — check your project key (SYNAPSE_PROJECT_KEY / --key) or SYNAPSE_AUTH_TOKEN"

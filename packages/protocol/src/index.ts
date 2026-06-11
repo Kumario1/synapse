@@ -5,6 +5,48 @@ export * from "./metrics.js";
 export * from "./wire-schema.js";
 
 export const PROTOCOL_VERSION = 1 as const;
+/**
+ * Oldest wire protocol this build still speaks. The server accepts any client
+ * announcing a version in `[MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION]`
+ * (plan M15); a future wire change bumps `PROTOCOL_VERSION` and keeps this at
+ * the oldest version it can still downgrade to.
+ */
+export const MIN_SUPPORTED_PROTOCOL_VERSION = 1 as const;
+
+export type ProtocolNegotiation =
+  | { ok: true; agreed: number }
+  | { ok: false; reason: string };
+
+/**
+ * Negotiate the wire version at connection time (plan M15). The client
+ * announces what it speaks; both sides settle on `min(client, server)` when
+ * the ranges overlap, so a newer client gracefully downgrades to an older
+ * server's dialect and vice versa. No announcement (an old client) is treated
+ * as version 1 — the protocol's only dialect before negotiation existed.
+ * Outside the supported range the connection is refused with a reason instead
+ * of failing opaquely message-by-message.
+ */
+export function negotiateProtocolVersion(
+  clientVersion: number | undefined,
+  range: { min: number; max: number } = {
+    min: MIN_SUPPORTED_PROTOCOL_VERSION,
+    max: PROTOCOL_VERSION
+  }
+): ProtocolNegotiation {
+  const announced = clientVersion ?? 1;
+  if (!Number.isInteger(announced) || announced < 1) {
+    return { ok: false, reason: `invalid protocol version "${String(clientVersion)}"` };
+  }
+
+  if (announced < range.min) {
+    return {
+      ok: false,
+      reason: `client protocol v${announced} is older than the oldest supported v${range.min} — upgrade the client`
+    };
+  }
+
+  return { ok: true, agreed: Math.min(announced, range.max) };
+}
 
 /**
  * Derive an opaque, project-scoped capability key from a server master secret.
