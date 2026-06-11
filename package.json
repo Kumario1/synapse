@@ -32,6 +32,7 @@
     "verify:persistence": "npm run build && node scripts/verify-persistence.mjs",
     "verify:persistence-pg": "npm run build && node scripts/verify-persistence-pg.mjs",
     "verify:multi-instance": "npm run build && node scripts/verify-multi-instance.mjs",
+    "verify:file-watcher": "npm run build && node scripts/verify-file-watcher.mjs",
     "verify:hooks": "npm run build && node scripts/verify-hooks.mjs",
     "verify:session-summary": "npm run build && node scripts/verify-session-summary.mjs",
     "verify:session-start": "npm run build && node scripts/verify-session-start.mjs",

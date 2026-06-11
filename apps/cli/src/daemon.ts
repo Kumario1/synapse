@@ -63,6 +63,7 @@ import {
   type SummaryProvider
 } from "./explain-openrouter.js";
 import { readJson, writeJson } from "./http.js";
+import { startFileWatcher } from "./watcher.js";
 
 export async function startDaemon(config: RuntimeConfig): Promise<void> {
   let teamState = createEmptyTeamState(config.repoId);
@@ -193,6 +194,38 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
   };
 
   connect();
+
+  // File watcher (M10): manual edits between agent turns flow through the
+  // same report path as synapse_report, so the team still learns about them.
+  // The first event for a file records its baseline; the next emits deltas.
+  // SYNAPSE_FILE_WATCHER=0 disables.
+  if (process.env.SYNAPSE_FILE_WATCHER !== "0") {
+    startFileWatcher({
+      worktreeRoot: config.worktreeRoot,
+      debounceMs: Number(process.env.SYNAPSE_WATCH_DEBOUNCE_MS ?? 400),
+      shouldReport: isAnalyzable,
+      onChange: async (filePath) => {
+        const deltas = await reportContractChanges(
+          config,
+          contractSnapshots,
+          { filePath },
+          analysisCache
+        );
+        metrics.count("synapse_watch_reports_total");
+        log.debug("watch.reported", { filePath, deltas: deltas.length });
+        for (const delta of deltas) {
+          metrics.count("synapse_deltas_emitted_total", { changeKind: delta.changeKind });
+          sendToServer("contract.delta", { delta });
+        }
+      },
+      onError: (error) => {
+        log.warn("watch.error", {
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    });
+    log.info("watch.started", { worktreeRoot: config.worktreeRoot });
+  }
 
   setInterval(() => {
     sendToServer("session.heartbeat", {
