@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { PROTOCOL_VERSION } from "./index.js";
-import { parseClientMessage } from "./wire-schema.js";
+import { createEmptyTeamState, PROTOCOL_VERSION } from "./index.js";
+import { parseClientMessage, parseServerMessage } from "./wire-schema.js";
 
 const base = { v: PROTOCOL_VERSION, id: "msg-1", ts: new Date().toISOString() };
 
@@ -122,6 +122,39 @@ test("rejects malformed messages with a path-bearing error", () => {
 
   for (const { value, label } of cases) {
     const result = parseClientMessage(value);
+    assert.equal(result.ok, false, `${label} must be rejected`);
+    if (!result.ok) {
+      assert.match(result.error, /invalid_message/, `${label} carries the error prefix`);
+    }
+  }
+});
+
+test("accepts valid server snapshots", () => {
+  const result = parseServerMessage({
+    ...base,
+    type: "state.snapshot",
+    payload: { teamState: createEmptyTeamState("local") }
+  });
+  assert.equal(result.ok, true, result.ok ? "" : result.error);
+});
+
+test("accepts valid server acks", () => {
+  const result = parseServerMessage({
+    ...base,
+    type: "ack",
+    payload: { forId: "msg-1", ok: false, error: "rate_limited" }
+  });
+  assert.equal(result.ok, true, result.ok ? "" : result.error);
+});
+
+test("rejects malformed server messages with a path-bearing error", () => {
+  const cases = [
+    { value: { ...base, type: "no.such.type", payload: {} }, label: "unknown type" },
+    { value: { ...base, type: "state.snapshot", payload: {} }, label: "missing teamState" }
+  ];
+
+  for (const { value, label } of cases) {
+    const result = parseServerMessage(value);
     assert.equal(result.ok, false, `${label} must be rejected`);
     if (!result.ok) {
       assert.match(result.error, /invalid_message/, `${label} carries the error prefix`);

@@ -460,6 +460,10 @@ M15 negotiation ─→ D3 delta broadcast (if approved)
     compat) validated at server ingress before any mutation; 1MB payload caps (ws `maxPayload` +
     webhook 413); daemon/doctor credentials moved to `Authorization: Bearer` (query-string accepted
     for back-compat only). Unit-tested in protocol.
+  - **Daemon ingress hardening** ✅ local daemon JSON tool bodies are capped at 1MB before
+    concatenation with stable 400/413 responses, and daemon-bound server frames are validated by
+    shared protocol schemas before updating the warm cache. Covered by protocol tests and
+    `verify:security`.
   - **M6** ✅ `applyAdaptiveSeverity` in conflict-engine (≥5 dismissals & ≥80% dismiss rate per
     rule → warn demotes to info; never promotes; `SYNAPSE_ADAPTIVE_SEVERITY=0` opt-out), wired into
     the daemon check path. 7 unit tests + `verify:adaptive-severity` (warn → 5 dismissals → info,
