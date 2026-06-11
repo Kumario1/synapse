@@ -3,6 +3,10 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join, relative, resolve } from "node:path";
 import {
+  extractGoContracts,
+  extractGoDependencyGraph
+} from "@synapse/analyzer-go";
+import {
   extractPythonContracts,
   extractPythonDependencyGraph
 } from "@synapse/analyzer-py";
@@ -64,6 +68,21 @@ export function setupPythonAnalyzerVenv(): void {
     }
   } catch {
     console.warn("synapse: Python analyzer package not found; .py files will use file-level detection.");
+  }
+}
+
+/** Build the analyzer-go sidecar binary, resolved from the installed package. */
+export function setupGoAnalyzerBinary(): void {
+  try {
+    const require = createRequire(import.meta.url);
+    const packageJson = require.resolve("@synapse/analyzer-go/package.json");
+    const script = join(dirname(packageJson), "scripts", "setup-go.mjs");
+    const result = spawnSync(process.execPath, [script], { stdio: "inherit" });
+    if (result.status !== 0) {
+      console.warn("synapse: Go analyzer setup skipped; .go files will use file-level detection.");
+    }
+  } catch {
+    console.warn("synapse: Go analyzer package not found; .go files will use file-level detection.");
   }
 }
 export interface CheckTarget {
@@ -141,20 +160,26 @@ export async function buildDependencyGraph(
   cache?: AnalysisCache
 ): Promise<DaemonGraph> {
   // Build each language's graph locally, then merge. Symbol ids are
-  // language-prefixed (`ts:` / `py:`), so the union never collides and the
+  // language-prefixed (`ts:` / `py:` / `go:`), so the union never collides and the
   // conflict engine sees one graph spanning both.
-  const [tsFingerprints, pyFingerprints] = await Promise.all([
+  const [tsFingerprints, pyFingerprints, goFingerprints] = await Promise.all([
     readSourceFileFingerprints(config.worktreeRoot, isTypeScriptLike),
-    readSourceFileFingerprints(config.worktreeRoot, isPythonLike)
+    readSourceFileFingerprints(config.worktreeRoot, isPythonLike),
+    readSourceFileFingerprints(config.worktreeRoot, isGoLike)
   ]);
-  const graphFingerprint = sourceSetFingerprint([...tsFingerprints, ...pyFingerprints]);
+  const graphFingerprint = sourceSetFingerprint([
+    ...tsFingerprints,
+    ...pyFingerprints,
+    ...goFingerprints
+  ]);
   if (cache?.graph?.fingerprint === graphFingerprint) {
     return cache.graph.value;
   }
 
-  const [tsFiles, pyFiles] = await Promise.all([
+  const [tsFiles, pyFiles, goFiles] = await Promise.all([
     readSourceFiles(config.worktreeRoot, isTypeScriptLike),
-    readSourceFiles(config.worktreeRoot, isPythonLike)
+    readSourceFiles(config.worktreeRoot, isPythonLike),
+    readSourceFiles(config.worktreeRoot, isGoLike)
   ]);
 
   const symbols: CodeSymbol[] = [];
@@ -173,6 +198,16 @@ export async function buildDependencyGraph(
       edges.push(...pyGraph.edges);
     } catch (error) {
       warnAnalyzerDegraded("python", "dependency graph", error);
+    }
+  }
+
+  if (goFiles.length > 0) {
+    try {
+      const goGraph = await extractGoDependencyGraph({ files: goFiles });
+      symbols.push(...goGraph.symbols);
+      edges.push(...goGraph.edges);
+    } catch (error) {
+      warnAnalyzerDegraded("go", "dependency graph", error);
     }
   }
 
@@ -269,9 +304,13 @@ export function isPythonLike(filePath: string): boolean {
   return /\.pyi?$/u.test(filePath);
 }
 
+export function isGoLike(filePath: string): boolean {
+  return /\.go$/u.test(filePath);
+}
+
 /** A file Synapse can extract a contract from (any supported analyzer). */
 export function isAnalyzable(filePath: string): boolean {
-  return isTypeScriptLike(filePath) || isPythonLike(filePath);
+  return isTypeScriptLike(filePath) || isPythonLike(filePath) || isGoLike(filePath);
 }
 
 /**
@@ -305,19 +344,30 @@ export async function extractSymbolsForFile(
     }
   }
 
+  if (isGoLike(filePath)) {
+    try {
+      const symbols = (await extractGoContracts({ filePath, source })).symbols;
+      cache?.symbolsByFile.set(filePath, { fingerprint, symbols });
+      return symbols;
+    } catch (error) {
+      warnAnalyzerDegraded("go", filePath, error);
+      return [];
+    }
+  }
+
   const symbols = extractTypeScriptContracts({ filePath, source }).symbols;
   cache?.symbolsByFile.set(filePath, { fingerprint, symbols });
   return symbols;
 }
 
-let pythonDegradedWarned = false;
+const degradedWarned = new Set<string>();
 
-/** Warn once that the Python analyzer is degraded — keeps logs quiet on repeat. */
+/** Warn once per language that its analyzer is degraded — keeps logs quiet on repeat. */
 export function warnAnalyzerDegraded(lang: string, filePath: string, error: unknown): void {
-  if (lang === "python" && pythonDegradedWarned) {
+  if (degradedWarned.has(lang)) {
     return;
   }
-  pythonDegradedWarned = lang === "python" || pythonDegradedWarned;
+  degradedWarned.add(lang);
   const reason = error instanceof Error ? error.message : String(error);
   console.warn(
     `synapse: ${lang} analyzer unavailable (${reason}); falling back to file-level detection for ${filePath}`

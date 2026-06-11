@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { setupPythonAnalyzerVenv } from "../analysis.js";
+import { setupGoAnalyzerBinary, setupPythonAnalyzerVenv } from "../analysis.js";
 import { commandCwd, configFromArgs, type RuntimeConfig } from "../config.js";
 import { installClaudeCodeHooks } from "../hooks.js";
 import { connectAllAgents } from "./connect.js";
@@ -46,8 +46,10 @@ export async function performJoin(config: RuntimeConfig): Promise<void> {
   // for Cursor, VS Code, Gemini, Windsurf, and any MCP client — not just Claude.
   await connectAllAgents(commandCwd());
 
-  // Best-effort: prepare the Python analyzer venv so `.py` files are analyzed on
-  // first run. Never fails the join — missing Python just degrades to file-level.
+  // Best-effort: prepare the Python analyzer venv and the Go analyzer binary so
+  // `.py`/`.go` files are analyzed on first run. Never fails the join — a
+  // missing toolchain just degrades that language to file-level.
   setupPythonAnalyzerVenv();
+  setupGoAnalyzerBinary();
 }
 
