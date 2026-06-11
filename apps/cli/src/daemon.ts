@@ -31,6 +31,8 @@ import {
   type ContractDeltaSummary,
   type ContractResolution,
   type ProposedResolution,
+  type RecallMatch,
+  type RecallResponse,
   type ServerMessage,
   type Session,
   type SessionSummary,
@@ -56,7 +58,7 @@ import {
   selfSignatures,
   type AnalysisCache
 } from "./analysis.js";
-import { buildWhatsupResponse, buildWhyResponse } from "./briefings.js";
+import { buildWhatsupResponse, buildWhyResponse, mergeRecallIntoWhy } from "./briefings.js";
 import { currentGitBranch, type RuntimeConfig } from "./config.js";
 import {
   createOpenRouterAnalysisProvider,
@@ -305,14 +307,25 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
           return;
         }
 
-        writeJson(
-          response,
-          200,
-          buildWhyResponse(teamState, body.question, {
-            degraded: socket?.readyState !== WebSocket.OPEN,
-            limit: body.limit
-          })
-        );
+        const floor = buildWhyResponse(teamState, body.question, {
+          degraded: socket?.readyState !== WebSocket.OPEN,
+          limit: body.limit
+        });
+        // Hybrid recall (C1/C2): the deterministic floor always answers; the
+        // server's vector memory can only add sources on top. Any failure or
+        // a degraded recall leaves the floor untouched. SYNAPSE_RAG=0 disables.
+        const merged =
+          process.env.SYNAPSE_RAG === "0"
+            ? floor
+            : mergeRecallIntoWhy(
+                floor,
+                await fetchRecall(config, body.question, body.limit),
+                body.limit
+              );
+        if (merged.rag) {
+          metrics.count("synapse_why_rag_total");
+        }
+        writeJson(response, 200, merged);
         return;
       }
 
@@ -535,6 +548,40 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
   };
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
+}
+
+/**
+ * Ask the server's vector memory for question-relevant memories. Best-effort:
+ * any error, non-OK status, or degraded recall returns [] so the
+ * deterministic why floor stands alone.
+ */
+async function fetchRecall(
+  config: RuntimeConfig,
+  query: string,
+  limit?: number
+): Promise<RecallMatch[]> {
+  try {
+    const base = config.serverUrl.replace(/^ws/u, "http");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4000);
+    const response = await fetch(`${base}/recall`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(config.authToken ? { authorization: `Bearer ${config.authToken}` } : {})
+      },
+      body: JSON.stringify({ repoId: config.repoId, query, limit }),
+      signal: controller.signal
+    });
+    clearTimeout(timer);
+    if (!response.ok) {
+      return [];
+    }
+    const payload = (await response.json()) as RecallResponse;
+    return payload.degraded ? [] : payload.matches;
+  } catch {
+    return [];
+  }
 }
 
 function makeSession(config: RuntimeConfig, task: string | null = null): Session {

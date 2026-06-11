@@ -17,6 +17,7 @@ import {
   type WireEnvelope
 } from "@synapse/protocol";
 import { WebSocket, WebSocketServer } from "ws";
+import { createEmbeddingProvider } from "./embeddings.js";
 import { gitHubPushToNotify, gitHubRepoEventToNotify } from "./github.js";
 import { applyMessage, pruneExpiredLocks, repoIdFor } from "./state.js";
 import { createStateStore } from "./store.js";
@@ -54,6 +55,21 @@ const metrics = new MetricsRegistry();
 // any instance PUBLISHes the repo channel; the others re-read the repo from
 // the shared store and re-broadcast to their local rooms. Unset → null, and
 // everything below behaves exactly as the single-instance path always has.
+// RAG memory (plan C1/C2): vector index over summaries/resolutions/events on
+// the shared Postgres via pgvector. Requires both SYNAPSE_DATABASE_URL and an
+// embedding provider (SYNAPSE_EMBED_BASE_URL); otherwise null and /recall
+// answers degraded — the daemon's deterministic why floor stands alone.
+const embeddingProvider = createEmbeddingProvider();
+const memory =
+  embeddingProvider && process.env.SYNAPSE_DATABASE_URL
+    ? await (async () => {
+        const { VectorMemory } = await import("./memory.js");
+        const vectorMemory = new VectorMemory(process.env.SYNAPSE_DATABASE_URL!, embeddingProvider);
+        await vectorMemory.init();
+        return vectorMemory;
+      })()
+    : null;
+
 const instanceId = randomUUID();
 const fanout = process.env.SYNAPSE_REDIS_URL
   ? await (await import("./fanout.js")).createRedisFanout({
@@ -130,6 +146,41 @@ async function handleHttp(request: IncomingMessage, response: ServerResponse): P
       return;
     }
     writeJson(response, 200, await withRepo(repoId, () => getState(repoId)));
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/recall") {
+    let body: { repoId?: string; query?: string; limit?: number };
+    try {
+      body = JSON.parse(await readBody(request)) as typeof body;
+    } catch {
+      writeJson(response, 400, { ok: false, error: "invalid_json" });
+      return;
+    }
+    const repoId = body.repoId ?? "local";
+    if (!authorized(request, url, repoId)) {
+      metrics.count("synapse_auth_rejections_total", { surface: "recall" });
+      writeJson(response, 401, { error: "unauthorized" });
+      return;
+    }
+    if (!body.query) {
+      writeJson(response, 400, { ok: false, error: "query_required" });
+      return;
+    }
+    if (!memory || memory.degraded()) {
+      writeJson(response, 200, { degraded: true, matches: [] });
+      return;
+    }
+    try {
+      const matches = await memory.recall(repoId, body.query, Math.min(body.limit ?? 5, 20));
+      metrics.count("synapse_recall_total");
+      writeJson(response, 200, { degraded: false, matches });
+    } catch (error) {
+      log.warn("recall.failed", {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      writeJson(response, 200, { degraded: true, matches: [] });
+    }
     return;
   }
 
@@ -286,7 +337,7 @@ httpServer.listen(port, () => {
 // resumes from consistent rows.
 const shutdown = (): void => {
   httpServer.close();
-  void Promise.allSettled([fanout?.close()])
+  void Promise.allSettled([fanout?.close(), memory?.close()])
     .then(() => store.close())
     .finally(() => process.exit(0));
 };
@@ -359,6 +410,7 @@ async function handleMessage(socket: WebSocket, fallbackRepoId: string, raw: str
     });
     metrics.count("synapse_messages_total", { type: message.type });
     metrics.observe("synapse_message_apply_ms", performance.now() - startedAt);
+    indexMemory(repoId, message);
     log.debug("message.applied", { type: message.type, repoId, sessions: state.sessions.length });
     send(socket, envelope("ack", { forId: message.id, ok: true }));
     broadcast(repoId, envelope("state.snapshot", { teamState: state }));
@@ -465,6 +517,46 @@ async function handleGitHubWebhook(
   } catch (error) {
     const reason = error instanceof Error ? error.message : "unknown_error";
     writeJson(response, 400, { ok: false, error: reason });
+  }
+}
+
+/**
+ * Feed the narrative artifacts into the vector memory as they arrive. Only
+ * prose (titles, summaries, rationales) is embedded — never raw code.
+ */
+function indexMemory(repoId: string, message: ClientMessage): void {
+  if (!memory) {
+    return;
+  }
+  if (message.type === "session.summary") {
+    const summary = message.payload.summary;
+    memory.index(repoId, {
+      id: `summary:${summary.sessionId}`,
+      kind: "session_summary",
+      title: `${summary.memberLogin}'s session summary`,
+      summary: summary.summary,
+      reference: summary.sessionId,
+      createdAt: summary.endedAt
+    });
+  } else if (message.type === "resolution.propose") {
+    const resolution = message.payload.resolution;
+    memory.index(repoId, {
+      id: `resolution:${resolution.symbol.raw}:${resolution.inputsHash}`,
+      kind: "resolution",
+      title: `Resolution for ${resolution.symbol.raw}`,
+      summary: `${resolution.rationale} ${resolution.instruction}`,
+      reference: resolution.symbol.raw,
+      createdAt: resolution.createdAt
+    });
+  } else if (message.type === "repo.event") {
+    memory.index(repoId, {
+      id: `event:${message.id}`,
+      kind: "repo_event",
+      title: message.payload.title,
+      summary: message.payload.summary,
+      reference: message.payload.url,
+      createdAt: new Date().toISOString()
+    });
   }
 }
 

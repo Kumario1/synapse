@@ -558,9 +558,34 @@ export interface SynapseWhyResponse {
   repoId: string;
   generatedAt: string;
   degraded: boolean;
+  /** True when hybrid vector recall contributed sources beyond the lexical floor. */
+  rag?: boolean;
   question: string;
   answer: string;
   sources: SynapseWhySource[];
+}
+
+/** One vector-recall hit from the server's memory index (RAG, plan C1/C2). */
+export interface RecallMatch {
+  kind: SynapseWhySourceKind;
+  title: string;
+  summary: string;
+  reference?: string;
+  createdAt: string;
+  /** Cosine similarity in [0, 1]; higher is closer. */
+  score: number;
+}
+
+export interface RecallRequest {
+  repoId: string;
+  query: string;
+  limit?: number;
+}
+
+export interface RecallResponse {
+  /** True when no embedding provider / vector store is available. */
+  degraded: boolean;
+  matches: RecallMatch[];
 }
 
 export interface WireEnvelope<TType extends string = string, TPayload = unknown> {
