@@ -298,6 +298,7 @@ Run with `npm run <script>`. See [`package.json`](package.json) for the complete
 | `verify:metrics` | Structured logs and `/metrics` counters |
 | `verify:protocol-compat` | Handshake version negotiation: legacy accepted, newer downgraded, out-of-range refused with 426 + range headers |
 | `verify:security` | WS flood → `rate_limited` acks, state bounded; webhook 429 past budget; auth-mode server refuses unsigned webhooks (403) until a secret is set, then signed-only |
+| `verify:fuzz` | Seeded malformed-source corpus against all three analyzers: the TS extractor never throws; the Python/Go sidecars answer or reject every request and stay healthy |
 | `verify:adaptive-severity` | Feedback-tuned demotion of noisy warnings |
 | `verify:branch-aware-severity` | Cross-branch `stale_base`/`dependency_changed` demote to `info`; merge-blocking rules and same-branch conflicts still warn |
 | `verify:docker` | Builds the server image, boots it, drives one edit→report |
