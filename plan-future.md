@@ -351,6 +351,18 @@ M15 negotiation ─→ D3 delta broadcast (if approved)
   (the spec-§1 promise), `SYNAPSE_FILE_WATCHER=0` opts out; `synapse_watch_reports_total` metric.
   Exit: `verify:file-watcher` — new file → baseline, signature edit → delta in server `/state`
   with zero report calls; README.md edit ignored; opt-out daemon stays inert.
+- 2026-06-11 — **M11** ✅ (branch `feat/tsx-audit`): audited `.tsx/.jsx/.js/.mjs/.cjs` through the
+  TS analyzer and closed the found gaps: (1) default-exported arrow/function expressions were
+  invisible — now extracted as function contracts named by their export (`#default`);
+  (2) default imports never resolved graph edges (the export key was ignored) — a per-file
+  exported-name → symbol map now resolves both default imports and `export { X as Y }` aliases to
+  the real symbol; (3) `.mjs` was not analyzable in the CLI and not a module-resolution candidate —
+  added (plus `/index.{js,jsx,mjs}` candidates). `.cjs` stays deliberately on the file-level
+  fallback: `module.exports` is invisible to the extractor, so "analyzable" would silence its
+  changes entirely (decision documented in `isTypeScriptLike`). JSX function/arrow components
+  already worked (covered by new tests). 5 new analyzer tests (9 total) + `verify:tsx-check` —
+  default-export `.tsx` props change → symbol delta + `dependency_changed` for the importing
+  component via the default-import edge; `.mjs` helper joins the same graph.
 - 2026-06-09 — **Phase A complete** (branch `foundation-hardening-m1-m4`):
   - **M1** ✅ `.github/workflows/ci.yml` (check + verify jobs, npm/venv caching) +
     `scripts/ci-verify-all.mjs` (one-build aggregate runner; `--only`, `SYNAPSE_VERIFY_SKIP`,

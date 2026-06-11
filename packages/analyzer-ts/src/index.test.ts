@@ -161,3 +161,127 @@ test("extracts dependency edges from relative named imports", () => {
     ]
   );
 });
+
+test("extracts JSX function and arrow components from .tsx/.jsx (M11)", () => {
+  const tsx = extractTypeScriptContracts({
+    filePath: "src/ui/Button.tsx",
+    source: `
+      export function Button(props: { label: string }): JSX.Element {
+        return <button>{props.label}</button>;
+      }
+      export const Card = (props: { title: string }) => <div>{props.title}</div>;
+    `
+  });
+  assert.deepEqual(
+    tsx.symbols.map((symbol) => [symbol.id.raw, symbol.kind]),
+    [
+      ["ts:src/ui/Button.tsx#Button", "function"],
+      ["ts:src/ui/Button.tsx#Card", "const"]
+    ]
+  );
+
+  const jsx = extractTypeScriptContracts({
+    filePath: "src/ui/Legacy.jsx",
+    source: `
+      export function Legacy(props) {
+        return <span>{props.value}</span>;
+      }
+    `
+  });
+  assert.equal(jsx.symbols[0]?.id.raw, "ts:src/ui/Legacy.jsx#Legacy");
+});
+
+test("default-exported arrow functions are tracked contracts (M11)", () => {
+  const before = extractTypeScriptContracts({
+    filePath: "src/ui/Badge.tsx",
+    source: "export default (props: { id: number }) => <span>{props.id}</span>;"
+  });
+  assert.deepEqual(
+    before.symbols.map((symbol) => [symbol.id.raw, symbol.kind]),
+    [["ts:src/ui/Badge.tsx#default", "function"]]
+  );
+
+  const after = extractTypeScriptContracts({
+    filePath: "src/ui/Badge.tsx",
+    source: "export default (props: { id: string }) => <span>{props.id}</span>;"
+  });
+  const changes = diffTypeScriptContracts(before.symbols, after.symbols);
+  assert.deepEqual(
+    changes.map((change) => [change.symbolId.raw, change.changeKind]),
+    [["ts:src/ui/Badge.tsx#default", "signature_changed"]]
+  );
+});
+
+test("default imports resolve dependency edges to the real symbol (M11)", () => {
+  const graph = extractTypeScriptDependencyGraph({
+    files: [
+      {
+        filePath: "src/ui/Panel.tsx",
+        source: "export default function Panel(props: { open: boolean }) { return <div/>; }"
+      },
+      {
+        filePath: "src/ui/App.tsx",
+        source: `
+          import Panel from "./Panel";
+          export function App(): JSX.Element {
+            return <Panel open={true} />;
+          }
+        `
+      }
+    ]
+  });
+  assert.deepEqual(
+    graph.edges.map((edge) => [edge.from.raw, edge.to.raw]),
+    [["ts:src/ui/App.tsx#App", "ts:src/ui/Panel.tsx#Panel"]]
+  );
+});
+
+test("plain .js and .mjs modules extract and link like TypeScript (M11)", () => {
+  const mjs = extractTypeScriptContracts({
+    filePath: "lib/util.mjs",
+    source: "export function add(a, b) { return a + b; }"
+  });
+  assert.equal(mjs.symbols[0]?.id.raw, "ts:lib/util.mjs#add");
+
+  const graph = extractTypeScriptDependencyGraph({
+    files: [
+      { filePath: "lib/util.mjs", source: "export function add(a, b) { return a + b; }" },
+      {
+        filePath: "main.js",
+        source: `
+          import { add } from "./lib/util.mjs";
+          export function run() { return add(1, 2); }
+        `
+      }
+    ]
+  });
+  assert.deepEqual(
+    graph.edges.map((edge) => [edge.from.raw, edge.to.raw]),
+    [["ts:main.js#run", "ts:lib/util.mjs#add"]]
+  );
+});
+
+test("aliased re-exports resolve through the export-name map (M11)", () => {
+  const graph = extractTypeScriptDependencyGraph({
+    files: [
+      {
+        filePath: "src/core.ts",
+        source: `
+          function compute(input: number): number { return input * 2; }
+          export { compute as run };
+        `
+      },
+      {
+        filePath: "src/caller.ts",
+        source: `
+          import { run } from "./core";
+          export function callIt(): number { return run(21); }
+        `
+      }
+    ]
+  });
+  assert.deepEqual(
+    graph.edges.map((edge) => [edge.from.raw, edge.to.raw]),
+    [["ts:src/caller.ts#callIt", "ts:src/core.ts#compute"]]
+  );
+});

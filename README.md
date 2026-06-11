@@ -273,6 +273,7 @@ Run with `npm run <script>`. See [`package.json`](package.json) for the complete
 | `verify:python-check` | Full realtime Python loop → `contract_divergent` + resolution |
 | `verify:daemon-ts-report` / `verify:file-only-ts-check` | Automatic TS report path; symbol-level conflicts from a file path |
 | `verify:dependency-ts-check` | Warns when a file depends on another's unpushed change |
+| `verify:tsx-check` | React-shaped repos: default-exported `.tsx` component props change → symbol delta + `dependency_changed` for the importing component; `.mjs` modules join the same graph |
 | `verify:contract-compat` / `verify:resolution` | Compatibility classification; merged-contract resolution |
 | `verify:hot-path-latency` / `verify:large-repo-latency` / `verify:repo-latency` | Pre-edit hot-path latency budgets (p95 ≤ 50ms, max ≤ 150ms) |
 | `verify:whatsup` / `verify:why` / `verify:feedback` | Team briefing; memory search; conflict feedback telemetry |
