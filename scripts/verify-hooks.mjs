@@ -115,8 +115,33 @@ try {
     8000
   );
 
+  // Automatic editor flow: pre-check seeds the "before" contract, then post-report
+  // after the edit should emit the first real signature delta.
+  const preseed = "src/preseed.ts";
+  await writeFile(
+    join(bobRoot, preseed),
+    "export function preseed(input: string): string { return input; }\n"
+  );
+  await runHookStage("pre", bobRoot, join(bobRoot, preseed));
+  await writeFile(
+    join(bobRoot, preseed),
+    "export function preseed(input: number): number { return input; }\n"
+  );
+  await runHookStage("post", bobRoot, join(bobRoot, preseed));
+  await waitForState(
+    serverPort,
+    (s) => s.unpushedDeltas.some((d) => d.filePath === preseed && d.sessionId === "bob"),
+    8000
+  );
+
   console.log("Hook verification passed:");
-  console.log(JSON.stringify({ join: "ok", pre: preOut, post: "reported extra.ts delta" }, null, 2));
+  console.log(
+    JSON.stringify(
+      { join: "ok", pre: preOut, post: "reported extra.ts and preseed.ts deltas" },
+      null,
+      2
+    )
+  );
 } finally {
   await stopChildren();
   await Promise.all([
