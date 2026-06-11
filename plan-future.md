@@ -399,6 +399,15 @@ M15 negotiation ─→ D3 delta broadcast (if approved)
   leave the machine and the `SYNAPSE_LLM_RESOLVE=0` / `OPENROUTER_BASE_URL` opt-outs (knob already
   existed). Exit: `verify:security` — WS flood → bounded state + rate_limited acks; webhook 429;
   auth-mode 403 without secret; signed-only acceptance with one.
+- 2026-06-11 — **G6** ✅ (branch `feat/fuzz-property-tests`): (1) `resolutionInputsHash` property
+  tests in conflict-engine (250 seeded cases each): symmetric across side order, stable across
+  structural clones, sensitive to contracts and symbol, `member` display-only. (2) `verify:fuzz` —
+  a deterministic seeded corpus (fragment soup, truncated valid prefixes, pathological nesting,
+  random bytes; 48 cases × ts/tsx/mjs + py + go) against all three analyzers: the in-process TS
+  extractor never throws and always returns arrays (single-file + whole-corpus graph); the
+  Python/Go sidecars answer or reject each request with a structured error and report healthy
+  after the corpus (one bad file never takes an analyzer down). Sidecar sections skip without
+  their runtime; CI runs everything.
 - 2026-06-09 — **Phase A complete** (branch `foundation-hardening-m1-m4`):
   - **M1** ✅ `.github/workflows/ci.yml` (check + verify jobs, npm/venv caching) +
     `scripts/ci-verify-all.mjs` (one-build aggregate runner; `--only`, `SYNAPSE_VERIFY_SKIP`,
