@@ -51,6 +51,11 @@ export interface ExtractTypeScriptDependencyGraphResult {
   edges: TypeScriptDependencyEdge[];
 }
 
+interface ImportedSymbols {
+  direct: Map<string, SymbolId>;
+  namespaces: Map<string, Map<string, SymbolId>>;
+}
+
 export function extractTypeScriptContracts(
   input: ExtractTypeScriptContractsInput
 ): ExtractTypeScriptContractsResult {
@@ -95,7 +100,26 @@ export function extractTypeScriptDependencyGraph(
       }
 
       for (const identifier of node.getDescendantsOfKind(SyntaxKind.Identifier)) {
-        const imported = imports.get(identifier.getText());
+        const imported = imports.direct.get(identifier.getText());
+        if (!imported || imported.raw === symbol.id.raw) {
+          continue;
+        }
+
+        const key = `${symbol.id.raw}->${imported.raw}`;
+        edges.set(key, {
+          from: symbol.id,
+          to: imported,
+          kind: "references"
+        });
+      }
+
+      for (const propertyAccess of node.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression)) {
+        const namespaceExports = imports.namespaces.get(propertyAccess.getExpression().getText());
+        if (!namespaceExports) {
+          continue;
+        }
+
+        const imported = namespaceExports.get(propertyAccess.getName());
         if (!imported || imported.raw === symbol.id.raw) {
           continue;
         }
@@ -225,8 +249,11 @@ function importedSymbolMap(
   filePath: string,
   fileSymbols: Map<string, CodeSymbol[]>,
   fileExports: Map<string, Map<string, SymbolId>>
-): Map<string, SymbolId> {
-  const imports = new Map<string, SymbolId>();
+): ImportedSymbols {
+  const imports: ImportedSymbols = {
+    direct: new Map<string, SymbolId>(),
+    namespaces: new Map<string, Map<string, SymbolId>>()
+  };
 
   for (const declaration of sourceFile.getImportDeclarations()) {
     const targetPath = resolveRelativeModule(
@@ -250,8 +277,13 @@ function importedSymbolMap(
         targetExports.get(importedName) ??
         targetSymbols.find((symbol) => symbol.name === importedName)?.id;
       if (targetSymbol) {
-        imports.set(localName, targetSymbol);
+        imports.direct.set(localName, targetSymbol);
       }
+    }
+
+    const namespaceImport = declaration.getNamespaceImport();
+    if (namespaceImport) {
+      imports.namespaces.set(namespaceImport.getText(), targetExports);
     }
 
     const defaultImport = declaration.getDefaultImport();
@@ -262,7 +294,7 @@ function importedSymbolMap(
         targetExports.get("default") ??
         targetSymbols.find((symbol) => symbol.name === "default")?.id;
       if (targetSymbol) {
-        imports.set(defaultImport.getText(), targetSymbol);
+        imports.direct.set(defaultImport.getText(), targetSymbol);
       }
     }
   }
