@@ -38,17 +38,28 @@ export class PostgresStateStore implements StateStore {
     // Lazy import keeps `pg` out of the SQLite path entirely (see store.ts).
     const { default: pg } = await import("pg");
     this.pool = new pg.Pool({ connectionString: this.databaseUrl });
-    for (const [table, spec] of Object.entries(ENTITY_TABLES)) {
-      const keyColumns = spec.keys.map((key) => `${key} TEXT NOT NULL`).join(", ");
-      await this.pool.query(
-        `CREATE TABLE IF NOT EXISTS synapse_${table} (
-           repo_id TEXT NOT NULL,
-           ${keyColumns},
-           payload JSONB NOT NULL,
-           seq BIGSERIAL,
-           PRIMARY KEY (repo_id, ${spec.keys.join(", ")})
-         )`
-      );
+    // Serialize DDL across instances booting concurrently: CREATE TABLE IF NOT
+    // EXISTS still races in Postgres (duplicate pg_class entries) when two
+    // sessions both see "not exists". The advisory lock makes one instance
+    // create while the others wait, then find the tables present.
+    const client = await this.pool.connect();
+    try {
+      await client.query("SELECT pg_advisory_lock(727269783)"); // 'synapse'
+      for (const [table, spec] of Object.entries(ENTITY_TABLES)) {
+        const keyColumns = spec.keys.map((key) => `${key} TEXT NOT NULL`).join(", ");
+        await client.query(
+          `CREATE TABLE IF NOT EXISTS synapse_${table} (
+             repo_id TEXT NOT NULL,
+             ${keyColumns},
+             payload JSONB NOT NULL,
+             seq BIGSERIAL,
+             PRIMARY KEY (repo_id, ${spec.keys.join(", ")})
+           )`
+        );
+      }
+      await client.query("SELECT pg_advisory_unlock(727269783)");
+    } finally {
+      client.release();
     }
   }
 
