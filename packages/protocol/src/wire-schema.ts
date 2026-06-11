@@ -1,7 +1,7 @@
 import { z } from "zod";
 // Type-only import: index.ts re-exports this module, so a value import here
 // would be a runtime cycle (PROTOCOL_VERSION would still be in its TDZ).
-import type { ClientMessage } from "./index.js";
+import type { ClientMessage, ServerMessage } from "./index.js";
 
 // Must equal PROTOCOL_VERSION in index.ts (kept literal to avoid the cycle).
 // Version negotiation happens at the WS handshake (M15, `negotiateProtocolVersion`);
@@ -117,6 +117,51 @@ const conflictFeedback = z.looseObject({
   createdAt: z.string()
 });
 
+const editLock = z.looseObject({
+  symbolId,
+  filePath: z.string(),
+  sessionId: z.string().min(1),
+  acquiredAt: z.string(),
+  ttlSec: z.number()
+});
+
+const recentPush = z.looseObject({
+  id: z.string().min(1),
+  repoId: z.string().min(1),
+  memberId: z.string(),
+  summary: z.string(),
+  filesAffected: z.array(z.string()),
+  symbols: z.array(symbolId).optional(),
+  sha: z.string(),
+  pushedAt: z.string(),
+  branch: z.string().optional()
+});
+
+const recentRepoEvent = z.looseObject({
+  id: z.string().min(1),
+  repoId: z.string().min(1),
+  kind: z.enum(["pull_request", "pull_request_review", "issue_comment"]),
+  action: z.string(),
+  actor: z.string(),
+  title: z.string(),
+  number: z.number().optional(),
+  url: z.string().optional(),
+  summary: z.string(),
+  createdAt: z.string()
+});
+
+const teamState = z.looseObject({
+  repoId: z.string().min(1),
+  sessions: z.array(session),
+  editLocks: z.array(editLock),
+  unpushedDeltas: z.array(contractDelta),
+  recentPushes: z.array(recentPush),
+  recentRepoEvents: z.array(recentRepoEvent),
+  resolutions: z.array(contractResolution),
+  sessionSummaries: z.array(sessionSummary),
+  conflictFeedback: z.array(conflictFeedback)
+});
+
 const envelope = {
   v: z.literal(WIRE_VERSION),
   id: z.string().min(1),
@@ -203,8 +248,34 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
   })
 ]);
 
+export const serverMessageSchema = z.discriminatedUnion("type", [
+  z.looseObject({
+    ...envelope,
+    type: z.literal("state.snapshot"),
+    payload: z.looseObject({ teamState })
+  }),
+  z.looseObject({
+    ...envelope,
+    type: z.literal("state.delta"),
+    payload: z.looseObject({ teamState })
+  }),
+  z.looseObject({
+    ...envelope,
+    type: z.literal("ack"),
+    payload: z.looseObject({
+      forId: z.string().min(1),
+      ok: z.boolean(),
+      error: z.string().optional()
+    })
+  })
+]);
+
 export type ParsedClientMessage =
   | { ok: true; message: ClientMessage }
+  | { ok: false; error: string };
+
+export type ParsedServerMessage =
+  | { ok: true; message: ServerMessage }
   | { ok: false; error: string };
 
 /** Validate an already-JSON-parsed value as a {@link ClientMessage}. */
@@ -216,4 +287,15 @@ export function parseClientMessage(value: unknown): ParsedClientMessage {
     return { ok: false, error: `invalid_message: ${path} ${first?.message ?? "is invalid"}` };
   }
   return { ok: true, message: result.data as ClientMessage };
+}
+
+/** Validate an already-JSON-parsed value as a {@link ServerMessage}. */
+export function parseServerMessage(value: unknown): ParsedServerMessage {
+  const result = serverMessageSchema.safeParse(value);
+  if (!result.success) {
+    const first = result.error.issues[0];
+    const path = first?.path.join(".") || "message";
+    return { ok: false, error: `invalid_message: ${path} ${first?.message ?? "is invalid"}` };
+  }
+  return { ok: true, message: result.data as ServerMessage };
 }

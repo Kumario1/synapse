@@ -11,11 +11,15 @@ This plan set came from a deep advisory audit. Source files were not modified wh
 | [001](001-seed-check-snapshots.md) | Seed snapshots during pre-edit checks | P1 | M | - | DONE |
 | [002](002-release-pg-advisory-locks.md) | Always release Postgres advisory locks during initialization | P1 | S | - | DONE |
 | [003](003-support-ts-namespace-imports.md) | Resolve TypeScript namespace-import dependency edges | P1 | M | - | DONE |
-| [004](004-harden-daemon-local-inputs.md) | Harden local daemon JSON and server-message parsing | P2 | S | - | TODO |
+| [004](004-harden-daemon-local-inputs.md) | Harden local daemon JSON and server-message parsing | P2 | S | - | DONE |
 | [005](005-refresh-docs-roadmap.md) | Refresh roadmap and status documentation | P2 | S | - | TODO |
 | [006](006-publish-live-branch-updates.md) | Publish branch changes during active sessions | P2 | M | - | TODO |
 | [007](007-reduce-check-hot-path-scans.md) | Avoid full source-tree scans on warm pre-edit checks | P2 | L | 001 recommended | TODO |
 | [008](008-extract-verification-harness.md) | Extract a shared verification-script harness | P3 | M | 001, 003, 004 recommended | TODO |
+| [009](009-design-state-delta-broadcast.md) | Write the design for incremental `state.delta` broadcast (D3) | P2 | M | - | TODO |
+| [010](010-publish-npm-front-door.md) | Make the published npm package the install front door | P1 | S | - | TODO |
+| [011](011-spike-onboard-briefing.md) | Spike `synapse onboard` first-session briefing (C4 slice) | P2 | M | - | TODO |
+| [012](012-spike-rename-tracking.md) | Spike TypeScript rename tracking (`renamed` deltas, F5 slice) | P3 | M | - | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
 
@@ -24,6 +28,8 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
 - Plan 001 should land before Plan 007 if possible because both touch daemon check/report behavior and Plan 007 must preserve the pre-check snapshot invariant.
 - Plan 008 is intentionally last because it refactors verifier scripts that Plans 001, 003, and 004 may extend. Running it after those reduces merge conflicts.
 - Plans 002, 003, 004, 005, and 006 are otherwise independent.
+- Plans 009–012 came from a separate direction audit (`improve next`, 2026-06-11, commit `8c46a61`) — owner selected all four. They are mutually independent and independent of 001–008, with one soft note: 009 is a design document only (the D3 implementation plans get written after the owner reviews it), and if 006 or 007 land first, 009's executor must re-check its cited broadcast-site line numbers (its drift check covers this).
+- Recommended order for the new set: 010 (cheapest, highest adoption leverage) → 009 → 011 → 012.
 
 ## Verification Baseline
 
@@ -40,3 +46,9 @@ Full build/test was not run during the advisory pass because it writes build art
 - Server auth accepts query-string tokens for backward compatibility: documented and lower priority than daemon hardening.
 - Negative `/recall` limits and byte-vs-character payload counting: real edge cases but lower leverage than selected plans.
 - Untracked `Synapse/` directory: appears generated/build-only and outside the tracked source audit; not planned here.
+
+From the direction audit (2026-06-11):
+
+- E1 VS Code extension / E4 editor rules: skipped — PR #35's `synapse connect` already delivers MCP registration + rules files to VS Code/Cursor/Windsurf; a native extension serves human UI, not agents, and adds a marketplace maintenance surface. Revisit on user demand.
+- D4 / M13 web dashboard: not planned — `Synapse/` at the repo root contains only build output (`dist/` + `node_modules/`, no source), so "fold into apps/web" first requires recovering or rebuilding the landing-page source; the vision doc defers dashboards until revenue. Surface to the owner as a narrow decision (track the landing source) rather than a build plan.
+- M14 GitHub OAuth: stays decision-gated per D1 — its trigger is a hosted SaaS launch (a business event), not a code condition.

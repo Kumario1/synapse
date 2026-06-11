@@ -242,7 +242,7 @@ Credentials are sent via `Authorization: Bearer` (the server still accepts `?tok
 | --- | --- |
 | **Resilient channel** | Exponential backoff + full jitter (`SYNAPSE_RECONNECT_BASE_MS` / `SYNAPSE_RECONNECT_MAX_MS`), capped offline outbox flushed in order on reconnect, and 20s server pings (`SYNAPSE_WS_PING_INTERVAL_MS`) that terminate half-open sockets |
 | **Observability** | JSON logs gated by `SYNAPSE_LOG_LEVEL` (default `info`) + Prometheus counters at `GET /metrics` |
-| **Ingress validation** | Every wire message is validated against shared zod schemas before any state mutation; WS/webhook bodies capped at 1MB (`SYNAPSE_MAX_PAYLOAD_BYTES`) |
+| **Ingress validation** | Every server-bound wire message is validated against shared zod schemas before any state mutation, and daemon-bound server frames are validated before they update the warm cache. WS/webhook bodies and local daemon JSON tool bodies are capped at 1MB; malformed local JSON returns 400 and oversized local JSON returns 413 |
 | **Rate limiting** | Per-connection WS budget (`SYNAPSE_RATE_LIMIT_PER_MIN`, default 600) and a webhook budget (`SYNAPSE_WEBHOOK_RATE_LIMIT_PER_MIN`, default 120): over-limit messages are acked `rate_limited` and dropped before any mutation; webhooks answer 429. `0` disables |
 | **Webhook posture** | A server running with auth (shared token or project keys) refuses unsigned webhooks with 403 until `SYNAPSE_GITHUB_WEBHOOK_SECRET` is set; open mode (local/dev) is unchanged |
 | **Protocol negotiation** | Versions are exchanged at the WS handshake: legacy clients (no announcement) connect as v1, newer clients downgrade to the server's dialect, out-of-range clients are refused with HTTP 426 + the supported range in headers. `/health` reports `protocolVersion` + `minProtocolVersion`; `synapse doctor` fails loudly on non-overlapping ranges |
@@ -299,7 +299,7 @@ Run with `npm run <script>`. See [`package.json`](package.json) for the complete
 | `verify:reconnect` | A delta emitted while the server is down still reaches the team after restart |
 | `verify:metrics` | Structured logs and `/metrics` counters |
 | `verify:protocol-compat` | Handshake version negotiation: legacy accepted, newer downgraded, out-of-range refused with 426 + range headers |
-| `verify:security` | WS flood → `rate_limited` acks, state bounded; webhook 429 past budget; auth-mode server refuses unsigned webhooks (403) until a secret is set, then signed-only |
+| `verify:security` | WS flood → `rate_limited` acks, state bounded; local daemon JSON 413/400 regressions; webhook 429 past budget; auth-mode server refuses unsigned webhooks (403) until a secret is set, then signed-only |
 | `verify:fuzz` | Seeded malformed-source corpus against all three analyzers: the TS extractor never throws; the Python/Go sidecars answer or reject every request and stay healthy |
 | `verify:why-rag` | Hybrid recall: a question with zero lexical overlap finds the memory through vectors (stub embeddings, advisory-locked pgvector init); the lexical floor alone finds nothing; no provider → `degraded: true`. Needs pgvector (CI image), SKIPs offline |
 | `verify:adaptive-severity` | Feedback-tuned demotion of noisy warnings |
