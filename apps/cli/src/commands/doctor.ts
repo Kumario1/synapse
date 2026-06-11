@@ -1,5 +1,5 @@
 import { WebSocket } from "ws";
-import { PROTOCOL_VERSION } from "@synapse/protocol";
+import { MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION } from "@synapse/protocol";
 import type { TeamState } from "@synapse/protocol";
 import { configFromArgs, numberValue, type RuntimeConfig } from "../config.js";
 
@@ -62,14 +62,22 @@ export async function runDoctor(
   checks.push(health.check);
 
   if (health.body) {
-    const serverProtocol = numberValue((health.body as Record<string, unknown>).protocolVersion);
-    if (serverProtocol === undefined) {
+    const body = health.body as Record<string, unknown>;
+    const serverProtocol = numberValue(body.protocolVersion);
+    const serverMin = numberValue(body.minProtocolVersion) ?? serverProtocol;
+    if (serverProtocol === undefined || serverMin === undefined) {
       checks.push({ name: "protocol", status: "warn", detail: "server /health did not report protocolVersion (older server?)" });
+    } else if (PROTOCOL_VERSION < serverMin || MIN_SUPPORTED_PROTOCOL_VERSION > serverProtocol) {
+      checks.push({
+        name: "protocol",
+        status: "fail",
+        detail: `client speaks v${MIN_SUPPORTED_PROTOCOL_VERSION}–v${PROTOCOL_VERSION}, server v${serverMin}–v${serverProtocol} — no overlap; upgrade the older side.`
+      });
     } else if (serverProtocol !== PROTOCOL_VERSION) {
       checks.push({
         name: "protocol",
         status: "warn",
-        detail: `server protocol v${serverProtocol}, client v${PROTOCOL_VERSION} — upgrade the older side.`
+        detail: `server protocol v${serverProtocol}, client v${PROTOCOL_VERSION} — compatible (negotiated down), but upgrade the older side.`
       });
     } else {
       checks.push({ name: "protocol", status: "pass", detail: `protocol v${PROTOCOL_VERSION}` });
