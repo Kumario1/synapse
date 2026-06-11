@@ -183,15 +183,15 @@ If adding a full daemon script is too heavy, add focused unit tests around `read
 
 ## Done criteria
 
-- [ ] Local daemon JSON bodies are bounded before `Buffer.concat`.
-- [ ] Malformed local JSON returns 400, oversized local JSON returns 413.
-- [ ] Invalid server WebSocket frames no longer crash the daemon.
-- [ ] `npm run typecheck` exits 0.
-- [ ] `npm test --workspace @synapse/protocol` exits 0.
-- [ ] `npm run verify:security` exits 0.
-- [ ] `npm run verify:mcp-adapter` exits 0.
-- [ ] `npm run verify:hooks` exits 0.
-- [ ] `plans/README.md` status row for Plan 004 is updated.
+- [x] Local daemon JSON bodies are bounded before `Buffer.concat`.
+- [x] Malformed local JSON returns 400, oversized local JSON returns 413.
+- [x] Invalid server WebSocket frames no longer crash the daemon.
+- [x] `npm run typecheck` exits 0.
+- [x] `npm test --workspace @synapse/protocol` exits 0.
+- [x] `npm run verify:security` exits 0.
+- [x] `npm run verify:mcp-adapter` exits 0.
+- [x] `npm run verify:hooks` exits 0.
+- [x] `plans/README.md` status row for Plan 004 is updated.
 
 ## STOP conditions
 
@@ -205,4 +205,3 @@ Stop and report if:
 ## Maintenance notes
 
 If future local daemon routes are added, they should use the same `readJson` helper and inherit the cap. Reviewers should look for any new direct `JSON.parse` on network or local IPC input.
-

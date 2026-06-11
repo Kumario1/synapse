@@ -24,6 +24,7 @@ import {
   MetricsRegistry,
   MIN_SUPPORTED_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
+  parseServerMessage,
   type ClientMessage,
   type CodeSymbol,
   type ConflictFeedback,
@@ -33,7 +34,6 @@ import {
   type ProposedResolution,
   type RecallMatch,
   type RecallResponse,
-  type ServerMessage,
   type Session,
   type SessionSummary,
   type SynapseCheckRequest,
@@ -67,7 +67,7 @@ import {
   type SessionSummaryDelta,
   type SummaryProvider
 } from "./explain-openrouter.js";
-import { readJson, writeJson } from "./http.js";
+import { JsonBodyError, readJson, writeJson } from "./http.js";
 import { startFileWatcher } from "./watcher.js";
 
 export async function startDaemon(config: RuntimeConfig): Promise<void> {
@@ -179,7 +179,21 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
     });
 
     socket.on("message", (data) => {
-      const message = JSON.parse(data.toString()) as ServerMessage;
+      let raw: unknown;
+      try {
+        raw = JSON.parse(data.toString());
+      } catch {
+        log.warn("ws.invalid_frame", { error: "invalid_json" });
+        return;
+      }
+
+      const parsed = parseServerMessage(raw);
+      if (!parsed.ok) {
+        log.warn("ws.invalid_frame", { error: parsed.error });
+        return;
+      }
+
+      const message = parsed.message;
       if (message.type === "state.snapshot" || message.type === "state.delta") {
         teamState = message.payload.teamState;
       }
@@ -533,6 +547,13 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
 
       writeJson(response, 404, { error: "not_found" });
     } catch (error) {
+      if (error instanceof JsonBodyError) {
+        writeJson(response, error.code === "payload_too_large" ? 413 : 400, {
+          error: error.code
+        });
+        return;
+      }
+
       const reason = error instanceof Error ? error.message : "unknown_error";
       writeJson(response, 500, { error: reason });
     }

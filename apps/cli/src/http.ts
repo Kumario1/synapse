@@ -1,5 +1,17 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 
+export const MAX_JSON_BODY_BYTES = 1_048_576;
+
+export class JsonBodyError extends Error {
+  constructor(
+    public readonly code: "payload_too_large" | "invalid_json",
+    message: string = code
+  ) {
+    super(message);
+    this.name = "JsonBodyError";
+  }
+}
+
 export async function isHealthy(url: string): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 1500);
@@ -24,18 +36,30 @@ export async function waitForHealth(url: string, timeoutMs: number): Promise<voi
   throw new Error(`server did not become healthy at ${url} within ${timeoutMs}ms`);
 }
 
-
-export async function readJson(request: IncomingMessage): Promise<unknown> {
+export async function readJson(
+  request: IncomingMessage,
+  maxBytes = MAX_JSON_BODY_BYTES
+): Promise<unknown> {
   const chunks: Buffer[] = [];
+  let totalBytes = 0;
   for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    totalBytes += buffer.byteLength;
+    if (totalBytes > maxBytes) {
+      throw new JsonBodyError("payload_too_large");
+    }
+    chunks.push(buffer);
   }
 
   if (chunks.length === 0) {
     return {};
   }
 
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  try {
+    return JSON.parse(Buffer.concat(chunks, totalBytes).toString("utf8"));
+  } catch {
+    throw new JsonBodyError("invalid_json");
+  }
 }
 
 export function writeJson(response: ServerResponse, statusCode: number, body: unknown): void {
@@ -57,4 +81,3 @@ export async function postJson(url: string, body: unknown): Promise<unknown> {
 
   return payload;
 }
-

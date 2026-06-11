@@ -326,10 +326,17 @@ query.briefing       { since? }
 Server → Client (implemented subset):
 ```
 state.snapshot       { teamState: TeamState }     // on connect / resync AND after each mutation
+state.delta          { teamState: TeamState }     // accepted by daemon, reserved for incremental fan-out
 ack                  { forId, ok, error? }
 ```
 (`state.delta` incremental fan-out and proactive `conflict.alert` remain on the design board; today the
 server re-broadcasts a full `state.snapshot` after every mutation.)
+
+Runtime validation is bidirectional at process boundaries. The server validates every inbound
+client message with the shared zod wire schemas before mutation; the daemon parses server frames
+with the matching server-message schema and ignores malformed frames with a warning instead of
+crashing or poisoning the warm cache. The daemon's local HTTP tool endpoints also cap JSON bodies at
+1MB before concatenation, answer malformed JSON with 400, and answer oversized JSON with 413.
 
 > Auth (current): when `SYNAPSE_AUTH_TOKEN` is set, the WSS handshake and `GET /state` require a
 > matching token (`?token=` or `Authorization: Bearer`, constant-time compared). Unset = open. GitHub
