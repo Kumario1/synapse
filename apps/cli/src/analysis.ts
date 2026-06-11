@@ -412,7 +412,7 @@ function sourceSetFingerprint(files: SourceFileFingerprint[]): string {
     .join("|");
 }
 
-function ignoredDirectory(name: string): boolean {
+export function ignoredDirectory(name: string): boolean {
   return new Set([
     ".git",
     ".turbo",

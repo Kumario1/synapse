@@ -342,6 +342,15 @@ M15 negotiation ─→ D3 delta broadcast (if approved)
   in-memory state back (lost update — a session vanished until the next heartbeat) → every
   cache-touching path (message apply, webhook apply, snapshot reads, remote refresh) now runs
   under a per-repo async mutex (`withRepo`), with dirty-marking + single-flight loads inside it.
+- 2026-06-11 — **M10** ✅ (branch `feat/file-watcher`): `apps/cli/src/watcher.ts` — chokidar over
+  `worktreeRoot`, scope mirroring the analyzer scan's ignored-directory set (the product-wide
+  .gitignore approximation), per-file debounce (`SYNAPSE_WATCH_DEBOUNCE_MS`, default 400ms), only
+  analyzable sources forwarded. A watched change flows through the existing `reportContractChanges`
+  path (first event = baseline snapshot, next = deltas via `contract.delta`), so manual edits
+  between agent turns reach the team with no `synapse_report` call. On by default in the daemon
+  (the spec-§1 promise), `SYNAPSE_FILE_WATCHER=0` opts out; `synapse_watch_reports_total` metric.
+  Exit: `verify:file-watcher` — new file → baseline, signature edit → delta in server `/state`
+  with zero report calls; README.md edit ignored; opt-out daemon stays inert.
 - 2026-06-09 — **Phase A complete** (branch `foundation-hardening-m1-m4`):
   - **M1** ✅ `.github/workflows/ci.yml` (check + verify jobs, npm/venv caching) +
     `scripts/ci-verify-all.mjs` (one-build aggregate runner; `--only`, `SYNAPSE_VERIFY_SKIP`,

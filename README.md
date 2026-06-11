@@ -244,6 +244,7 @@ Credentials are sent via `Authorization: Bearer` (the server still accepts `?tok
 | **Ingress validation** | Every wire message is validated against shared zod schemas before any state mutation; WS/webhook bodies capped at 1MB (`SYNAPSE_MAX_PAYLOAD_BYTES`) |
 | **Adaptive severity** | `synapse_feedback` telemetry demotes a noisy rule (≥5 dismissals, ≥80% dismiss rate) from `warn` to `info`; detection never changes. Opt out with `SYNAPSE_ADAPTIVE_SEVERITY=0` |
 | **Branch-aware severity** | Cross-branch `dependency_changed`/`stale_base` conflicts demote `warn` → `info` (they bite at merge time, not on the next keystroke); merge-blocking rules (`same_symbol_*`, `contract_divergent`) never demote. Sessions/pushes carry their git branch (webhook pushes derive it from `ref`); unknown branch → no change. Opt out with `SYNAPSE_BRANCH_AWARE_SEVERITY=0` |
+| **File watcher** | The daemon watches the worktree (same ignore set as the analyzer scan), so manual edits — no agent, no `synapse_report` — still emit contract deltas through the report path. Debounced per file (`SYNAPSE_WATCH_DEBOUNCE_MS`, default 400ms); only analyzable sources are reported. Opt out with `SYNAPSE_FILE_WATCHER=0` |
 
 **Install as a package** — `@synapse/cli` packs as a self-contained tarball (all five workspace packages, server, and the Python sidecar bundled):
 
@@ -284,6 +285,7 @@ Run with `npm run <script>`. See [`package.json`](package.json) for the complete
 | `verify:persistence` | State survives a server restart (SQLite, per-entity rows) |
 | `verify:persistence-pg` | Same durability proof on Postgres incl. SIGKILL; runs when `SYNAPSE_VERIFY_PG_URL`/`SYNAPSE_DATABASE_URL` is set (CI service), SKIPs offline |
 | `verify:multi-instance` | Two servers on shared Postgres + Redis, daemons split across them; a report on A is readable in `GET /state` on B and pushed to B's daemon. Needs `SYNAPSE_VERIFY_PG_URL` + `SYNAPSE_VERIFY_REDIS_URL` (CI services), SKIPs offline |
+| `verify:file-watcher` | A manual edit (no report call) emits a contract delta via the watcher; non-analyzable files ignored; `SYNAPSE_FILE_WATCHER=0` daemon stays inert |
 | `verify:reconnect` | A delta emitted while the server is down still reaches the team after restart |
 | `verify:metrics` | Structured logs and `/metrics` counters |
 | `verify:adaptive-severity` | Feedback-tuned demotion of noisy warnings |
