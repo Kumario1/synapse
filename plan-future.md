@@ -388,6 +388,17 @@ M15 negotiation ─→ D3 delta broadcast (if approved)
   and warns on compatible-but-different. 6 unit tests + `verify:protocol-compat` (current client,
   legacy client, newer-client downgrade, out-of-range 426 refusal). D3 (incremental `state.delta`)
   is now unblocked pending owner approval.
+- 2026-06-11 — **G4 remainder** ✅ (branch `feat/security-hardening`): (1) ingress rate limiting —
+  sliding one-minute budgets per WS connection (`SYNAPSE_RATE_LIMIT_PER_MIN`, default 600) and for
+  the webhook endpoint (`SYNAPSE_WEBHOOK_RATE_LIMIT_PER_MIN`, default 120; 0 disables either);
+  over-limit WS messages are acked `rate_limited` and dropped before any mutation, webhooks answer
+  429; `synapse_rate_limited_total{surface}` metric. (2) webhook secret required in production:
+  with auth enabled (shared-token/project-key), `/webhooks/github` answers 403
+  `webhook_secret_required` until `SYNAPSE_GITHUB_WEBHOOK_SECRET` is configured; open mode
+  unchanged. (3) resolver privacy: README Privacy section documenting the one place raw code can
+  leave the machine and the `SYNAPSE_LLM_RESOLVE=0` / `OPENROUTER_BASE_URL` opt-outs (knob already
+  existed). Exit: `verify:security` — WS flood → bounded state + rate_limited acks; webhook 429;
+  auth-mode 403 without secret; signed-only acceptance with one.
 - 2026-06-09 — **Phase A complete** (branch `foundation-hardening-m1-m4`):
   - **M1** ✅ `.github/workflows/ci.yml` (check + verify jobs, npm/venv caching) +
     `scripts/ci-verify-all.mjs` (one-build aggregate runner; `--only`, `SYNAPSE_VERIFY_SKIP`,

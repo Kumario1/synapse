@@ -243,10 +243,14 @@ Credentials are sent via `Authorization: Bearer` (the server still accepts `?tok
 | **Resilient channel** | Exponential backoff + full jitter (`SYNAPSE_RECONNECT_BASE_MS` / `SYNAPSE_RECONNECT_MAX_MS`), capped offline outbox flushed in order on reconnect, and 20s server pings (`SYNAPSE_WS_PING_INTERVAL_MS`) that terminate half-open sockets |
 | **Observability** | JSON logs gated by `SYNAPSE_LOG_LEVEL` (default `info`) + Prometheus counters at `GET /metrics` |
 | **Ingress validation** | Every wire message is validated against shared zod schemas before any state mutation; WS/webhook bodies capped at 1MB (`SYNAPSE_MAX_PAYLOAD_BYTES`) |
+| **Rate limiting** | Per-connection WS budget (`SYNAPSE_RATE_LIMIT_PER_MIN`, default 600) and a webhook budget (`SYNAPSE_WEBHOOK_RATE_LIMIT_PER_MIN`, default 120): over-limit messages are acked `rate_limited` and dropped before any mutation; webhooks answer 429. `0` disables |
+| **Webhook posture** | A server running with auth (shared token or project keys) refuses unsigned webhooks with 403 until `SYNAPSE_GITHUB_WEBHOOK_SECRET` is set; open mode (local/dev) is unchanged |
 | **Protocol negotiation** | Versions are exchanged at the WS handshake: legacy clients (no announcement) connect as v1, newer clients downgrade to the server's dialect, out-of-range clients are refused with HTTP 426 + the supported range in headers. `/health` reports `protocolVersion` + `minProtocolVersion`; `synapse doctor` fails loudly on non-overlapping ranges |
 | **Adaptive severity** | `synapse_feedback` telemetry demotes a noisy rule (≥5 dismissals, ≥80% dismiss rate) from `warn` to `info`; detection never changes. Opt out with `SYNAPSE_ADAPTIVE_SEVERITY=0` |
 | **Branch-aware severity** | Cross-branch `dependency_changed`/`stale_base` conflicts demote `warn` → `info` (they bite at merge time, not on the next keystroke); merge-blocking rules (`same_symbol_*`, `contract_divergent`) never demote. Sessions/pushes carry their git branch (webhook pushes derive it from `ref`); unknown branch → no change. Opt out with `SYNAPSE_BRANCH_AWARE_SEVERITY=0` |
 | **File watcher** | The daemon watches the worktree (same ignore set as the analyzer scan), so manual edits — no agent, no `synapse_report` — still emit contract deltas through the report path. Debounced per file (`SYNAPSE_WATCH_DEBOUNCE_MS`, default 400ms); only analyzable sources are reported. Opt out with `SYNAPSE_FILE_WATCHER=0` |
+
+**Privacy** — detection is fully deterministic and local: only symbol-level contracts (signatures, never function bodies) leave the daemon. The optional LLM layers relax this in one place: the contract *resolver* sends the computing agent's full file plus its dependency-graph neighbors to the configured model so the merge is caller-aware. Opt out with `SYNAPSE_LLM_RESOLVE=0` (or leave `OPENROUTER_API_KEY` unset), or point `OPENROUTER_BASE_URL` at a local/self-hosted OpenAI-compatible endpoint to keep code on your machines.
 
 **Install as a package** — `@synapse/cli` packs as a self-contained tarball (all five workspace packages, server, and the Python sidecar bundled):
 
@@ -293,6 +297,7 @@ Run with `npm run <script>`. See [`package.json`](package.json) for the complete
 | `verify:reconnect` | A delta emitted while the server is down still reaches the team after restart |
 | `verify:metrics` | Structured logs and `/metrics` counters |
 | `verify:protocol-compat` | Handshake version negotiation: legacy accepted, newer downgraded, out-of-range refused with 426 + range headers |
+| `verify:security` | WS flood → `rate_limited` acks, state bounded; webhook 429 past budget; auth-mode server refuses unsigned webhooks (403) until a secret is set, then signed-only |
 | `verify:adaptive-severity` | Feedback-tuned demotion of noisy warnings |
 | `verify:branch-aware-severity` | Cross-branch `stale_base`/`dependency_changed` demote to `info`; merge-blocking rules and same-branch conflicts still warn |
 | `verify:docker` | Builds the server image, boots it, drives one edit→report |
