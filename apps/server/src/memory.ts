@@ -1,6 +1,7 @@
 import { createLogger, type RecallMatch, type SynapseWhySourceKind } from "@synapse/protocol";
 import type { Pool } from "pg";
 import type { EmbeddingProvider } from "./embeddings.js";
+import { withPgAdvisoryLock } from "./pg-advisory-lock.js";
 
 const log = createLogger("synapse-memory");
 
@@ -44,22 +45,27 @@ export class VectorMemory {
       try {
         // Same advisory-lock discipline as the store: concurrent instance
         // boots must not race the DDL (M9 lesson).
-        await client.query("SELECT pg_advisory_lock(727269784)"); // 'synapse'+1
-        await client.query("CREATE EXTENSION IF NOT EXISTS vector");
-        await client.query(
-          `CREATE TABLE IF NOT EXISTS synapse_memory (
-             repo_id TEXT NOT NULL,
-             id TEXT NOT NULL,
-             kind TEXT NOT NULL,
-             title TEXT NOT NULL,
-             summary TEXT NOT NULL,
-             reference TEXT,
-             created_at TEXT NOT NULL,
-             embedding vector(${this.provider.dim}) NOT NULL,
-             PRIMARY KEY (repo_id, id)
-           )`
+        await withPgAdvisoryLock(
+          client,
+          727269784,
+          async () => {
+            await client.query("CREATE EXTENSION IF NOT EXISTS vector");
+            await client.query(
+              `CREATE TABLE IF NOT EXISTS synapse_memory (
+                 repo_id TEXT NOT NULL,
+                 id TEXT NOT NULL,
+                 kind TEXT NOT NULL,
+                 title TEXT NOT NULL,
+                 summary TEXT NOT NULL,
+                 reference TEXT,
+                 created_at TEXT NOT NULL,
+                 embedding vector(${this.provider.dim}) NOT NULL,
+                 PRIMARY KEY (repo_id, id)
+               )`
+            );
+          },
+          log
         );
-        await client.query("SELECT pg_advisory_unlock(727269784)");
       } finally {
         client.release();
       }

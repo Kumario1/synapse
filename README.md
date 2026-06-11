@@ -52,7 +52,7 @@
   </tr>
   <tr>
     <td><b>Durable state</b></td>
-    <td>Server state persists through a storage-agnostic <code>StateStore</code> (SQLite now; Postgres/Redis later) and survives restarts.</td>
+    <td>Server state persists through a storage-agnostic <code>StateStore</code> (SQLite locally, optional Postgres for shared deployments) and survives restarts.</td>
   </tr>
   <tr>
     <td><b>Seamless multi-machine</b></td>
@@ -230,7 +230,7 @@ Resolved at server startup. `/health` and the GitHub webhook (its own HMAC) stay
 
 Credentials are sent via `Authorization: Bearer` (the server still accepts `?token=` for back-compat), keeping tokens out of URL query strings and access logs.
 
-**State store** — persisted per entity (sessions, locks, deltas, pushes, events, resolutions, summaries, feedback as rows; every mutation writes only its own row). Backend selection: `SYNAPSE_DATABASE_URL` → Postgres (the shared-database backend for multi-instance deployments; the `pg` driver loads only when selected); else `SYNAPSE_DB_PATH` → file-backed SQLite (WAL) that survives restarts; neither → ephemeral in-memory SQLite. Pre-existing SQLite snapshot databases migrate to per-entity rows automatically on first boot.
+**State store** — persisted per entity (sessions, locks, deltas, pushes, events, resolutions, summaries, feedback as rows; every mutation writes only its own row). Backend selection: `SYNAPSE_DATABASE_URL` → Postgres (the shared-database backend for multi-instance deployments; the `pg` driver loads only when selected); else `SYNAPSE_DB_PATH` → file-backed SQLite (WAL) that survives restarts; neither → ephemeral in-memory SQLite. Pre-existing SQLite snapshot databases migrate to per-entity rows automatically on first boot. Postgres schema initialization is serialized with advisory locks, and startup always attempts to release the lock before returning the pooled connection, including when DDL fails.
 
 **Multi-instance** — set `SYNAPSE_REDIS_URL` (alongside a shared `SYNAPSE_DATABASE_URL`) to run several server instances behind a load balancer: after a mutation, the instance publishes the repo's Redis channel; the others re-read that repo from the shared store and re-broadcast the fresh snapshot to their local rooms. Redis carries no state — it is purely the wake-up signal (the `redis` driver loads only when selected), and lock/session expiry stays timestamp-based against the shared rows, so every instance evaluates the same liveness. Unset → the single-instance path, unchanged.
 
@@ -250,7 +250,7 @@ Credentials are sent via `Authorization: Bearer` (the server still accepts `?tok
 | **Branch-aware severity** | Cross-branch `dependency_changed`/`stale_base` conflicts demote `warn` → `info` (they bite at merge time, not on the next keystroke); merge-blocking rules (`same_symbol_*`, `contract_divergent`) never demote. Sessions/pushes carry their git branch (webhook pushes derive it from `ref`); unknown branch → no change. Opt out with `SYNAPSE_BRANCH_AWARE_SEVERITY=0` |
 | **File watcher** | The daemon watches the worktree (same ignore set as the analyzer scan), so manual edits — no agent, no `synapse_report` — still emit contract deltas through the report path. Debounced per file (`SYNAPSE_WATCH_DEBOUNCE_MS`, default 400ms); only analyzable sources are reported. Opt out with `SYNAPSE_FILE_WATCHER=0` |
 
-**RAG memory** — with `SYNAPSE_DATABASE_URL` (Postgres + pgvector) and an OpenAI-compatible embeddings endpoint (`SYNAPSE_EMBED_BASE_URL`), the server indexes session summaries, contract resolutions, and repo events as vectors, and `synapse_why` answers **hybrid**: the deterministic lexical floor always stands, vector recall only adds semantically-related memories on top (`rag: true`, numbered citations preserved). Without embeddings, `/recall` reports `degraded: true` and the floor answers alone. Only prose is embedded — titles, summaries, rationales — never raw code. `SYNAPSE_RAG=0` disables.
+**RAG memory** — with `SYNAPSE_DATABASE_URL` (Postgres + pgvector) and an OpenAI-compatible embeddings endpoint (`SYNAPSE_EMBED_BASE_URL`), the server indexes session summaries, contract resolutions, and repo events as vectors, and `synapse_why` answers **hybrid**: the deterministic lexical floor always stands, vector recall only adds semantically-related memories on top (`rag: true`, numbered citations preserved). pgvector extension/table initialization uses the same advisory-lock discipline as the state store and degrades cleanly if setup fails. Without embeddings, `/recall` reports `degraded: true` and the floor answers alone. Only prose is embedded — titles, summaries, rationales — never raw code. `SYNAPSE_RAG=0` disables.
 
 **Privacy** — detection is fully deterministic and local: only symbol-level contracts (signatures, never function bodies) leave the daemon. The optional LLM layers relax this in one place: the contract *resolver* sends the computing agent's full file plus its dependency-graph neighbors to the configured model so the merge is caller-aware. Opt out with `SYNAPSE_LLM_RESOLVE=0` (or leave `OPENROUTER_API_KEY` unset), or point `OPENROUTER_BASE_URL` at a local/self-hosted OpenAI-compatible endpoint to keep code on your machines.
 
@@ -293,7 +293,7 @@ Run with `npm run <script>`. See [`package.json`](package.json) for the complete
 | `verify:auth` / `verify:tenancy` | Shared-token and project-key auth paths |
 | `verify:up` / `verify:up-tunnel` / `verify:doctor` | Multi-machine setup, tunnels, and preflight diagnostics |
 | `verify:persistence` | State survives a server restart (SQLite, per-entity rows) |
-| `verify:persistence-pg` | Same durability proof on Postgres incl. SIGKILL; runs when `SYNAPSE_VERIFY_PG_URL`/`SYNAPSE_DATABASE_URL` is set (CI service), SKIPs offline |
+| `verify:persistence-pg` | Same durability proof on Postgres incl. advisory-locked schema init and SIGKILL; runs when `SYNAPSE_VERIFY_PG_URL`/`SYNAPSE_DATABASE_URL` is set (CI service), SKIPs offline |
 | `verify:multi-instance` | Two servers on shared Postgres + Redis, daemons split across them; a report on A is readable in `GET /state` on B and pushed to B's daemon. Needs `SYNAPSE_VERIFY_PG_URL` + `SYNAPSE_VERIFY_REDIS_URL` (CI services), SKIPs offline |
 | `verify:file-watcher` | A manual edit (no report call) emits a contract delta via the watcher; non-analyzable files ignored; `SYNAPSE_FILE_WATCHER=0` daemon stays inert |
 | `verify:reconnect` | A delta emitted while the server is down still reaches the team after restart |
@@ -301,7 +301,7 @@ Run with `npm run <script>`. See [`package.json`](package.json) for the complete
 | `verify:protocol-compat` | Handshake version negotiation: legacy accepted, newer downgraded, out-of-range refused with 426 + range headers |
 | `verify:security` | WS flood → `rate_limited` acks, state bounded; webhook 429 past budget; auth-mode server refuses unsigned webhooks (403) until a secret is set, then signed-only |
 | `verify:fuzz` | Seeded malformed-source corpus against all three analyzers: the TS extractor never throws; the Python/Go sidecars answer or reject every request and stay healthy |
-| `verify:why-rag` | Hybrid recall: a question with zero lexical overlap finds the memory through vectors (stub embeddings, pgvector); the lexical floor alone finds nothing; no provider → `degraded: true`. Needs pgvector (CI image), SKIPs offline |
+| `verify:why-rag` | Hybrid recall: a question with zero lexical overlap finds the memory through vectors (stub embeddings, advisory-locked pgvector init); the lexical floor alone finds nothing; no provider → `degraded: true`. Needs pgvector (CI image), SKIPs offline |
 | `verify:adaptive-severity` | Feedback-tuned demotion of noisy warnings |
 | `verify:branch-aware-severity` | Cross-branch `stale_base`/`dependency_changed` demote to `info`; merge-blocking rules and same-branch conflicts still warn |
 | `verify:docker` | Builds the server image, boots it, drives one edit→report |
