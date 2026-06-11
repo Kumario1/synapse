@@ -24,12 +24,13 @@
     "chokidar": "^5.0.0",
     "ts-morph": "^28.0.0",
     "ws": "^8.18.2",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "@synapse/analyzer-go": "0.0.0"
   },
   "devDependencies": {
     "@types/ws": "^8.18.1"
   },
-  "description": "Synapse — realtime contract-level coordination for teams of coding agents",
+  "description": "Synapse \u2014 realtime contract-level coordination for teams of coding agents",
   "license": "MIT",
   "files": [
     "dist"
@@ -38,10 +39,11 @@
     "access": "public"
   },
   "bundleDependencies": [
-    "@synapse/protocol",
-    "@synapse/conflict-engine",
-    "@synapse/analyzer-ts",
+    "@synapse/analyzer-go",
     "@synapse/analyzer-py",
+    "@synapse/analyzer-ts",
+    "@synapse/conflict-engine",
+    "@synapse/protocol",
     "@synapse/server"
   ]
 }

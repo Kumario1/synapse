@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { resolve } from "node:path";
+import { closeGoAnalyzer, diffGoContracts } from "@synapse/analyzer-go";
 import { closePythonAnalyzer, diffPythonContracts } from "@synapse/analyzer-py";
 import { diffTypeScriptContracts, extractTypeScriptContracts } from "@synapse/analyzer-ts";
 import {
@@ -47,6 +48,7 @@ import {
   buildDependencyGraph,
   extractSymbolsForFile,
   isAnalyzable,
+  isGoLike,
   isPythonLike,
   resolveCheckTargets,
   selfChanges,
@@ -503,6 +505,7 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
   // Tear the Python sidecar down with the daemon so it never lingers.
   const shutdown = (): void => {
     closePythonAnalyzer();
+    closeGoAnalyzer();
     localServer.close();
     socket?.close();
     process.exit(0);
@@ -795,7 +798,11 @@ async function reportContractChanges(
     return [];
   }
 
-  const diff = isPythonLike(filePath) ? diffPythonContracts : diffTypeScriptContracts;
+  const diff = isPythonLike(filePath)
+    ? diffPythonContracts
+    : isGoLike(filePath)
+      ? diffGoContracts
+      : diffTypeScriptContracts;
   return diff(previous, current).map((change) =>
     createContractDelta(config, {
       symbolId: change.symbolId,
