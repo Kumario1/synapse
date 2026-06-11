@@ -381,6 +381,10 @@ M15 negotiation ─→ D3 delta broadcast (if approved)
   already worked (covered by new tests). 5 new analyzer tests (9 total) + `verify:tsx-check` —
   default-export `.tsx` props change → symbol delta + `dependency_changed` for the importing
   component via the default-import edge; `.mjs` helper joins the same graph.
+- 2026-06-11 — **Plan 003** ✅ (branch `advisor/003-ts-namespace-imports`): relative
+  `import * as ns from "./module"` dependency edges now resolve `ns.exportedSymbol` through the
+  same exported-name map used by named/default imports. Added analyzer coverage for namespace
+  property access and kept `verify:dependency-ts-check` + `verify:tsx-check` green.
 - 2026-06-11 — **M12** ✅ (branch `feat/go-analyzer`, D5 default: Go): `packages/analyzer-go` —
   a warm Go sidecar (stdlib `go/parser` + `go/ast`, zero module deps, static binary) speaking the
   same newline-delimited JSON-RPC protocol as analyzer-py (`health`/`extractFile`/`indexGraph`).

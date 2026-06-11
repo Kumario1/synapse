@@ -10,7 +10,7 @@ This plan set came from a deep advisory audit. Source files were not modified wh
 | --- | --- | --- | --- | --- | --- |
 | [001](001-seed-check-snapshots.md) | Seed snapshots during pre-edit checks | P1 | M | - | DONE |
 | [002](002-release-pg-advisory-locks.md) | Always release Postgres advisory locks during initialization | P1 | S | - | DONE |
-| [003](003-support-ts-namespace-imports.md) | Resolve TypeScript namespace-import dependency edges | P1 | M | - | TODO |
+| [003](003-support-ts-namespace-imports.md) | Resolve TypeScript namespace-import dependency edges | P1 | M | - | DONE |
 | [004](004-harden-daemon-local-inputs.md) | Harden local daemon JSON and server-message parsing | P2 | S | - | TODO |
 | [005](005-refresh-docs-roadmap.md) | Refresh roadmap and status documentation | P2 | S | - | TODO |
 | [006](006-publish-live-branch-updates.md) | Publish branch changes during active sessions | P2 | M | - | TODO |

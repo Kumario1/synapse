@@ -143,6 +143,8 @@ analyzer.health()                      -> { ok, version, lang }
 Extracts: exported functions (params+types+return+generics), exported classes (public methods/fields),
 `interface`/`type` shapes, exported `const`/`enum`, and — phase 2 — framework route definitions
 (Next.js route handlers, Express/Hono routes). Uses the TS compiler's type checker for real types.
+The dependency graph resolves relative named, aliased, default, and namespace imports to exported
+symbol ids, so `dependency_changed` warnings survive common TypeScript import styles.
 
 ### Python analyzer (Python sidecar, pyright/jedi + tree-sitter)
 Extracts: module-level `def` (params + annotations + return annotation), class public methods &
