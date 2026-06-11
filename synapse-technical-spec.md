@@ -300,7 +300,9 @@ then returns a source-cited answer. pgvector RAG remains the Layer III backend t
 **Claude Code hooks** (the first-class automatic path) — installed into the repo's settings:
 - `PreToolUse` on `Edit|Write|MultiEdit`: shells into the daemon's local endpoint = `synapse_check`
   for the target file. On `warn`, the hook returns context that Claude surfaces inline before editing
-  (per "warn inline, dev decides" — it does **not** block).
+  (per "warn inline, dev decides" — it does **not** block). For file-based checks, the daemon also
+  snapshots the current contract symbols locally so the next post-edit report can diff against the
+  pre-edit state.
 - `PostToolUse` on `Edit|Write|MultiEdit`: calls `synapse_report` for the changed file.
 
 ### 8b. Daemon ↔ Server (WSS, authenticated, per-repo room)
@@ -424,14 +426,16 @@ interface Conflict {
 1. Agent is about to Edit src/auth/login.ts:42
 2. Claude Code PreToolUse hook → daemon local endpoint (synapse_check)
 3. Daemon: graph.symbolAtLine("src/auth/login.ts", 42)  -> "ts:...#login"
-4. Daemon: conflictEngine.evaluate({login}, warmCache, graph)   ← all local, no network
+4. Daemon: conflictEngine.evaluate({login}, warmCache, graph) and snapshot current file contracts
+   for the next report   ← all local, no network
 5a. verdict none  -> hook returns {} -> agent edits silently
 5b. verdict warn  -> hook returns context block -> Claude surfaces inline:
        "⚠ Heads up: alice's agent changed TokenValidator.validate() this morning (unpushed) —
         now returns Result<Token,AuthError>. login.ts:42 calls it. Proceed, adjust, or ping alice?"
 6. Dev decides. Agent edits.
 7. PostToolUse hook → daemon (synapse_report)
-8. Daemon: re-extract contract for the file (TS analyzer), diff vs. previous, compute ContractDelta
+8. Daemon: re-extract contract for the file (TS analyzer), diff vs. pre-check/report snapshot,
+   compute ContractDelta
 9. If sigHash changed -> daemon emits a deterministic contract.delta over WSS
 10. Server fans out state.delta to every other daemon in the repo room -> their warm caches update
 11. On `git push`: daemon sends push.notify or GitHub sends a push webhook -> server clears matching

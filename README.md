@@ -144,7 +144,7 @@ Use the Quick Start above to bring up the host (`synapse up --serve --tunnel`) a
 
 ## Works with any agent, not just Claude Code
 
-Claude Code gets `PreToolUse` / `PostToolUse` / `SessionStart` hooks that fire `synapse_check` before edits, `synapse_report` after edits, and a `synapse_whatsup` catch-up at session start. Every other agent gets the **same behavior** through MCP — `synapse join` (and `synapse connect`) sets it up automatically:
+Claude Code gets `PreToolUse` / `PostToolUse` / `SessionStart` hooks that fire `synapse_check` before edits, `synapse_report` after edits, and a `synapse_whatsup` catch-up at session start. A file-based pre-check records the current contract snapshot locally, so the first post-edit report can emit the real before -> after delta without requiring a separate baseline call. Every other agent gets the **same behavior** through MCP — `synapse join` (and `synapse connect`) sets it up automatically:
 
 ```bash
 synapse connect                        # wire up every supported agent
@@ -287,7 +287,7 @@ Run with `npm run <script>`. See [`package.json`](package.json) for the complete
 | `verify:hot-path-latency` / `verify:large-repo-latency` / `verify:repo-latency` | Pre-edit hot-path latency budgets (p95 ≤ 50ms, max ≤ 150ms) |
 | `verify:whatsup` / `verify:why` / `verify:feedback` | Team briefing; memory search; conflict feedback telemetry |
 | `verify:session-summary` / `verify:session-start` | Layer II session summaries and catch-up briefing |
-| `verify:hooks` | Claude Code `join` + `hook pre`/`hook post` as invoked by Claude Code |
+| `verify:hooks` | Claude Code `join` + `hook pre`/`hook post` as invoked by Claude Code, including check-before-edit then first post-edit delta reporting |
 | `verify:mcp-adapter` | Stdio MCP adapter forwarding to the daemon |
 | `verify:connect` | `synapse connect` wires up every agent (configs + rules), idempotently, and the MCP server advertises hook-equivalent `instructions` |
 | `verify:auth` / `verify:tenancy` | Shared-token and project-key auth paths |
