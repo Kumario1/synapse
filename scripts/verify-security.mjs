@@ -64,6 +64,31 @@ try {
   );
   socket.close();
 
+  // Local daemon ingress: oversized and malformed JSON are rejected at the
+  // daemon boundary without taking the process down.
+  const daemonPort = await freePort();
+  startDaemon("daemon", openPort, daemonPort);
+  await waitForHttp(`http://localhost:${daemonPort}/health`);
+
+  const tooLarge = await postRaw(
+    `http://localhost:${daemonPort}/tools/synapse_whatsup`,
+    "x".repeat(1_048_577)
+  );
+  assert.equal(tooLarge.status, 413, "oversized local JSON is rejected");
+  assert.equal(tooLarge.body.error, "payload_too_large");
+
+  const malformed = await postRaw(
+    `http://localhost:${daemonPort}/tools/synapse_whatsup`,
+    "{\"repoId\":"
+  );
+  assert.equal(malformed.status, 400, "malformed local JSON is rejected");
+  assert.equal(malformed.body.error, "invalid_json");
+  assert.equal(
+    (await fetch(`http://localhost:${daemonPort}/health`)).ok,
+    true,
+    "daemon remains healthy after bad local input"
+  );
+
   // Webhook flood: budget already partly spent; pushing past it answers 429.
   let saw429 = false;
   for (let i = 0; i < WEBHOOK_LIMIT + 2; i += 1) {
@@ -104,6 +129,8 @@ try {
       {
         wsRateLimited: rateLimited.length,
         stateBounded: state.conflictFeedback.length,
+        daemon413: tooLarge.status,
+        daemon400: malformed.status,
         webhook429: saw429,
         authWithoutSecret: refused.status,
         signedAccepted: signed.status
@@ -121,6 +148,29 @@ function startServer(label, port, env) {
     SYNAPSE_SERVER_PORT: String(port),
     ...env
   });
+}
+
+function startDaemon(label, serverPort, daemonPort) {
+  startProcess(
+    label,
+    [
+      "apps/cli/dist/index.js",
+      "daemon",
+      "--server",
+      `ws://localhost:${serverPort}`,
+      "--port",
+      String(daemonPort),
+      "--repo-id",
+      "local",
+      "--member",
+      "security-daemon",
+      "--session-id",
+      "security-daemon"
+    ],
+    {
+      SYNAPSE_FILE_WATCHER: "0"
+    }
+  );
 }
 
 function feedbackMessage(id) {
@@ -159,6 +209,15 @@ async function pushWebhook(port, { sha, secret }) {
     method: "POST",
     headers,
     body: payload
+  });
+  return { status: response.status, body: await response.json() };
+}
+
+async function postRaw(url, body) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body
   });
   return { status: response.status, body: await response.json() };
 }
