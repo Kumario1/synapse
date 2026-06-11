@@ -222,6 +222,13 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
         log.warn("watch.error", {
           error: error instanceof Error ? error.message : String(error)
         });
+      },
+      onReady: () => {
+        // Observable via /metrics: a change is only guaranteed to be seen
+        // after the initial scan completes (files created during it can be
+        // swallowed by ignoreInitial).
+        metrics.count("synapse_watch_ready");
+        log.info("watch.ready", {});
       }
     });
     log.info("watch.started", { worktreeRoot: config.worktreeRoot });

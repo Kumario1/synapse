@@ -44,6 +44,14 @@ try {
     waitForHttp(`http://localhost:${optOutPort}/health`)
   ]);
 
+  // Files created during chokidar's initial scan can be swallowed by
+  // ignoreInitial, so wait until the watcher reports ready before writing.
+  await waitFor(
+    async () => (await metricValue(alicePort, "synapse_watch_ready")) >= 1,
+    8000,
+    "watcher finished its initial scan"
+  );
+
   // A new file appears (manual `git checkout`, editor save, codegen, …): the
   // watcher reports it, which records the baseline contract snapshot.
   await writeFixture(aliceRoot, `
@@ -131,12 +139,16 @@ function startDaemon(member, port, worktreeRoot, repoId, env) {
 }
 
 async function watchReports(daemonPort) {
+  return metricValue(daemonPort, "synapse_watch_reports_total");
+}
+
+async function metricValue(daemonPort, name) {
   const response = await fetch(`http://localhost:${daemonPort}/metrics`).catch(() => null);
   if (!response?.ok) {
     return 0;
   }
   const text = await response.text();
-  const match = /synapse_watch_reports_total(?:\{[^}]*\})?\s+(\d+)/u.exec(text);
+  const match = new RegExp(`${name}(?:\\{[^}]*\\})?\\s+(\\d+)`, "u").exec(text);
   return match ? Number(match[1]) : 0;
 }
 

@@ -24,6 +24,12 @@ export interface FileWatcherOptions {
   shouldReport: (relativePath: string) => boolean;
   onChange: (relativePath: string) => Promise<void>;
   onError: (error: unknown) => void;
+  /**
+   * Fired once the initial scan completes. Files created *during* the scan
+   * can be swallowed by `ignoreInitial`, so anything that needs the watcher
+   * to be live (tests, tooling) must wait for this.
+   */
+  onReady?: () => void;
 }
 
 export interface FileWatcher {
@@ -62,6 +68,9 @@ export function startFileWatcher(options: FileWatcherOptions): FileWatcher {
   watcher.on("add", schedule);
   watcher.on("change", schedule);
   watcher.on("error", options.onError);
+  if (options.onReady) {
+    watcher.on("ready", options.onReady);
+  }
 
   return {
     close: async () => {
