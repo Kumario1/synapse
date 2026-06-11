@@ -192,12 +192,12 @@ Run the existing dependency and TSX verifiers to ensure named/default/JSX paths 
 
 ## Done criteria
 
-- [ ] Namespace import test fails before the fix and passes after the fix.
-- [ ] `npm run verify:analyzer-ts` exits 0.
-- [ ] `npm run typecheck` exits 0.
-- [ ] `npm run verify:dependency-ts-check` exits 0.
-- [ ] `npm run verify:tsx-check` exits 0.
-- [ ] `plans/README.md` status row for Plan 003 is updated.
+- [x] Namespace import test fails before the fix and passes after the fix.
+- [x] `npm run verify:analyzer-ts` exits 0.
+- [x] `npm run typecheck` exits 0.
+- [x] `npm run verify:dependency-ts-check` exits 0.
+- [x] `npm run verify:tsx-check` exits 0.
+- [x] `plans/README.md` status row for Plan 003 is updated.
 
 ## STOP conditions
 
@@ -211,4 +211,3 @@ Stop and report if:
 ## Maintenance notes
 
 Future analyzer work should keep import-style parity as a review checklist item: named, aliased, default, namespace, re-export, JS/MJS, and TSX imports should either all work or have documented limitations.
-

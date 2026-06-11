@@ -24,7 +24,7 @@
   </tr>
   <tr>
     <td><b>Polyglot analyzers</b></td>
-    <td>TypeScript contract extraction in-process; Python via a long-lived <b>tree-sitter + jedi</b> sidecar and Go via a warm <b>go/parser</b> sidecar, both over JSON-RPC/stdio. Same conflict engine for all three.</td>
+    <td>TypeScript contract extraction and dependency edges in-process, including relative named/default/namespace imports; Python via a long-lived <b>tree-sitter + jedi</b> sidecar and Go via a warm <b>go/parser</b> sidecar, both over JSON-RPC/stdio. Same conflict engine for all three.</td>
   </tr>
   <tr>
     <td><b>Deterministic first</b></td>
@@ -277,11 +277,11 @@ Run with `npm run <script>`. See [`package.json`](package.json) for the complete
 | Script | Verifies |
 | --- | --- |
 | `verify:m0` | Runnable skeleton + realtime stub loop (milestone 0) |
-| `verify:analyzer-ts` / `verify:analyzer-py` | Per-language contract extraction and signature diffing |
+| `verify:analyzer-ts` / `verify:analyzer-py` | Per-language contract extraction, signature diffing, and TS import-edge coverage |
 | `verify:python-check` | Full realtime Python loop → `contract_divergent` + resolution |
 | `verify:analyzer-go` / `verify:go-check` | Go contract extraction/diff (warm `go/parser` sidecar); full realtime Go loop → `contract_divergent` + resolution. SKIPs without a Go toolchain |
 | `verify:daemon-ts-report` / `verify:file-only-ts-check` | Automatic TS report path; symbol-level conflicts from a file path |
-| `verify:dependency-ts-check` | Warns when a file depends on another's unpushed change |
+| `verify:dependency-ts-check` | Warns when a file depends on another's unpushed change through TS dependency edges |
 | `verify:tsx-check` | React-shaped repos: default-exported `.tsx` component props change → symbol delta + `dependency_changed` for the importing component; `.mjs` modules join the same graph |
 | `verify:contract-compat` / `verify:resolution` | Compatibility classification; merged-contract resolution |
 | `verify:hot-path-latency` / `verify:large-repo-latency` / `verify:repo-latency` | Pre-edit hot-path latency budgets (p95 ≤ 50ms, max ≤ 150ms) |

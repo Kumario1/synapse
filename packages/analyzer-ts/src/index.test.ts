@@ -162,6 +162,40 @@ test("extracts dependency edges from relative named imports", () => {
   );
 });
 
+test("extracts dependency edges from relative namespace imports", () => {
+  const graph = extractTypeScriptDependencyGraph({
+    files: [
+      {
+        filePath: "src/auth/token.ts",
+        source: `
+          export interface Token {
+            value: string;
+          }
+
+          export function validate(input: string): Token | null {
+            return input ? { value: input } : null;
+          }
+        `
+      },
+      {
+        filePath: "src/auth/login.ts",
+        source: `
+          import * as token from "./token";
+
+          export function login(input: string): boolean {
+            return token.validate(input) !== null;
+          }
+        `
+      }
+    ]
+  });
+
+  assert.deepEqual(
+    graph.edges.map((edge) => [edge.from.raw, edge.to.raw]),
+    [["ts:src/auth/login.ts#login", "ts:src/auth/token.ts#validate"]]
+  );
+});
+
 test("extracts JSX function and arrow components from .tsx/.jsx (M11)", () => {
   const tsx = extractTypeScriptContracts({
     filePath: "src/ui/Button.tsx",
