@@ -83,6 +83,32 @@ try {
   );
   assertLatencyBudget("large-repo warm dependency-warning file-only check", dependencyConflict);
 
+  // Warm-check graph cache (plan 007): once the watcher is ready and a check
+  // has validated the cached graph, subsequent warm checks reuse it without
+  // re-fingerprinting (counter increments); a watcher-observed source change
+  // invalidates it (the next check rebuilds — no hit), then reuse resumes.
+  await waitFor(async () => (await fetchMetric(bobPort, "synapse_watch_ready")) >= 1, 10000);
+  await checkTargetFile(bobPort); // fingerprint-validates → cache marked clean
+  const hitsBefore = await fetchMetric(bobPort, "synapse_graph_cache_hits_total");
+  await checkTargetFile(bobPort);
+  const hitsWarm = await fetchMetric(bobPort, "synapse_graph_cache_hits_total");
+  assert.ok(hitsWarm > hitsBefore, `warm check should reuse the clean graph (${hitsBefore} → ${hitsWarm})`);
+
+  const watchReportsBefore = await fetchMetric(bobPort, "synapse_watch_reports_total");
+  await writeFileAt(bobRoot, "src/features/invalidator.ts", "export function invalidator(): number { return 1; }");
+  await waitFor(
+    async () => (await fetchMetric(bobPort, "synapse_watch_reports_total")) > watchReportsBefore,
+    10000
+  );
+  const hitsAfterChange = await fetchMetric(bobPort, "synapse_graph_cache_hits_total");
+  const rebuildCheck = await checkTargetFile(bobPort);
+  assert.equal(rebuildCheck.verdict, "warn", "post-invalidation check still detects the conflict");
+  const hitsOnRebuild = await fetchMetric(bobPort, "synapse_graph_cache_hits_total");
+  assert.equal(hitsOnRebuild, hitsAfterChange, "the check after a source change must rebuild, not reuse");
+  await checkTargetFile(bobPort);
+  const hitsResumed = await fetchMetric(bobPort, "synapse_graph_cache_hits_total");
+  assert.ok(hitsResumed > hitsOnRebuild, "reuse resumes once the rebuilt graph is clean again");
+
   console.log("Large-repo latency verification passed:");
   console.log(
     JSON.stringify(
@@ -97,7 +123,8 @@ try {
         iterations: measuredIterations,
         coldFirstCheckMs,
         noConflict: noConflict.stats,
-        dependencyConflict: dependencyConflict.stats
+        dependencyConflict: dependencyConflict.stats,
+        graphCache: { hitsWarm, rebuildOnChange: hitsOnRebuild === hitsAfterChange, hitsResumed }
       },
       null,
       2
@@ -292,6 +319,16 @@ async function postJson(url, body) {
   }
 
   return payload;
+}
+
+async function fetchMetric(port, name) {
+  const response = await fetch(`http://localhost:${port}/metrics`).catch(() => null);
+  if (!response?.ok) {
+    return 0;
+  }
+  const text = await response.text();
+  const match = text.match(new RegExp(`^${name}(?:\\{[^}]*\\})? (\\d+)`, "m"));
+  return match ? Number(match[1]) : 0;
 }
 
 async function waitForHttp(url, timeoutMs = 5000) {
