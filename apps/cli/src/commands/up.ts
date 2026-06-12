@@ -111,7 +111,7 @@ export async function runUp(rawArgs: string[]): Promise<void> {
 }
 
 /** Resolve the built @synapse/server entrypoint, or throw a clear build hint. */
-function resolveServerEntry(): string {
+export function resolveServerEntry(): string {
   try {
     const pkg = createRequire(import.meta.url).resolve("@synapse/server/package.json");
     const entry = join(dirname(pkg), "dist/index.js");
