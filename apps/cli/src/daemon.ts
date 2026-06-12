@@ -278,7 +278,10 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
   setInterval(() => {
     sendToServer("session.heartbeat", {
       repoId: config.repoId,
-      sessionId: config.sessionId
+      sessionId: config.sessionId,
+      // Refresh the branch every beat so branch-aware severity tracks a
+      // mid-session checkout; undefined (detached HEAD) keeps the field out.
+      branch: currentGitBranch(config.worktreeRoot)
     });
   }, 30_000).unref();
 
@@ -537,7 +540,8 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
         } else {
           sendToServer("session.heartbeat", {
             repoId: config.repoId,
-            sessionId: config.sessionId
+            sessionId: config.sessionId,
+            branch: currentGitBranch(config.worktreeRoot)
           });
         }
 

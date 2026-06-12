@@ -118,6 +118,29 @@ try {
   assert.equal(sameSymbol.counterpart.branch, "feature-x", "counterpart branch is surfaced");
   assert.equal(neverDemoted.verdict, "warn");
 
+  // 4. Mid-session checkout (plan 006): alice switches feature-x → feature-y
+  // without restarting her daemon. A manual heartbeat refreshes the session
+  // branch on the server, and the next check's counterpart reflects it.
+  const switchBranch = spawnSync("git", ["symbolic-ref", "HEAD", "refs/heads/feature-y"], {
+    cwd: worktrees.alice.root,
+    stdio: "ignore"
+  });
+  assert.equal(switchBranch.status, 0, "branch switch in alice's worktree failed");
+
+  await postJson(`http://localhost:${alicePort}/tools/synapse_session`, {
+    repoId: "local",
+    action: "heartbeat"
+  });
+  await waitForState(
+    serverPort,
+    (state) => state.sessions.find((session) => session.id === "alice")?.branch === "feature-y"
+  );
+
+  const afterSwitch = await check(bobPort, "bob");
+  const refreshed = onlyRule(afterSwitch.conflicts, "same_symbol_unpushed");
+  assert.equal(refreshed.counterpart.branch, "feature-y", "heartbeat refreshed the counterpart branch");
+  assert.equal(refreshed.severity, "warn", "merge-blocking rule still warns after the switch");
+
   console.log("Branch-aware severity verification passed:");
   console.log(
     JSON.stringify(
@@ -125,7 +148,8 @@ try {
         crossBranchStaleBase: crossStale.severity,
         optOutStaleBase: "warn",
         sameBranchStaleBase: fromBob.severity,
-        crossBranchSameSymbol: sameSymbol.severity
+        crossBranchSameSymbol: sameSymbol.severity,
+        heartbeatRefreshedBranch: refreshed.counterpart.branch
       },
       null,
       2

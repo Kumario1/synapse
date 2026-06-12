@@ -46,7 +46,7 @@ export function applyMessage(
       });
       break;
     case "session.heartbeat":
-      touchSession(state, repoId, store, message.payload.sessionId, now);
+      touchSession(state, repoId, store, message.payload.sessionId, now, message.payload.branch);
       break;
     case "session.end":
       endSession(state, repoId, store, message.payload.sessionId, now);
@@ -182,13 +182,19 @@ function touchSession(
   repoId: string,
   store: StateStoreOps,
   sessionId: string,
-  now: string
+  now: string,
+  branch?: string
 ): void {
   const session = state.sessions.find((candidate) => candidate.id === sessionId);
   if (session) {
     session.lastSeen = now;
     if (session.status !== "ended") {
       session.status = "active";
+    }
+    // New clients refresh their branch every heartbeat; old clients omit it
+    // and keep the last known value (never clear on absence).
+    if (branch) {
+      session.branch = branch;
     }
     store.upsertSession(repoId, session);
   }
