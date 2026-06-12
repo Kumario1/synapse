@@ -82,8 +82,40 @@ try {
     ["stale_base"]
   );
 
+  // PR-thread decision memory (plan C3 slice): an issue_comment body is
+  // distilled into the repo event's `detail` — decision prose survives, code
+  // blocks never do.
+  const commentPayload = {
+    action: "created",
+    repository: { full_name: "Kumario1/synapse" },
+    sender: { login: "bob" },
+    issue: { number: 5, title: "Auth design", pull_request: {} },
+    comment: {
+      html_url: "https://github.com/Kumario1/synapse/pull/5#c1",
+      body: "Decision: keep HMAC project keys for self-host.\n\n```js\nconst leaked = secrets();\n```"
+    }
+  };
+  const commentWebhook = await postJson(
+    `http://localhost:${serverPort}/webhooks/github?repoId=local`,
+    commentPayload,
+    signedGitHubHeaders(commentPayload, "issue_comment")
+  );
+  assert.equal(commentWebhook.ok, true);
+
+  const stateWithComment = await waitForState(
+    serverPort,
+    (state) => state.recentRepoEvents.length >= 1
+  );
+  const event = stateWithComment.recentRepoEvents.find((e) => e.kind === "issue_comment");
+  assert.ok(event, "comment repo event stored");
+  assert.equal(
+    event.detail,
+    "Decision: keep HMAC project keys for self-host. [code omitted]"
+  );
+  assert.ok(!event.detail.includes("secrets()"), "code-block content never persists");
+
   console.log("GitHub webhook verification passed:");
-  console.log(JSON.stringify({ webhook, stateAfterWebhook, postPushCheck }, null, 2));
+  console.log(JSON.stringify({ webhook, stateAfterWebhook, postPushCheck, commentDetail: event.detail }, null, 2));
 
   server.kill();
   alice.kill();
@@ -161,11 +193,11 @@ async function postJson(url, body, headers = {}) {
   return payload;
 }
 
-function signedGitHubHeaders(body) {
+function signedGitHubHeaders(body, event = "push") {
   const raw = JSON.stringify(body);
   const signature = createHmac("sha256", webhookSecret).update(raw).digest("hex");
   return {
-    "x-github-event": "push",
+    "x-github-event": event,
     "x-hub-signature-256": `sha256=${signature}`
   };
 }

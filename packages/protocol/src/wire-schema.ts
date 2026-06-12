@@ -227,7 +227,11 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
       title: z.string(),
       number: z.number().optional(),
       url: z.string().optional(),
-      summary: z.string()
+      summary: z.string(),
+      // Deliberate cap (the neighbors are uncapped): the distiller already
+      // trims to 500 chars; this is belt-and-braces against non-distilled
+      // senders pushing raw bodies into memory.
+      detail: z.string().max(2000).optional()
     })
   }),
   z.looseObject({

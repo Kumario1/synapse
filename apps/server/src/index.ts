@@ -553,7 +553,12 @@ function indexMemory(repoId: string, message: ClientMessage): void {
       id: `event:${message.id}`,
       kind: "repo_event",
       title: message.payload.title,
-      summary: message.payload.summary,
+      // The distilled body prose (PR description / review / comment) is what
+      // makes the memory citable as a decision — still prose only, the
+      // distiller strips code before it ever reaches the wire.
+      summary: message.payload.detail
+        ? `${message.payload.summary} — ${message.payload.detail}`
+        : message.payload.summary,
       reference: message.payload.url,
       createdAt: new Date().toISOString()
     });
