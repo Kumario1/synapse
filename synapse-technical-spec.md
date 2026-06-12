@@ -297,7 +297,10 @@ does not change verdicts. `synapse_whatsup` is deterministic today: it reads the
 and returns active sessions, unpushed deltas, edit locks, recent pushes, shared resolutions, and
 recent feedback. `synapse_why` is also deterministic today: it ranks matching session summaries, repo
 events, pushes, resolutions, conflict feedback, unpushed deltas, and active sessions by question terms,
-then returns a source-cited answer. pgvector RAG remains the Layer III backend target.
+then returns a source-cited answer. When `SYNAPSE_DATABASE_URL` (Postgres + pgvector) and an
+OpenAI-compatible embeddings endpoint are configured, `synapse_why` additionally ranks by vector
+recall on top of the deterministic floor (`rag: true`); without embeddings, `/recall` reports
+`degraded: true` and the floor answers alone.
 
 **Claude Code hooks** (the first-class automatic path) — installed into the repo's settings:
 - `PreToolUse` on `Edit|Write|MultiEdit`: shells into the daemon's local endpoint = `synapse_check`
@@ -398,9 +401,9 @@ function evaluate(target: {symbolId, filePath}, state: TeamState, graph): Confli
 - Dedup key: `(targetSymbol, counterpartSession, deltaHash)` — don't re-warn within a session unless it
   changes.
 - Current telemetry: every emitted conflict carries a deterministic `id`, and `synapse_feedback`
-  records whether a surfaced `warn` was *acted on* (dev adjusted/pinged) vs. dismissed. It is stored
-  only as telemetry today; threshold tuning (e.g. demoting chronically-dismissed rules to `info`) is a
-  later policy step.
+  records whether a surfaced `warn` was *acted on* (dev adjusted/pinged) vs. dismissed. Adaptive
+  severity uses this telemetry to demote chronically-dismissed `warn` rules to `info` (deterministic,
+  one-directional — `info` never gets promoted, and detection itself is untouched).
 
 ### `Conflict` payload
 ```ts
@@ -505,8 +508,8 @@ Allowed non-authoritative uses:
    contract and your own unpushed change, then return `{ assessment, recommendation, actions, source }`.
 2. **Session summary** (Layer II, on session end): batch-summarize the session's deltas + task into 2-3
    sentences.
-3. **Memory answers** (Layer III): deterministic state search today; later RAG over pgvector with
-   provenance.
+3. **Memory answers** (Layer III): deterministic state search always; hybrid pgvector RAG with
+   provenance when Postgres + embeddings are configured.
 
 Never for detection or compatibility classification. Detection is always deterministic, which keeps the
 hot path cheap, fast, and free of hallucinated contracts.
