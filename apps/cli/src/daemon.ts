@@ -53,6 +53,7 @@ import {
   isAnalyzable,
   isGoLike,
   isPythonLike,
+  markGraphDirty,
   resolveCheckTargets,
   selfChanges,
   selfSignatures,
@@ -78,7 +79,12 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
   const contractSnapshots = new Map<string, CodeSymbol[]>();
   const analysisCache: AnalysisCache = {
     symbolsByFile: new Map(),
-    graph: null
+    graph: null,
+    // Dirty until the first build; only the watcher's ready signal makes
+    // "clean" trustworthy (manual edits are otherwise invisible).
+    graphDirty: true,
+    graphTrusted: false,
+    onGraphReuse: () => metrics.count("synapse_graph_cache_hits_total")
   };
   // Optional LLM analysis layer (Rung 5). Null unless OPENROUTER_API_KEY is
   // set; detection stays deterministic either way.
@@ -267,7 +273,9 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
       onReady: () => {
         // Observable via /metrics: a change is only guaranteed to be seen
         // after the initial scan completes (files created during it can be
-        // swallowed by ignoreInitial).
+        // swallowed by ignoreInitial). Only from this point is a "clean"
+        // graph cache trustworthy for the warm-check fast path.
+        analysisCache.graphTrusted = true;
         metrics.count("synapse_watch_ready");
         log.info("watch.ready", {});
       }
@@ -899,6 +907,11 @@ async function reportContractChanges(
   }
 
   const filePath = body.filePath;
+  // Every reported edit (tool call or watcher event) can change dependency
+  // edges — the warm-check graph cache must not outlive it.
+  if (isAnalyzable(filePath)) {
+    markGraphDirty(cache);
+  }
 
   if (body.symbolId || !isAnalyzable(filePath)) {
     const symbolId = body.symbolId ?? symbolForFile(filePath);
