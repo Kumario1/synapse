@@ -68,7 +68,7 @@
   </tr>
   <tr>
     <td><b>Ship anywhere</b></td>
-    <td>Dockerized server with per-project keys (<code>synapse keygen</code>) for real tenancy, or install <code>@synapse/cli</code> as a self-contained tarball.</td>
+    <td>Dockerized server with per-project keys (<code>synapse keygen</code>) for real tenancy, or <code>npm install -g @kumario/synapse</code> for the self-contained CLI.</td>
   </tr>
 </table>
 
@@ -254,11 +254,21 @@ Credentials are sent via `Authorization: Bearer` (the server still accepts `?tok
 
 **Privacy** — detection is fully deterministic and local: only symbol-level contracts (signatures, never function bodies) leave the daemon. The optional LLM layers relax this in one place: the contract *resolver* sends the computing agent's full file plus its dependency-graph neighbors to the configured model so the merge is caller-aware. Opt out with `SYNAPSE_LLM_RESOLVE=0` (or leave `OPENROUTER_API_KEY` unset), or point `OPENROUTER_BASE_URL` at a local/self-hosted OpenAI-compatible endpoint to keep code on your machines.
 
-**Install as a package** — `@synapse/cli` packs as a self-contained tarball (all five workspace packages, server, and the Python sidecar bundled):
+**Install as a package** — the CLI ships as a single self-contained npm package (all five workspace packages, the server, and the Python/Go sidecar assets bundled):
 
 ```bash
-node apps/cli/scripts/pack.mjs   # prints the tarball path
+npm install -g @kumario/synapse   # installs the `synapse` binary
 ```
+
+To build the same tarball from a checkout (release flow):
+
+```bash
+node scripts/build-package.mjs    # stages + packs dist-release/<name>-<version>.tgz
+npm run verify:package            # installs from the tarball and smoke-tests it
+npm publish --access public dist-release/<tarball>   # maintainers only
+```
+
+The public name/version live in [`release.config.json`](release.config.json); bump the version there before building, and keep it ahead of `npm view @kumario/synapse version`.
 
 **CI** — `.github/workflows/ci.yml` runs build + typecheck + test plus the full hermetic verify matrix:
 
