@@ -280,3 +280,56 @@ function feedbackMessage(
     }
   };
 }
+
+test("session.heartbeat with a branch refreshes the session branch", () => {
+  const state = createEmptyTeamState("local");
+  applyMessage(state, "local", sessionStartMessage("alice", "main"));
+
+  applyMessage(state, "local", heartbeatMessage("alice", "feature-x"));
+
+  assert.equal(state.sessions[0].branch, "feature-x");
+});
+
+test("session.heartbeat without a branch preserves the known branch", () => {
+  const state = createEmptyTeamState("local");
+  applyMessage(state, "local", sessionStartMessage("alice", "main"));
+
+  applyMessage(state, "local", heartbeatMessage("alice"));
+
+  assert.equal(state.sessions[0].branch, "main");
+});
+
+function sessionStartMessage(sessionId: string, branch?: string): ClientMessage {
+  return {
+    v: PROTOCOL_VERSION,
+    type: "session.start",
+    id: `s-${sessionId}`,
+    ts: now,
+    payload: {
+      session: {
+        id: sessionId,
+        repoId: "local",
+        memberId: sessionId,
+        memberLogin: sessionId,
+        agentType: "other",
+        filesOpen: [],
+        filesEditing: [],
+        lastTask: null,
+        startedAt: now,
+        lastSeen: now,
+        status: "active",
+        ...(branch ? { branch } : {})
+      }
+    }
+  };
+}
+
+function heartbeatMessage(sessionId: string, branch?: string): ClientMessage {
+  return {
+    v: PROTOCOL_VERSION,
+    type: "session.heartbeat",
+    id: `hb-${sessionId}-${branch ?? "none"}`,
+    ts: now,
+    payload: { repoId: "local", sessionId, ...(branch ? { branch } : {}) }
+  };
+}

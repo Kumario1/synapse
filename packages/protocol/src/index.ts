@@ -266,8 +266,9 @@ export interface Session {
   /**
    * The git branch this session is working on, when known. Optional and
    * additive: old clients never send it, detached HEAD omits it. Captured at
-   * session start, so it can lag a mid-session checkout until the next
-   * (re)connect.
+   * session start and refreshed on every heartbeat by new clients, so a
+   * mid-session checkout propagates within one heartbeat interval; old
+   * clients that omit it keep their last known branch.
    */
   branch?: string;
 }
@@ -598,7 +599,7 @@ export interface WireEnvelope<TType extends string = string, TPayload = unknown>
 
 export type ClientMessage =
   | WireEnvelope<"session.start", { session: Session }>
-  | WireEnvelope<"session.heartbeat", { repoId: string; sessionId: string }>
+  | WireEnvelope<"session.heartbeat", { repoId: string; sessionId: string; branch?: string }>
   | WireEnvelope<"session.end", { repoId: string; sessionId: string }>
   | WireEnvelope<
       "edit.intent",
