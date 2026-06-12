@@ -51,6 +51,10 @@
     <td><code>synapse why</code> searches durable team state and answers with cited sources.</td>
   </tr>
   <tr>
+    <td><b>Onboarding briefing</b></td>
+    <td><code>synapse onboard</code> (also the <code>synapse_onboard</code> MCP tool) gives a first-session deep briefing: the full team digest plus the room's cited decision history, vector-recall-enriched when RAG is configured.</td>
+  </tr>
+  <tr>
     <td><b>Durable state</b></td>
     <td>Server state persists through a storage-agnostic <code>StateStore</code> (SQLite locally, optional Postgres for shared deployments) and survives restarts.</td>
   </tr>
