@@ -140,6 +140,7 @@ try {
   assert.deepEqual(tools, [
     "synapse_check",
     "synapse_feedback",
+    "synapse_onboard",
     "synapse_push",
     "synapse_report",
     "synapse_session",

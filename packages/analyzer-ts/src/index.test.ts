@@ -319,3 +319,110 @@ test("aliased re-exports resolve through the export-name map (M11)", () => {
     [["ts:src/caller.ts#callIt", "ts:src/core.ts#compute"]]
   );
 });
+
+test("an unambiguous same-shape rename emits one renamed change keyed by the old id", () => {
+  const before = extractTypeScriptContracts({
+    filePath: "src/geo.ts",
+    source: `export function area(w: number, h: number): number { return w * h; }`
+  }).symbols;
+  const after = extractTypeScriptContracts({
+    filePath: "src/geo.ts",
+    source: `export function computeArea(w: number, h: number): number { return w * h; }`
+  }).symbols;
+
+  const changes = diffTypeScriptContracts(before, after);
+
+  assert.equal(changes.length, 1);
+  assert.equal(changes[0].changeKind, "renamed");
+  assert.equal(changes[0].symbolId.raw, "ts:src/geo.ts#area");
+  assert.equal(changes[0].before?.name, "area");
+  assert.equal(changes[0].after?.name, "computeArea");
+});
+
+test("a rename combined with a signature change stays removed + added", () => {
+  const before = extractTypeScriptContracts({
+    filePath: "src/geo.ts",
+    source: `export function area(w: number, h: number): number { return w * h; }`
+  }).symbols;
+  const after = extractTypeScriptContracts({
+    filePath: "src/geo.ts",
+    source: `export function computeArea(w: number, h: number, scale: number): number { return w * h * scale; }`
+  }).symbols;
+
+  const kinds = diffTypeScriptContracts(before, after).map((change) => change.changeKind).sort();
+
+  assert.deepEqual(kinds, ["added", "removed"]);
+});
+
+test("ambiguous same-shape pairs never pair (two removed, two added)", () => {
+  const before = extractTypeScriptContracts({
+    filePath: "src/geo.ts",
+    source: `
+      export function area(w: number, h: number): number { return w * h; }
+      export function size(w: number, h: number): number { return w + h; }
+    `
+  }).symbols;
+  const after = extractTypeScriptContracts({
+    filePath: "src/geo.ts",
+    source: `
+      export function computeArea(w: number, h: number): number { return w * h; }
+      export function computeSize(w: number, h: number): number { return w + h; }
+    `
+  }).symbols;
+
+  const kinds = diffTypeScriptContracts(before, after).map((change) => change.changeKind).sort();
+
+  assert.deepEqual(kinds, ["added", "added", "removed", "removed"]);
+});
+
+test("a same-shape symbol moving to another file does not pair", () => {
+  const before = [
+    ...extractTypeScriptContracts({
+      filePath: "src/a.ts",
+      source: `export function area(w: number, h: number): number { return w * h; }`
+    }).symbols
+  ];
+  const after = [
+    ...extractTypeScriptContracts({
+      filePath: "src/b.ts",
+      source: `export function area(w: number, h: number): number { return w * h; }`
+    }).symbols
+  ];
+
+  const kinds = diffTypeScriptContracts(before, after).map((change) => change.changeKind).sort();
+
+  assert.deepEqual(kinds, ["added", "removed"]);
+});
+
+test("detectRenames: false preserves the removed + added behavior", () => {
+  const before = extractTypeScriptContracts({
+    filePath: "src/geo.ts",
+    source: `export function area(w: number, h: number): number { return w * h; }`
+  }).symbols;
+  const after = extractTypeScriptContracts({
+    filePath: "src/geo.ts",
+    source: `export function computeArea(w: number, h: number): number { return w * h; }`
+  }).symbols;
+
+  const kinds = diffTypeScriptContracts(before, after, { detectRenames: false })
+    .map((change) => change.changeKind)
+    .sort();
+
+  assert.deepEqual(kinds, ["added", "removed"]);
+});
+
+test("a zero-arg shape still pairs because of the one-to-one rule", () => {
+  const before = extractTypeScriptContracts({
+    filePath: "src/boot.ts",
+    source: `export function start(): void { /* boot */ }`
+  }).symbols;
+  const after = extractTypeScriptContracts({
+    filePath: "src/boot.ts",
+    source: `export function bootstrap(): void { /* boot */ }`
+  }).symbols;
+
+  const changes = diffTypeScriptContracts(before, after);
+
+  assert.equal(changes.length, 1);
+  assert.equal(changes[0].changeKind, "renamed");
+});

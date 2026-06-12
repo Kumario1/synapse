@@ -5,6 +5,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type {
   SynapseCheckRequest,
   SynapseFeedbackRequest,
+  SynapseOnboardRequest,
   SynapsePushRequest,
   SynapseReportRequest,
   SynapseSessionRequest,
@@ -269,6 +270,33 @@ export async function runMcp(rawArgs: string[]): Promise<void> {
       };
 
       return jsonResult(await daemonPost(args.port ?? defaultPort, "synapse_whatsup", request));
+    }
+  );
+
+  server.registerTool(
+    "synapse_onboard",
+    {
+      title: "Synapse Onboarding Briefing",
+      description:
+        "Call once at the start of your first session in a repository to absorb the team's history: active sessions, recent activity, and the room's cited decisions and memories.",
+      inputSchema: {
+        ...commonShape,
+        limit: z.number().int().positive().max(20).optional()
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true
+      }
+    },
+    async (args) => {
+      const request: SynapseOnboardRequest = {
+        repoId: args.repoId ?? defaultRepoId,
+        sessionId: args.sessionId ?? defaultSessionId,
+        limit: args.limit
+      };
+
+      return jsonResult(await daemonPost(args.port ?? defaultPort, "synapse_onboard", request));
     }
   );
 

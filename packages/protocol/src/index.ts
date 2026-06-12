@@ -572,6 +572,35 @@ export interface SynapseWhyResponse {
   sources: SynapseWhySource[];
 }
 
+export interface SynapseOnboardRequest {
+  repoId: string;
+  sessionId: string;
+  /** Per-section cap; same clamp semantics as `SynapseWhyRequest.limit`. */
+  limit?: number;
+}
+
+/**
+ * A first-session deep briefing (plan C4 slice): the full team digest plus
+ * the room's cited decision history, vector-recall-enriched when RAG is
+ * configured. Unlike the session-start catch-up, it has no "since you were
+ * last here" baseline — it always answers.
+ */
+export interface SynapseOnboardResponse {
+  repoId: string;
+  generatedAt: string;
+  /** True when the daemon↔server socket is not OPEN. */
+  degraded: boolean;
+  /** True when vector recall contributed decisions beyond the lexical floor. */
+  rag?: boolean;
+  /** Rendered text an agent injects as context. */
+  briefing: string;
+  sections: {
+    activity: SynapseWhatsupResponse;
+    /** Recency-ordered durable memory, numbered-citation contract preserved. */
+    decisions: SynapseWhySource[];
+  };
+}
+
 /** One vector-recall hit from the server's memory index (RAG, plan C1/C2). */
 export interface RecallMatch {
   kind: SynapseWhySourceKind;
