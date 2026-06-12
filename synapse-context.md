@@ -341,9 +341,9 @@ Developers can ask their agent “what’s the team on?” and receive a distill
 
 This is what makes Synapse a daily tool rather than a once-a-week collision preventer.
 
-### Feature 9: Persistent Memory (Layer III — later)
+### Feature 9: Persistent Memory (Layer III — implemented, deepens over time)
 
-Every decision, every reasoning thread, every “why did we build it this way” — captured and stored in a vector database, queryable in plain language. New hires ask their agent about the codebase and get answers that include the reasoning, not just the code.
+Every decision, every reasoning thread, every “why did we build it this way” — captured and stored, queryable in plain language. New hires ask their agent about the codebase and get answers that include the reasoning, not just the code. `synapse_why` and `synapse onboard` answer this deterministically from team state today, with hybrid pgvector recall layered on top when Postgres + an embeddings endpoint are configured. Deeper ingestion sources (Slack, Notion, meeting transcripts) remain future work.
 
 -----
 
@@ -373,7 +373,7 @@ Synapse is designed as a progressive capability system. Each layer builds on the
 
 **Why it’s the moat:** This is what no other tool builds automatically. Other tools ask you to write down your decisions. Synapse captures them as a byproduct of the work itself — agent sessions generate summaries, PR threads get distilled, Slack decisions get flagged and stored. The knowledge base grows without anyone maintaining it.
 
-**What it requires:** A vector database (Chroma self-hosted, or Pinecone free tier to start), a more sophisticated ingestion pipeline, and Slack/Notion integrations. This is the phase that requires infrastructure investment — hence “later.”
+**What it requires (implemented):** pgvector on the existing Postgres `StateStore` plus an OpenAI-compatible embeddings endpoint — no separate vector database. PR-thread distillation feeds the memory; deeper ingestion (Slack/Notion integrations) is the remaining infrastructure investment.
 
 -----
 
@@ -531,7 +531,7 @@ When agents do most of the typing, the bottleneck isn’t typing speed anymore �
 - Claude Code PreToolUse + PostToolUse hooks, distributed as a single shell script
 - State stored in SQLite — no vector database, no LLM in the hot path
 - Session join: one CLI command, auto-installs hooks
-- Conflict detection: file-level first, contract-level later
+- Conflict detection: contract-level (implemented) — file-level was the MVP starting point
 - No dashboard, no web UI, no analytics — everything surfaces inline in the agent’s context
 
 **Infrastructure cost:** $0–$5/month until you have real users.
