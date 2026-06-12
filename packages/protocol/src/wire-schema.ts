@@ -177,7 +177,11 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
   z.looseObject({
     ...envelope,
     type: z.literal("session.heartbeat"),
-    payload: z.looseObject({ repoId: z.string().min(1), sessionId: z.string().min(1) })
+    payload: z.looseObject({
+      repoId: z.string().min(1),
+      sessionId: z.string().min(1),
+      branch: z.string().min(1).optional()
+    })
   }),
   z.looseObject({
     ...envelope,
