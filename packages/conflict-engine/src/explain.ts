@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type {
   Conflict,
+  ConflictAction,
   ConflictAnalysis,
   ContractChange,
   ContractDelta,
@@ -8,6 +9,24 @@ import type {
   Signature
 } from "@synapse/protocol";
 import { renderSignature } from "./compare.js";
+
+/**
+ * Attach a command suggestion to the first action matching `audience`
+ * (deterministic floor command grounding, plan 016). Leaves every other
+ * action untouched; if no action matches, the list is returned as-is.
+ */
+function withCommand(
+  actions: ConflictAction[],
+  audience: ConflictAction["audience"][],
+  command: NonNullable<ConflictAction["command"]>
+): ConflictAction[] {
+  const index = actions.findIndex((action) => audience.includes(action.audience));
+  if (index === -1) {
+    return actions;
+  }
+
+  return actions.map((action, i) => (i === index ? { ...action, command } : action));
+}
 
 /**
  * Input handed to an {@link AnalysisProvider}. It carries the structured facts
@@ -104,13 +123,17 @@ export function deterministicAnalysis(conflict: Conflict): ConflictAnalysis {
         return {
           ...base,
           assessment: `${counterpart} has an unpushed breaking change to ${symbol}${reasonText}. Code you write against the current contract will not match theirs.`,
-          actions: [
-            {
-              audience: "you",
-              step: `Pull or inspect ${counterpart}'s branch and build against the new contract${change?.after ? ` ${renderSignature(change.after)}` : ""}.`
-            },
-            { audience: "counterpart", step: `Push the change or broadcast the new contract so others can adapt.` }
-          ],
+          actions: withCommand(
+            [
+              {
+                audience: "you",
+                step: `Pull or inspect ${counterpart}'s branch and build against the new contract${change?.after ? ` ${renderSignature(change.after)}` : ""}.`
+              },
+              { audience: "counterpart", step: `Push the change or broadcast the new contract so others can adapt.` }
+            ],
+            ["you", "both"],
+            { tool: "synapse_whatsup" }
+          ),
           resolution: deterministicResolution(conflict)
         };
       }
@@ -119,18 +142,22 @@ export function deterministicAnalysis(conflict: Conflict): ConflictAnalysis {
           ...base,
           recommendation: "proceed",
           assessment: `${counterpart} has an unpushed but backward-compatible change to ${symbol}${reasonText}. It should not break your edit.`,
-          actions: [
-            { audience: "you", step: `Proceed; no action required, but keep ${counterpart}'s change in mind.` }
-          ],
+          actions: withCommand(
+            [{ audience: "you", step: `Proceed; no action required, but keep ${counterpart}'s change in mind.` }],
+            ["you", "both"],
+            { tool: "synapse_whatsup" }
+          ),
           resolution: deterministicResolution(conflict)
         };
       }
       return {
         ...base,
         assessment: `${counterpart} has an unpushed change to ${symbol} that could not be classified automatically.`,
-        actions: [
-          { audience: "you", step: `Inspect ${counterpart}'s change to ${symbol} before editing the same contract.` }
-        ],
+        actions: withCommand(
+          [{ audience: "you", step: `Inspect ${counterpart}'s change to ${symbol} before editing the same contract.` }],
+          ["you", "both"],
+          { tool: "synapse_whatsup" }
+        ),
         resolution: deterministicResolution(conflict)
       };
     }
@@ -139,10 +166,14 @@ export function deterministicAnalysis(conflict: Conflict): ConflictAnalysis {
       return {
         ...base,
         assessment: `${counterpart} changed ${symbol}, which your edit depends on${reasonText}.`,
-        actions: [
-          { audience: "you", step: `Adjust your code to the new contract of ${symbol}.` },
-          { audience: "counterpart", step: `Confirm downstream callers of ${symbol} have been accounted for.` }
-        ]
+        actions: withCommand(
+          [
+            { audience: "you", step: `Adjust your code to the new contract of ${symbol}.` },
+            { audience: "counterpart", step: `Confirm downstream callers of ${symbol} have been accounted for.` }
+          ],
+          ["you", "both"],
+          { tool: "synapse_why", args: { question: symbol } }
+        )
       };
 
     case "transitive_dependency":
@@ -156,14 +187,22 @@ export function deterministicAnalysis(conflict: Conflict): ConflictAnalysis {
       return {
         ...base,
         assessment: `${counterpart} is actively editing ${symbol} right now.`,
-        actions: [{ audience: "both", step: `Coordinate before you both write to ${symbol}.` }]
+        actions: withCommand(
+          [{ audience: "both", step: `Coordinate before you both write to ${symbol}.` }],
+          ["both", "you"],
+          { tool: "synapse_whatsup" }
+        )
       };
 
     case "stale_base":
       return {
         ...base,
         assessment: `A recent push touched ${symbol}; your base may be stale.`,
-        actions: [{ audience: "you", step: `Pull the latest base before continuing.` }]
+        actions: withCommand(
+          [{ audience: "you", step: `Pull the latest base before continuing.` }],
+          ["you", "both"],
+          { tool: "synapse_why", args: { question: symbol } }
+        )
       };
 
     case "same_file_no_overlap":

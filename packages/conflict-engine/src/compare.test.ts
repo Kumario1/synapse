@@ -3,6 +3,7 @@ import test from "node:test";
 import type { ContractDelta, Session, Signature, SymbolId, TeamState } from "@synapse/protocol";
 import {
   compareSignatures,
+  deterministicAnalysis,
   enrichConflicts,
   evaluateConflicts,
   type AnalysisProvider,
@@ -200,6 +201,78 @@ test("enrichConflicts keeps the deterministic recommendation floor", async () =>
   assert.equal(enriched[0]?.analysis?.source, "test-model");
   assert.equal(enriched[0]?.analysis?.recommendation, "warn");
   assert.equal(enriched[0]?.analysis?.assessment, "LLM marked the breaking change as informational.");
+});
+
+test("deterministicAnalysis attaches a synapse_whatsup command for an unpushed breaking change", () => {
+  const state = teamState({
+    sessions: [session("alice"), session("bob")],
+    unpushedDeltas: [
+      delta({
+        sessionId: "alice",
+        before: sig("(token: string) => Token", [param("token", "string")], "Token"),
+        after: sig("(token: string) => Result<Token, AuthError>", [param("token", "string")], "Result<Token, AuthError>")
+      })
+    ]
+  });
+
+  const conflicts = evaluateConflicts({
+    selfSessionId: "bob",
+    targets: [{ filePath: "src/auth/token.ts", symbolId: validate }],
+    state
+  });
+
+  const analysis = deterministicAnalysis(conflicts[0]!);
+  const youAction = analysis.actions.find((action) => action.audience === "you");
+  assert.deepEqual(youAction?.command, { tool: "synapse_whatsup" });
+});
+
+test("deterministicAnalysis attaches a synapse_why command for dependency_changed, citing the symbol", () => {
+  const login = id("ts:src/auth/login.ts#login");
+  const analysis = deterministicAnalysis({
+    id: "conflict:dependency_changed:1",
+    severity: "warn",
+    rule: "dependency_changed",
+    targetSymbol: login,
+    counterpart: { memberLogin: "alice", sessionId: "alice", agentType: "other" },
+    detail: `alice changed ${validate.raw}, which ${login.raw} depends on: validate signature updated`,
+    suggestion: "Adjust to the new dependency contract or coordinate before editing."
+  });
+
+  const youAction = analysis.actions.find((action) => action.audience === "you" || action.audience === "both");
+  assert.deepEqual(youAction?.command, { tool: "synapse_why", args: { question: login.raw } });
+});
+
+test("enrichConflicts passes provider-supplied actions with commands through untouched", async () => {
+  const state = teamState({
+    sessions: [session("alice"), session("bob")],
+    unpushedDeltas: [
+      delta({
+        sessionId: "alice",
+        before: sig("(token: string) => Token", [param("token", "string")], "Token"),
+        after: sig("(token: string) => Result<Token, AuthError>", [param("token", "string")], "Result<Token, AuthError>")
+      })
+    ]
+  });
+
+  const conflicts = evaluateConflicts({
+    selfSessionId: "bob",
+    targets: [{ filePath: "src/auth/token.ts", symbolId: validate }],
+    state
+  });
+
+  const provider: AnalysisProvider = {
+    async analyzeConflict() {
+      return {
+        assessment: "Check what alice is doing before proceeding.",
+        recommendation: "warn",
+        actions: [{ audience: "you", step: "see what alice is doing", command: { tool: "synapse_whatsup" } }],
+        source: "test-model"
+      };
+    }
+  };
+
+  const enriched = await enrichConflicts(conflicts, provider);
+  assert.deepEqual(enriched[0]?.analysis?.actions[0]?.command, { tool: "synapse_whatsup" });
 });
 
 function id(raw: string): SymbolId {
