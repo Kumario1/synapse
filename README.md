@@ -105,7 +105,15 @@ SYNAPSE_AUTH_TOKEN=<token> synapse up
 
 ## Try it: see a conflict (two-agent demo)
 
-The fastest way to watch Synapse work. Start with the local dry-run (one machine, no teammate, no Claude needed), then do the real two-machine run.
+The fastest way to watch Synapse work. Start with the one-command demo (fully sandboxed, nothing touched on disk outside a temp dir), then the local dry-run for a closer look, then do the real two-machine run.
+
+### One command — `synapse demo`
+
+```bash
+synapse demo
+```
+
+Spins up a server and two daemons in a temp sandbox (own SQLite state, own free ports, a random `demo/<hex>` room id — never your repo), narrates Alice changing `area()`'s return type and Bob's next check catching the `dependency_changed` conflict, then tears everything down. Pass `--keep` to leave the sandbox on disk, or `--json` for a machine-readable result.
 
 ### Local dry-run — two agents, one machine
 

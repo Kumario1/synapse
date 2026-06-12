@@ -2,6 +2,7 @@
 import { runAnalyze } from "./commands/analyze.js";
 import { runCheck } from "./commands/check.js";
 import { runConnect } from "./commands/connect.js";
+import { runDemo } from "./commands/demo.js";
 import { runDoctor } from "./commands/doctor.js";
 import { runFeedback } from "./commands/feedback.js";
 import { runJoin } from "./commands/join.js";
@@ -73,6 +74,9 @@ switch (command) {
   case "analyze":
     await runAnalyze(args.slice(1));
     break;
+  case "demo":
+    await runDemo(args.slice(1));
+    break;
   case "help":
   default:
     printHelp();
@@ -101,6 +105,7 @@ Commands:
   doctor   Preflight a setup: identity, server reachability, auth, and live peers
   hook     Claude Code hook entrypoint (pre|post); reads hook JSON on stdin
   analyze  Extract TypeScript contract symbols from a file
+  demo            run a sandboxed two-agent conflict demo (no setup)
 
 Examples:
   synapse up                                   # teammate: inherits .synapse/team.json
