@@ -40,6 +40,7 @@
     "verify:protocol-compat": "npm run build && node scripts/verify-protocol-compat.mjs",
     "verify:security": "npm run build && node scripts/verify-security.mjs",
     "verify:why-rag": "npm run build && node scripts/verify-why-rag.mjs",
+    "verify:onboard": "npm run build && node scripts/verify-onboard.mjs",
     "verify:fuzz": "npm run build && npm run setup:analyzer-py && npm run setup:analyzer-go && node scripts/verify-fuzz.mjs",
     "verify:hooks": "npm run build && node scripts/verify-hooks.mjs",
     "verify:session-summary": "npm run build && node scripts/verify-session-summary.mjs",

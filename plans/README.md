@@ -18,7 +18,7 @@ This plan set came from a deep advisory audit. Source files were not modified wh
 | [008](008-extract-verification-harness.md) | Extract a shared verification-script harness | P3 | M | 001, 003, 004 recommended | TODO |
 | [009](009-design-state-delta-broadcast.md) | Write the design for incremental `state.delta` broadcast (D3) | P2 | M | - | DONE (design doc at docs/design/state-delta-broadcast.md; owner review gates implementation) |
 | [010](010-publish-npm-front-door.md) | Make the published npm package the install front door | P1 | S | - | DONE (staged 0.2.0; `npm publish` handed to owner per plan) |
-| [011](011-spike-onboard-briefing.md) | Spike `synapse onboard` first-session briefing (C4 slice) | P2 | M | - | TODO |
+| [011](011-spike-onboard-briefing.md) | Spike `synapse onboard` first-session briefing (C4 slice) | P2 | M | - | DONE |
 | [012](012-spike-rename-tracking.md) | Spike TypeScript rename tracking (`renamed` deltas, F5 slice) | P3 | M | - | TODO |
 | [013](013-pr-decision-memory.md) | Carry distilled PR-thread prose into repo events + vector memory (C3 slice) | P2 | M | - | TODO |
 | [014](014-synapse-demo-command.md) | Build `synapse demo` — one-command sandboxed conflict demo | P2 | M | 010 pairs well | TODO |
