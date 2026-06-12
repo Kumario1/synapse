@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
-import type { SynapseCheckResponse, SynapseWhatsupResponse } from "@synapse/protocol";
+import type { ConflictAction, SynapseCheckResponse, SynapseWhatsupResponse } from "@synapse/protocol";
+import { SYNAPSE_COMMAND_CATALOG } from "@synapse/protocol";
 import { sessionStartBriefing } from "./briefings.js";
 import {
   cliEntrypoint,
@@ -191,11 +192,24 @@ async function runSessionStartHook(
  */
 function preToolUseDecision(filePath: string, result: SynapseCheckResponse): unknown {
   const heading = `⚠ Synapse: ${result.conflicts.length} potential conflict(s) before editing ${filePath}`;
-  const lines = result.conflicts.map((conflict) => {
+  const lines = result.conflicts.flatMap((conflict, index) => {
     const who = conflict.counterpart.memberLogin;
     const detail = conflict.analysis?.assessment ?? conflict.detail;
     const next = conflict.suggestion ? ` → ${conflict.suggestion}` : "";
-    return `• [${conflict.rule}] ${detail} (with ${who})${next}`;
+    const line = `• [${conflict.rule}] ${detail} (with ${who})${next}`;
+
+    // Keep the message compact for the permission prompt: only the first 3
+    // conflicts get the extra command-suggestion line(s).
+    if (index >= 3) {
+      return [line];
+    }
+
+    const actionLines = (conflict.analysis?.actions ?? [])
+      .filter((action) => action.audience === "you" || action.audience === "both")
+      .slice(0, 2)
+      .map(renderActionLine);
+
+    return [line, ...actionLines];
   });
   const message = [heading, ...lines].join("\n");
 
@@ -216,6 +230,30 @@ function preToolUseDecision(filePath: string, result: SynapseCheckResponse): unk
       permissionDecisionReason: message
     }
   };
+}
+
+/**
+ * Render one action as "    ↳ <step> [→ run: <cli>]" — the runnable form
+ * substitutes the catalog entry's `usage` template's `<argName>` placeholders
+ * with the action's `command.args` values; placeholders with no matching arg
+ * stay literal. Omits the bracketed part when the action has no `command`.
+ */
+function renderActionLine(action: ConflictAction): string {
+  if (!action.command) {
+    return `    ↳ ${action.step}`;
+  }
+
+  const spec = SYNAPSE_COMMAND_CATALOG.find((entry) => entry.tool === action.command?.tool);
+  if (!spec) {
+    return `    ↳ ${action.step}`;
+  }
+
+  const args = action.command.args ?? {};
+  const usage = spec.usage.replace(/<([a-zA-Z0-9_]+)>/g, (placeholder, argName: string) =>
+    argName in args ? args[argName]! : placeholder
+  );
+
+  return `    ↳ ${action.step} [→ run: ${usage}]`;
 }
 
 /** Map a hook payload's absolute `file_path` to a path relative to the worktree. */
