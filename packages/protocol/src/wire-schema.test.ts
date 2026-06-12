@@ -82,6 +82,19 @@ test("accepts every well-formed message type the daemon sends", () => {
         summary: "s"
       }
     },
+    {
+      ...base,
+      type: "repo.event",
+      payload: {
+        repoId: "local",
+        kind: "issue_comment",
+        action: "created",
+        actor: "bob",
+        title: "t",
+        summary: "s",
+        detail: "Decision: keep HMAC project keys."
+      }
+    },
     { ...base, type: "query.briefing", payload: { repoId: "local" } }
   ];
 
@@ -107,6 +120,22 @@ test("rejects malformed messages with a path-bearing error", () => {
     { value: "a string", label: "non-object" },
     { value: { ...base, type: "no.such.type", payload: {} }, label: "unknown type" },
     { value: { ...base, type: "session.heartbeat", payload: {} }, label: "missing payload fields" },
+    {
+      value: {
+        ...base,
+        type: "repo.event",
+        payload: {
+          repoId: "local",
+          kind: "issue_comment",
+          action: "created",
+          actor: "bob",
+          title: "t",
+          summary: "s",
+          detail: "x".repeat(2001)
+        }
+      },
+      label: "repo event detail over the 2000-char cap"
+    },
     {
       value: { ...base, type: "contract.delta", payload: { delta: { ...validDelta, symbolId: {} } } },
       label: "delta without a symbol id"

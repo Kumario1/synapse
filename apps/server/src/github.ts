@@ -26,6 +26,7 @@ interface GitHubPullRequestPayload {
     title?: unknown;
     html_url?: unknown;
     merged?: unknown;
+    body?: unknown;
   };
 }
 
@@ -41,6 +42,7 @@ interface GitHubPullRequestReviewPayload {
   review?: {
     state?: unknown;
     html_url?: unknown;
+    body?: unknown;
   };
 }
 
@@ -56,6 +58,7 @@ interface GitHubIssueCommentPayload {
   };
   comment?: {
     html_url?: unknown;
+    body?: unknown;
   };
 }
 
@@ -138,6 +141,46 @@ export function gitHubRepoEventToNotify(
   }
 }
 
+/**
+ * Distill body prose for storage and embedding (plan C3 slice): strip code
+ * (the privacy boundary — code never leaves as prose), strip markdown
+ * link/image URLs, collapse whitespace, cap at a word boundary, and drop
+ * content-free noise ("+1", "LGTM"). Returns undefined when nothing of
+ * substance remains, so absent bodies stay absent (never "").
+ */
+export function distillProse(body: unknown, maxChars = 500): string | undefined {
+  if (typeof body !== "string" || body.trim() === "") {
+    return undefined;
+  }
+
+  let text = body;
+  text = text.replace(/```[\s\S]*?```/gu, " [code omitted] ");
+  text = text.replace(/~~~[\s\S]*?~~~/gu, " [code omitted] ");
+  text = text.replace(/`[^`\n]*`/gu, " [code omitted] ");
+  text = text.replace(/!\[([^\]]*)\]\([^)]*\)/gu, "$1");
+  text = text.replace(/\[([^\]]*)\]\([^)]*\)/gu, "$1");
+  text = text.replace(/https?:\/\/\S+/gu, "");
+  text = text.replace(/\s+/gu, " ").trim();
+
+  const meaningful = text.replace(/\[code omitted\]/gu, "").trim();
+  if (meaningful.length < 12) {
+    return undefined;
+  }
+
+  if (text.length > maxChars) {
+    const cut = text.slice(0, maxChars);
+    const lastSpace = cut.lastIndexOf(" ");
+    text = `${cut.slice(0, lastSpace > 0 ? lastSpace : maxChars).trimEnd()}\u2026`;
+  }
+
+  return text;
+}
+
+/** Spread helper: include `detail` only when there is distilled prose (absent, never undefined). */
+function detailField(detail: string | undefined): { detail?: string } {
+  return detail !== undefined ? { detail } : {};
+}
+
 function pullRequestToNotify(
   payload: unknown,
   repoIdOverride?: string | null
@@ -166,7 +209,12 @@ function pullRequestToNotify(
       title,
       number,
       url,
-      summary: `GitHub PR #${number ?? "?"} ${normalizedAction}: ${title}`
+      summary: `GitHub PR #${number ?? "?"} ${normalizedAction}: ${title}`,
+      ...detailField(
+        normalizedAction === "opened" || normalizedAction === "merged"
+          ? distillProse(pr.pull_request?.body)
+          : undefined
+      )
     }
   };
 }
@@ -199,7 +247,8 @@ function pullRequestReviewToNotify(
       title,
       number,
       url,
-      summary: `GitHub review ${state} on PR #${number ?? "?"}: ${title}`
+      summary: `GitHub review ${state} on PR #${number ?? "?"}: ${title}`,
+      ...detailField(distillProse(review.review?.body))
     }
   };
 }
@@ -232,7 +281,8 @@ function issueCommentToNotify(
       title,
       number,
       url,
-      summary: `GitHub comment ${action} on ${subject} #${number ?? "?"}: ${title}`
+      summary: `GitHub comment ${action} on ${subject} #${number ?? "?"}: ${title}`,
+      ...detailField(distillProse(comment.comment?.body))
     }
   };
 }
