@@ -14,7 +14,7 @@ This plan set came from a deep advisory audit. Source files were not modified wh
 | [004](004-harden-daemon-local-inputs.md) | Harden local daemon JSON and server-message parsing | P2 | S | - | DONE |
 | [005](005-refresh-docs-roadmap.md) | Refresh roadmap and status documentation | P2 | S | - | TODO |
 | [006](006-publish-live-branch-updates.md) | Publish branch changes during active sessions | P2 | M | - | DONE |
-| [007](007-reduce-check-hot-path-scans.md) | Avoid full source-tree scans on warm pre-edit checks | P2 | L | 001 recommended | TODO |
+| [007](007-reduce-check-hot-path-scans.md) | Avoid full source-tree scans on warm pre-edit checks | P2 | L | 001 recommended | DONE |
 | [008](008-extract-verification-harness.md) | Extract a shared verification-script harness | P3 | M | 001, 003, 004 recommended | TODO |
 | [009](009-design-state-delta-broadcast.md) | Write the design for incremental `state.delta` broadcast (D3) | P2 | M | - | TODO |
 | [010](010-publish-npm-front-door.md) | Make the published npm package the install front door | P1 | S | - | DONE (staged 0.2.0; `npm publish` handed to owner per plan) |
