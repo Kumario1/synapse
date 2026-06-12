@@ -64,6 +64,7 @@
     "verify:adaptive-severity": "npm run build && node scripts/verify-adaptive-severity.mjs",
     "verify:branch-aware-severity": "npm run build && node scripts/verify-branch-aware-severity.mjs",
     "verify:npm-pack": "npm run build && node scripts/verify-npm-pack.mjs",
+    "verify:demo": "npm run build && node scripts/verify-demo.mjs",
     "verify:all": "node scripts/ci-verify-all.mjs",
     "package": "node scripts/build-package.mjs",
     "verify:package": "node scripts/verify-package.mjs"
