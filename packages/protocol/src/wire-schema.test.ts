@@ -48,6 +48,11 @@ test("accepts every well-formed message type the daemon sends", () => {
       }
     },
     { ...base, type: "session.heartbeat", payload: { repoId: "local", sessionId: "alice" } },
+    {
+      ...base,
+      type: "session.heartbeat",
+      payload: { repoId: "local", sessionId: "alice", branch: "feature-x" }
+    },
     { ...base, type: "session.end", payload: { repoId: "local", sessionId: "alice" } },
     {
       ...base,
