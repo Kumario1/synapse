@@ -36,7 +36,7 @@
   </tr>
   <tr>
     <td><b>Any-agent onboarding</b></td>
-    <td><code>synapse connect</code> (run automatically by <code>join</code>) registers the stdio MCP server in Cursor, VS Code/Copilot, Gemini CLI, Windsurf, and any MCP client, and drops rules files that carry the <i>same</i> check-before-edit / report-after-edit guidance the Claude Code hooks encode — so non-Claude agents get hook-equivalent behavior with zero manual setup.</td>
+    <td><code>synapse connect</code> (run automatically by <code>join</code>) registers the stdio MCP server in Cursor, VS Code/Copilot, Gemini CLI, Windsurf, and any MCP client, and drops rules files that carry the <i>same</i> check-before-edit / report-after-edit guidance the Claude Code hooks encode — so non-Claude agents get hook-equivalent behavior with zero manual setup. Rules files include a generated command reference (from the same catalog that grounds LLM action suggestions), so agents know they can self-serve context — e.g. <code>synapse why</code> on a confusing conflict.</td>
   </tr>
   <tr>
     <td><b>MCP adapter</b></td>

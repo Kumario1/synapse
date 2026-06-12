@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { renderCommandCatalogMarkdown } from "@synapse/protocol";
 
 /** The key Synapse registers itself under in every MCP client config. */
 export const SYNAPSE_MCP_SERVER_KEY = "synapse";
@@ -18,8 +19,12 @@ export const SYNAPSE_AGENT_GUIDANCE = `Synapse is a realtime coordination layer 
 3. AFTER EDITING — immediately after you finish writing a file, call \`synapse_report\` with that file path so your contract-level changes broadcast to the rest of the team. (Equivalent to the PostToolUse hook.)
 4. AFTER PUSHING — after you commit or push, call \`synapse_push\` with the affected files and the sha so shared state can clear stale deltas and edit locks.
 5. FEEDBACK (optional) — call \`synapse_feedback\` to record whether a surfaced conflict was acted on or dismissed; this is telemetry only and never changes verdicts.
+6. WHEN YOU NEED CONTEXT — Synapse is also your team memory; query it instead of guessing. If a check surfaces a conflict you don't understand, or you wonder why a contract looks the way it does, call \`synapse_why\` with a plain-language question — it searches durable team history and answers with cited sources. On your FIRST session in a repository, call \`synapse_onboard\` once instead of \`synapse_whatsup\` for a deep briefing: the full team digest plus the room's cited decision history.
 
-Conflict analyses may include \`actions[].command\`, a suggested Synapse tool call (e.g. \`synapse_whatsup\`, \`synapse_why\`) for resolving that specific conflict — consider making that call next when present.
+Conflict analyses may include \`actions[].command\`, a suggested next Synapse tool call for resolving that specific conflict — when present, prefer making that exact call next.
+
+Command reference (every Synapse tool, with its CLI form):
+${renderCommandCatalogMarkdown()}
 
 Identity (repoId, sessionId, daemon port) resolves automatically from \`.synapse/config.json\`, so you usually do not need to pass it.`;
 
