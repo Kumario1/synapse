@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { gitHubPushToNotify, gitHubRepoEventToNotify } from "./github.js";
+import { distillProse, gitHubPushToNotify, gitHubRepoEventToNotify } from "./github.js";
 
 test("converts GitHub push payloads into push.notify payloads", () => {
   const push = gitHubPushToNotify(
@@ -137,4 +137,104 @@ test("converts issue_comment payloads into repo events", () => {
 
   assert.equal(event.payload.kind, "issue_comment");
   assert.equal(event.payload.summary, "GitHub comment created on PR #14: Clarify auth behavior");
+});
+
+test("distillProse strips code, links, and noise, and caps at a word boundary", () => {
+  assert.equal(
+    distillProse("We chose project keys because self-host needs zero deps.\n\n```ts\nconst x = 1;\n```"),
+    "We chose project keys because self-host needs zero deps. [code omitted]"
+  );
+  assert.equal(
+    distillProse("Inline `secretFn()` reference and a [link](https://example.com/x) here stays prose."),
+    "Inline [code omitted] reference and a link here stays prose."
+  );
+  assert.equal(distillProse("+1"), undefined);
+  assert.equal(distillProse("LGTM"), undefined);
+  assert.equal(distillProse(42), undefined);
+  assert.equal(distillProse("   "), undefined);
+
+  const long = `decision ${"word ".repeat(200)}`.trim();
+  const capped = distillProse(long);
+  assert.ok(capped !== undefined && capped.length <= 501, "capped near 500 chars");
+  assert.ok(capped.endsWith("…"), "capped text carries an ellipsis");
+  assert.ok(!capped.includes("wor…") || capped.endsWith("word…") === false, "no mid-word cut");
+});
+
+test("issue_comment bodies become detail; absent bodies stay absent", () => {
+  const withBody = gitHubRepoEventToNotify(
+    "issue_comment",
+    {
+      action: "created",
+      repository: { full_name: "Kumario1/synapse" },
+      sender: { login: "bob" },
+      issue: { number: 5, title: "Auth design", pull_request: {} },
+      comment: {
+        html_url: "https://github.com/x",
+        body: "Decision: keep HMAC project keys.\n\n```js\nleak();\n```"
+      }
+    },
+    "local"
+  );
+  assert.equal(
+    withBody.payload.detail,
+    "Decision: keep HMAC project keys. [code omitted]"
+  );
+  assert.ok(!withBody.payload.detail.includes("leak()"), "code never survives");
+
+  const withoutBody = gitHubRepoEventToNotify(
+    "issue_comment",
+    {
+      action: "created",
+      issue: { number: 5, title: "Auth design" },
+      comment: { html_url: "https://github.com/x" }
+    },
+    "local"
+  );
+  assert.equal("detail" in withoutBody.payload && withoutBody.payload.detail !== undefined, false);
+});
+
+test("pull_request_review bodies become detail; empty approvals do not", () => {
+  const review = gitHubRepoEventToNotify(
+    "pull_request_review",
+    {
+      action: "submitted",
+      pull_request: { number: 7, title: "Webhook retries" },
+      review: { state: "approved", body: "Retries are capped on purpose — see the incident notes." }
+    },
+    "local"
+  );
+  assert.equal(review.payload.detail, "Retries are capped on purpose — see the incident notes.");
+
+  const emptyApproval = gitHubRepoEventToNotify(
+    "pull_request_review",
+    {
+      action: "submitted",
+      pull_request: { number: 7, title: "Webhook retries" },
+      review: { state: "approved" }
+    },
+    "local"
+  );
+  assert.equal(emptyApproval.payload.detail, undefined);
+});
+
+test("pull_request descriptions become detail on opened only", () => {
+  const opened = gitHubRepoEventToNotify(
+    "pull_request",
+    {
+      action: "opened",
+      pull_request: { number: 9, title: "RAG memory", body: "Adds pgvector memory behind the provider seam." }
+    },
+    "local"
+  );
+  assert.equal(opened.payload.detail, "Adds pgvector memory behind the provider seam.");
+
+  const labeled = gitHubRepoEventToNotify(
+    "pull_request",
+    {
+      action: "labeled",
+      pull_request: { number: 9, title: "RAG memory", body: "Adds pgvector memory behind the provider seam." }
+    },
+    "local"
+  );
+  assert.equal("detail" in labeled.payload && labeled.payload.detail !== undefined, false);
 });

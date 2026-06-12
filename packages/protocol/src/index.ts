@@ -306,6 +306,12 @@ export interface RecentRepoEvent {
   number?: number;
   url?: string;
   summary: string;
+  /**
+   * Distilled prose excerpt of the underlying body (PR description, review,
+   * or comment) — code-stripped and capped at ingestion. Optional and
+   * additive; the one-line `summary` stays the scannable UI line.
+   */
+  detail?: string;
   createdAt: string;
 }
 
@@ -658,6 +664,7 @@ export type ClientMessage =
         number?: number;
         url?: string;
         summary: string;
+        detail?: string;
       }
     >
   | WireEnvelope<
