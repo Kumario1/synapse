@@ -13,13 +13,13 @@
 > "Current state" excerpts against the live code before proceeding; on a
 > mismatch, treat it as a STOP condition.
 >
-> Known in-flight drift: plan 004 (daemon input hardening) was being executed
-> in this worktree when this plan was written — it rewrites the daemon's
-> `socket.on("message", …)` JSON parsing (excerpted below) to use
-> `parseServerMessage` and shifts `apps/cli/src/daemon.ts` line numbers by
-> roughly +14. The snapshot/delta apply line survives unchanged. Re-anchor by
-> symbol/handler names, not line numbers; that specific change alone is NOT a
-> STOP condition.
+> Known drift (verified post-review): plan 004 (daemon input hardening)
+> MERGED after this plan was stamped (PR #52, commit `776a717`), so the
+> drift check WILL report `apps/cli/src/daemon.ts` — expected, not a STOP.
+> It rewrote the daemon's `socket.on("message", …)` JSON parsing (excerpted
+> below) to use `parseServerMessage`; the snapshot/delta apply line survives
+> at ~line 197. All server/protocol citations were re-verified post-merge
+> and match. Re-anchor by symbol/handler names if lines shift further.
 
 ## Status
 
@@ -127,7 +127,7 @@ full state:
 |---------|---------|---------------------|
 | Confirm broadcast sites | `grep -n 'state.snapshot' apps/server/src/index.ts` | exactly 5 matches (lines ~89, 300, 416, 491, 509) |
 | Confirm delta placeholder | `grep -n 'state.delta' packages/protocol/src/index.ts` | 1 match in the `ServerMessage` union |
-| Confirm per-socket dialect | `grep -n 'socketProtocol' apps/server/src/index.ts` | map declared + set + read sites |
+| Confirm per-socket dialect | `grep -n 'socketProtocol' apps/server/src/index.ts` | ≥ 2 matches (the Map declaration and the `.set` at the handshake; any further matches are read sites) |
 | Confirm no doc exists yet | `ls docs/design/ 2>/dev/null` | no `state-delta-broadcast.md` |
 
 ## Scope
@@ -155,8 +155,10 @@ Read every file/line range in "Current state" plus `plan-future.md` §§2–6
 (the M8/M9/M15 execution-log entries matter most). Do not skip this; the
 design must cite real line numbers.
 
-**Verify**: you can answer "why can't the fan-out subscriber broadcast a
-delta today?" (answer: it only knows the repoId, not the mutation).
+**Verify**: `grep -n 'onRemoteChange' apps/server/src/index.ts` → 1 match
+(the fan-out subscriber callback). Confirm by reading it that the callback
+receives only a `repoId` — never the mutation — and write that fact into
+your working notes; section 4 of the design depends on it.
 
 ### Step 2: Write `docs/design/state-delta-broadcast.md`
 
@@ -170,7 +172,9 @@ without choosing):
    the changed array, e.g. all `sessions`). Recommend one. The current
    placeholder payload `{ teamState: TeamState }` must be replaced; state
    explicitly that this is safe because the server has never emitted
-   `state.delta` (verify with `git log -S 'state.delta' --oneline -- apps/server`).
+   `state.delta` (verify with `git log -S 'state.delta' --oneline -- apps/server`
+   → **empty output = safe to redefine; any commit listed = the assumption
+   is false, treat as the matching STOP condition**).
 2. **Ordering & loss detection** — per-repo monotonic sequence number on
    every `state.snapshot` and `state.delta`; client requests/receives a full
    snapshot when it observes a gap. Specify where the seq lives (server
@@ -254,9 +258,10 @@ Stop and report back (do not improvise) if:
 
 - The design doc is the input to the D3 implementation plans; it should be
   reviewed by the owner before any of them are written.
-- If plan 006 (publish live branch updates) or plan 007 (reduce check
-  hot-path scans) land first, neither conflicts with this design — they sit
-  on the daemon side — but re-check the broadcast-site line numbers.
+- If `plans/006-publish-live-branch-updates.md` or
+  `plans/007-reduce-check-hot-path-scans.md` land first, neither conflicts
+  with this design — they sit on the daemon side — but re-check the
+  broadcast-site line numbers.
 - The placeholder `state.delta` union member means changing its payload type
   is *not* wire-breaking today; that stops being true the moment a server
   ships emitting it. The design should land before any experimentation.

@@ -4,6 +4,16 @@
 >
 > **Drift check (run first)**: `git diff --stat 3a0b685..HEAD -- README.md synapse-build-plan.md synapse-technical-spec.md synapse-context.md`
 > If any in-scope file changed since this plan was written, compare the current-state excerpts below against the live docs before proceeding.
+>
+> Known drift (verified by review on 2026-06-11, post PRs #50–#52): the
+> README's feature-table claim cited below at README.md:54 is **already
+> fixed** — the live row reads "SQLite locally, optional Postgres for shared
+> deployments". The verified-remaining stale lines at review time were:
+> `README.md:336` (roadmap row "pgvector/RAG later"),
+> `synapse-build-plan.md:30,31,34` (Redis/Postgres "Deferred", "vector
+> memory later"), and `synapse-technical-spec.md:508` ("later RAG over
+> pgvector"). Re-run the inventory command below to get the live list; the
+> work is narrower than this plan's original text implies.
 
 ## Status
 
@@ -28,7 +38,9 @@ The README and planning docs are the repo's source of truth for users and future
 Relevant excerpts:
 
 ```md
-<!-- README.md:54 -->
+<!-- README.md:54 — ALREADY FIXED as of the 2026-06-11 review; shown for
+     historical context only. The live row reads "SQLite locally, optional
+     Postgres for shared deployments". Skip this one. -->
 <td><b>Durable state</b></td>
 <td>Server state persists through a storage-agnostic <code>StateStore</code> (SQLite now; Postgres/Redis later) and survives restarts.</td>
 ```
@@ -74,7 +86,7 @@ Repo conventions to match:
 
 | Purpose | Command | Expected on success |
 | --- | --- | --- |
-| Find stale claims | `rg -n "Postgres|Redis|pgvector|RAG|later|Deferred|planned, not yet implemented" README.md synapse-build-plan.md synapse-technical-spec.md synapse-context.md` | no stale implementation-status claims remain |
+| Inventory stale claims (run FIRST — it WILL match; the matches are your worklist) | `grep -nE "Postgres\|Redis\|pgvector\|RAG\|later\|Deferred\|planned, not yet implemented" README.md synapse-build-plan.md synapse-technical-spec.md synapse-context.md` | a list of candidate lines; triage each — only implementation-STATUS claims are in scope (use `rg` instead of `grep -E` if available) |
 | Typecheck sanity | `npm run typecheck` | exit 0 |
 | README verify table sanity | `npm run verify:why-rag` | exits 0 or documented SKIP |
 | Multi-instance sanity | `npm run verify:multi-instance` | exits 0 or documented SKIP |
@@ -181,4 +193,6 @@ Stop and report if:
 ## Maintenance notes
 
 When major features land, update README feature text, verification table, build-plan status, and technical spec status in the same PR. Reviewers should reject feature PRs that add verification scripts but leave the roadmap saying the feature is future work.
+
+Sequencing: several pending plans (010–016 in this folder) also edit `README.md`. If they land after this plan, their executors add new sections (install instructions, demo, detection-quality table) — that is fine; this plan only fixes *stale status claims*. If you can choose, run this plan AFTER plan 010 (it rewrites the install section this plan would otherwise touch-adjacent).
 

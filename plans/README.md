@@ -20,6 +20,10 @@ This plan set came from a deep advisory audit. Source files were not modified wh
 | [010](010-publish-npm-front-door.md) | Make the published npm package the install front door | P1 | S | - | TODO |
 | [011](011-spike-onboard-briefing.md) | Spike `synapse onboard` first-session briefing (C4 slice) | P2 | M | - | TODO |
 | [012](012-spike-rename-tracking.md) | Spike TypeScript rename tracking (`renamed` deltas, F5 slice) | P3 | M | - | TODO |
+| [013](013-pr-decision-memory.md) | Carry distilled PR-thread prose into repo events + vector memory (C3 slice) | P2 | M | - | TODO |
+| [014](014-synapse-demo-command.md) | Build `synapse demo` — one-command sandboxed conflict demo | P2 | M | 010 pairs well | TODO |
+| [015](015-detection-quality-benchmark.md) | Detection-quality benchmark — per-rule precision/recall ratchet | P3 | M | 012 bonus, not required | TODO |
+| [016](016-command-grounded-llm-actions.md) | Ground the LLM layer in Synapse's command catalog (suggested actions) | P2 | M | - | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
 
@@ -30,6 +34,10 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
 - Plans 002, 003, 004, 005, and 006 are otherwise independent.
 - Plans 009–012 came from a separate direction audit (`improve next`, 2026-06-11, commit `8c46a61`) — owner selected all four. They are mutually independent and independent of 001–008, with one soft note: 009 is a design document only (the D3 implementation plans get written after the owner reviews it), and if 006 or 007 land first, 009's executor must re-check its cited broadcast-site line numbers (its drift check covers this).
 - Recommended order for the new set: 010 (cheapest, highest adoption leverage) → 009 → 011 → 012.
+- Plans 013–015 came from a second-tier direction audit later the same day (same commit `8c46a61`). All three are independent of each other and of 001–012, with soft pairings: 014 (`synapse demo`) is most valuable after 010 publishes the package; 015's corpus should gain a rename scenario if 012 lands first (its drift note covers this); 013 makes plan 011's onboarding briefing richer automatically once both land.
+- Plans 013 and 014 both touch nothing in `apps/cli/src/daemon.ts`, so the in-flight plan-004 drift noted in 009/011/012 does not affect them (013's wire-schema overlap is noted in its own drift section).
+- Plan 016 (owner-requested via `improve plan`, commit `8c46a61`) grounds the LLM analysis prompts in a catalog of Synapse's MCP tools — suggestions only, never execution, deterministic floor included, LLM stays optional. Independent of all others; if 011 lands first, add its `synapse_onboard` tool to 016's catalog (016's maintenance note covers this). 016's appendix scopes a deferred Phase-2 (agentic tool-calling) — that needs its own plan and owner sign-off before anyone builds it.
+- **Review pass (2026-06-11, post PR #52):** all TODO plans (005–016) were re-reviewed — 009–016 cold-read by a fresh-context agent, 005–008 re-vetted against the live tree. Fixed: stale "in-flight plan 004" drift notes (004 merged as PR #52, `776a717`); plan 012's wrong symbol name (`buildSymbol`, not `toCodeSymbol`) and test count; plan 014's scope/done-criteria contradiction (up.ts export) and fictional env var (`SYNAPSE_DB_PATH` is the real knob); plan 016's gating ambiguity (validation is NEVER env-gated); plan 015's corpus/baseline schemas and scoring edge cases now fully specified; plan 005 narrowed (README:54 already fixed); plans 006/007 re-anchored to post-merge line numbers. Recommended execution order across all TODO plans: 010 → 006 → 007 → 009 → 011 → 012 → 013 → 014 → 016 → 015 → 005 → 008 (005 late because every plan edits README; 008 last because new verify scripts keep landing).
 
 ## Verification Baseline
 
@@ -52,3 +60,9 @@ From the direction audit (2026-06-11):
 - E1 VS Code extension / E4 editor rules: skipped — PR #35's `synapse connect` already delivers MCP registration + rules files to VS Code/Cursor/Windsurf; a native extension serves human UI, not agents, and adds a marketplace maintenance surface. Revisit on user demand.
 - D4 / M13 web dashboard: not planned — `Synapse/` at the repo root contains only build output (`dist/` + `node_modules/`, no source), so "fold into apps/web" first requires recovering or rebuilding the landing-page source; the vision doc defers dashboards until revenue. Surface to the owner as a narrow decision (track the landing source) rather than a build plan.
 - M14 GitHub OAuth: stays decision-gated per D1 — its trigger is a hosted SaaS launch (a business event), not a code condition.
+
+From the second-tier direction audit (2026-06-11, later the same day):
+
+- Slack ingestion (C3's other half): vision doc explicitly defers it until revenue; needs new infrastructure. Not planned.
+- More languages / SCIP: demand-driven; no user signal yet. Not planned.
+- Dogfood Synapse on Synapse development: offered (this repo has no `.synapse/` despite concurrent agents working it — an executor and an advisor edited/cited `daemon.ts` simultaneously on 2026-06-11); owner declined for now. Cheap to revisit: `synapse join` + a daemon during dev sessions.

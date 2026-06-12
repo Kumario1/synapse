@@ -4,6 +4,17 @@
 >
 > **Drift check (run first)**: `git diff --stat 3a0b685..HEAD -- apps/cli/src/analysis.ts apps/cli/src/daemon.ts apps/cli/src/watcher.ts scripts/verify-hot-path-latency.mjs scripts/verify-large-repo-latency.mjs scripts/verify-repo-latency.mjs scripts/verify-file-watcher.mjs`
 > If any in-scope file changed since this plan was written, compare the current-state excerpts below against the live code before proceeding.
+>
+> Known drift (verified by review on 2026-06-11): PR #52 (daemon input
+> hardening) merged after this plan was stamped, so the drift check WILL
+> report `apps/cli/src/daemon.ts` — expected, not a STOP. The
+> `/tools/synapse_check` handler cited below at daemon.ts:338 is now at
+> ~line 353; `apps/cli/src/analysis.ts` is unchanged (`buildDependencyGraph`
+> verified still at line 158, fingerprint reads at 166–170,
+> `readSourceFileFingerprints` at 417). Re-anchor by symbol names. Also
+> note: pending plans 011 and 016 in this folder add daemon endpoints/
+> enrichment near the check handler — if they land first, expect further
+> daemon.ts shifts; the symbols stay.
 
 ## Status
 
@@ -27,7 +38,7 @@
 Relevant excerpts:
 
 ```ts
-// apps/cli/src/daemon.ts:338
+// apps/cli/src/daemon.ts:~353 (post-PR-#52; locate via grep 'tools/synapse_check')
 if (request.method === "POST" && url.pathname === "/tools/synapse_check") {
   const checkStartedAt = performance.now();
   const body = (await readJson(request)) as Partial<SynapseCheckRequest>;

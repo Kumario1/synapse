@@ -4,6 +4,14 @@
 >
 > **Drift check (run first)**: `git diff --stat 3a0b685..HEAD -- scripts/verify-hooks.mjs scripts/verify-daemon-ts-report.mjs scripts/verify-branch-aware-severity.mjs scripts`
 > If any in-scope file changed since this plan was written, compare the current-state excerpts below against the live code before proceeding.
+>
+> Sequencing note (added by review 2026-06-11): pending plans 011, 012, 014,
+> 015, and 016 in this folder each CREATE new verify/eval scripts that
+> copy-paste the same helpers this plan extracts. Those new scripts are NOT
+> in this plan's scope — do not migrate them. Prefer running this plan LAST
+> among the pending set; if it lands first, the later plans' executors keep
+> copy-pasting (acceptable) and a follow-up migrates opportunistically per
+> the maintenance note.
 
 ## Status
 
