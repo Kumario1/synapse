@@ -101,6 +101,7 @@ export function applyMessage(
         ...(message.payload.number !== undefined ? { number: message.payload.number } : {}),
         ...(message.payload.url !== undefined ? { url: message.payload.url } : {}),
         summary: message.payload.summary,
+        ...(message.payload.detail !== undefined ? { detail: message.payload.detail } : {}),
         createdAt: now
       });
       break;
