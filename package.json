@@ -66,6 +66,7 @@
     "verify:npm-pack": "npm run build && node scripts/verify-npm-pack.mjs",
     "verify:demo": "npm run build && node scripts/verify-demo.mjs",
     "verify:llm-actions": "npm run build && node scripts/verify-llm-actions.mjs",
+    "eval:detection": "npm run build && node scripts/eval-detection.mjs",
     "verify:all": "node scripts/ci-verify-all.mjs",
     "package": "node scripts/build-package.mjs",
     "verify:package": "node scripts/verify-package.mjs"

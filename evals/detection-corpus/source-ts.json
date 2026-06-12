@@ -1,0 +1,113 @@
+[
+  {
+    "name": "source_breaking_return_type_change",
+    "description": "Real TS source: validate's return type changes from boolean to Result<Token> (extract -> diff -> engine, end to end).",
+    "type": "source",
+    "files": {
+      "src/auth/token.ts": {
+        "before": "export function validate(input: string): boolean {\n  return input.length > 0;\n}\n",
+        "after": "export function validate(input: string): Result<Token> {\n  return { ok: input.length > 0, value: { value: input } };\n}\n"
+      }
+    },
+    "checkTarget": { "filePath": "src/auth/token.ts", "symbol": "ts:src/auth/token.ts#validate" },
+    "expected": { "rules": ["same_symbol_unpushed"] }
+  },
+  {
+    "name": "source_type_alias_change_ripples_to_dependent",
+    "description": "Real TS source: the Token type alias gains a field; login (declared as a 1-hop dependent) should be flagged via dependency_changed.",
+    "type": "source",
+    "files": {
+      "src/auth/token.ts": {
+        "before": "export type Token = {\n  value: string;\n};\n",
+        "after": "export type Token = {\n  value: string;\n  expiresAt: Date;\n};\n"
+      }
+    },
+    "checkTarget": { "filePath": "src/auth/login.ts", "symbol": "ts:src/auth/login.ts#login" },
+    "dependencies": {
+      "ts:src/auth/login.ts#login": [
+        { "symbol": "ts:src/auth/token.ts#Token", "hops": 1 }
+      ]
+    },
+    "expected": { "rules": ["dependency_changed"] }
+  },
+  {
+    "name": "source_default_export_component_prop_change",
+    "description": "Real TSX source: a default-exported component's prop type changes from number to string (M11 territory).",
+    "type": "source",
+    "files": {
+      "src/ui/Badge.tsx": {
+        "before": "export default (props: { id: number }) => <span>{props.id}</span>;\n",
+        "after": "export default (props: { id: string }) => <span>{props.id}</span>;\n"
+      }
+    },
+    "checkTarget": { "filePath": "src/ui/Badge.tsx", "symbol": "ts:src/ui/Badge.tsx#default" },
+    "expected": { "rules": ["same_symbol_unpushed"] }
+  },
+  {
+    "name": "source_mjs_helper_dependency_changed",
+    "description": "Real .mjs source: a plain ESM helper's signature gains a parameter; a dependent module (declared as a 1-hop dependency) is flagged.",
+    "type": "source",
+    "files": {
+      "lib/util.mjs": {
+        "before": "export function add(a, b) {\n  return a + b;\n}\n",
+        "after": "export function add(a, b, c) {\n  return a + b + c;\n}\n"
+      }
+    },
+    "checkTarget": { "filePath": "main.js", "symbol": "ts:main.js#run" },
+    "dependencies": {
+      "ts:main.js#run": [
+        { "symbol": "ts:lib/util.mjs#add", "hops": 1 }
+      ]
+    },
+    "expected": { "rules": ["dependency_changed"] }
+  },
+  {
+    "name": "source_namespace_import_dependency_changed",
+    "description": "Real TS source: validate's contract breaks; login imports the auth module via `import * as token from \"./token\"` and calls token.validate (plan 003 namespace-import edges), declared here as a 1-hop dependency.",
+    "type": "source",
+    "files": {
+      "src/auth/token.ts": {
+        "before": "export function validate(input: string): boolean {\n  return input.length > 0;\n}\n",
+        "after": "export function validate(input: string): Token {\n  return { value: input };\n}\n"
+      }
+    },
+    "checkTarget": { "filePath": "src/auth/login.ts", "symbol": "ts:src/auth/login.ts#login" },
+    "dependencies": {
+      "ts:src/auth/login.ts#login": [
+        { "symbol": "ts:src/auth/token.ts#validate", "hops": 1 }
+      ]
+    },
+    "expected": { "rules": ["dependency_changed"] }
+  },
+  {
+    "name": "source_rename_keeps_old_symbol_id",
+    "description": "Real TS source: an unambiguous same-shape rename (area -> computeArea) emits a 'renamed' change keyed by the OLD symbol id (plan 012); checking the old id still surfaces same_symbol_unpushed.",
+    "type": "source",
+    "files": {
+      "src/geo.ts": {
+        "before": "export function area(w: number, h: number): number {\n  return w * h;\n}\n",
+        "after": "export function computeArea(w: number, h: number): number {\n  return w * h;\n}\n"
+      }
+    },
+    "checkTarget": { "filePath": "src/geo.ts", "symbol": "ts:src/geo.ts#area" },
+    "expected": { "rules": ["same_symbol_unpushed"] }
+  },
+  {
+    "name": "source_reexported_symbol_changed",
+    "description": "Real TS source: compute's signature changes; it is re-exported from core.ts as `run` and called by caller.ts (declared here as a 1-hop dependency).",
+    "type": "source",
+    "files": {
+      "src/core.ts": {
+        "before": "function compute(input: number): number {\n  return input * 2;\n}\nexport { compute as run };\n",
+        "after": "function compute(input: number, scale: number): number {\n  return input * scale;\n}\nexport { compute as run };\n"
+      }
+    },
+    "checkTarget": { "filePath": "src/caller.ts", "symbol": "ts:src/caller.ts#callIt" },
+    "dependencies": {
+      "ts:src/caller.ts#callIt": [
+        { "symbol": "ts:src/core.ts#compute", "hops": 1 }
+      ]
+    },
+    "expected": { "rules": ["dependency_changed"] }
+  }
+]

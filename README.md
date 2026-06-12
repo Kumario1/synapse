@@ -332,7 +332,50 @@ Run with `npm run <script>`. See [`package.json`](package.json) for the complete
 | `verify:npm-pack` | Packs the CLI, installs into a fresh project, joins, drives a check |
 | `verify:github-webhook` / `verify:github-briefing` | GitHub push/PR/review/comment webhooks and catch-ups |
 | `verify:all` | One build, then every verify (the CI matrix) |
-| `eval:conflicts` | Recorded conflict eval suite (overlap, breaking, compatible, divergent, …) |
+| `eval:conflicts` | Recorded conflict eval suite (overlap, breaking, compatible, divergent, …) — hard pass/fail gate on 7 fixed scenarios |
+| `eval:detection` | Detection-quality benchmark — per-rule precision/recall over `evals/detection-corpus/` against a committed ratchet baseline (see "Detection quality" below) |
+
+---
+
+## Detection quality
+
+`npm run eval:detection` measures the seven conflict-engine rules
+(`same_symbol_active`, `same_symbol_unpushed`, `contract_divergent`,
+`dependency_changed`, `transitive_dependency`, `stale_base`,
+`same_file_no_overlap`) against a corpus of 25 scenarios in
+`evals/detection-corpus/` — both synthetic team-state scenarios and real
+TypeScript source run through `extractTypeScriptContracts` →
+`diffTypeScriptContracts` → `evaluateConflicts`. Per-rule precision/recall is
+compared against the committed ratchet baseline in
+`evals/detection-baseline.json`; the script exits non-zero on any regression,
+on a new rule appearing without a baseline entry, or on a baseline rule
+disappearing from the run. Metrics only move via a deliberate
+`node scripts/eval-detection.mjs --write-baseline` run.
+
+Snapshot from the committed baseline (regenerate with `--write-baseline` after
+deliberately growing the corpus):
+
+| Rule | TP | FP | FN | Precision | Recall |
+| --- | --- | --- | --- | --- | --- |
+| `contract_divergent` | 1 | 0 | 0 | 1.000 | 1.000 |
+| `dependency_changed` | 5 | 1 | 0 | 0.833 | 1.000 |
+| `same_file_no_overlap` | 1 | 0 | 0 | 1.000 | 1.000 |
+| `same_symbol_active` | 1 | 0 | 0 | 1.000 | 1.000 |
+| `same_symbol_unpushed` | 6 | 0 | 0 | 1.000 | 1.000 |
+| `stale_base` | 1 | 0 | 0 | 1.000 | 1.000 |
+| `transitive_dependency` | 1 | 0 | 0 | 1.000 | 1.000 |
+
+The one sub-1.0 metric is a known precision gap, not a corpus artifact: the
+`dependency_changed` rule fires whenever a direct (1-hop) dependency changes,
+**regardless of whether `compareSignatures` classifies the change as
+compatible**. The `dependency_changed_but_compatible` scenario in
+`evals/detection-corpus/dependency.json` encodes a teammate adding an optional
+parameter to a function another module depends on — a backward-compatible
+change — and the engine still flags `dependency_changed`. This is baselined
+as the true number rather than hidden; fixing it (e.g. demoting
+`dependency_changed` to `info` when `compareSignatures` says `compatible`) is
+a candidate follow-up for `packages/conflict-engine/src/index.ts`, out of
+scope for this benchmark.
 
 ---
 
