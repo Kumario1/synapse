@@ -1,6 +1,6 @@
 {
   "name": "@kumario/synapse",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Real-time coordination for coding agents: contract-level conflict detection before an agent edits, briefings, and team memory.",
   "homepage": "https://github.com/Kumario1/synapse",
   "license": "MIT"
