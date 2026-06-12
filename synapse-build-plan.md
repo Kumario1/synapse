@@ -27,13 +27,14 @@ The core agent-coordination loop is implemented and runs as an installed tool. S
 | Briefings Layer II — `whatsup`, session-end summaries, session-start catch-up | ✅ Done | PR #19, #20 |
 | Daemon↔server auth — optional shared token (constant-time) | ✅ Done | PR #21 |
 | Hot-path latency benchmark — file-only pre-edit path | ✅ Done | `verify:hot-path-latency`, `verify:large-repo-latency`, `verify:repo-latency` |
-| **Redis** live state + pub/sub (multi-instance fan-out) | ⬜ Deferred | in-memory + SQLite today; `StateStore` is the swap seam |
-| **Postgres** durable store (multi-instance) | ⬜ Deferred | SQLite implements the same `StateStore` interface |
+| **Redis** live state + pub/sub (multi-instance fan-out) | ✅ Done | optional via `SYNAPSE_REDIS_URL`; `StateStore` (SQLite/Postgres) remains the durable record, Redis is purely the wake-up signal |
+| **Postgres** durable store (multi-instance) | ✅ Done | optional via `SYNAPSE_DATABASE_URL`; implements the same `StateStore` interface as SQLite, with advisory-locked schema init |
 | **GitHub OAuth + per-connection JWT** | ⬜ Planned | shared-token is the interim |
 | PR / review ingestion into briefings | ✅ Done | `pull_request`, `pull_request_review`, and `issue_comment` webhooks |
-| Memory Layer III — `synapse_why` + pgvector target | 🟡 Partial | deterministic state search now; vector memory later |
-| Telemetry / acted-on feedback | 🟡 Partial | explicit `synapse_feedback` capture now; threshold tuning later |
-| Go analyzer; SCIP-grade indexing | ⬜ Not started | — |
+| Memory Layer III — `synapse_why` + pgvector RAG | ✅ Done | deterministic state search always; hybrid pgvector recall when `SYNAPSE_DATABASE_URL` + an embeddings endpoint are configured, degrades cleanly otherwise |
+| Telemetry / acted-on feedback | ✅ Done | explicit `synapse_feedback` capture, plus adaptive severity demotes chronically-dismissed warning rules to `info` |
+| Go analyzer | ✅ Done | tree-sitter + warm `go/parser` sidecar, same conflict engine |
+| SCIP-grade indexing | ⬜ Not started | — |
 
 Verification: every implemented area has a `npm run verify:*` script (25 total) plus unit tests and
 `npm run eval:conflicts`; all green. See the README for the per-feature commands.

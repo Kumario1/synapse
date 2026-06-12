@@ -400,7 +400,7 @@ Planning is the source of truth — there is no public docs site.
 | **1** | TS/Python contract extraction, delta diffing, durable live state, severity scoring |
 | **2** | Dependency graph, MCP adapter, GitHub webhooks, cross-agent support |
 | **3** | Team briefings |
-| **4** | Persistent memory (`synapse why` deterministic seed now; pgvector/RAG later) |
+| **4** | Persistent memory (`synapse why` deterministic seed, plus optional pgvector/RAG when Postgres + embeddings are configured) |
 
 ---
 
