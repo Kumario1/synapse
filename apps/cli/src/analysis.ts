@@ -34,6 +34,29 @@ import { normalizePath, type RuntimeConfig } from "./config.js";
 export interface AnalysisCache {
   symbolsByFile: Map<string, CachedSymbols>;
   graph: CachedGraph | null;
+  /**
+   * When false, the cached graph is known current and warm checks may reuse
+   * it without re-fingerprinting the source tree. Marked true by every path
+   * that can change local sources (reports, watcher events); only cleared
+   * after a build, and only while `graphTrusted` is set.
+   */
+  graphDirty: boolean;
+  /**
+   * True only while a file watcher is actively observing the worktree (set
+   * on watch-ready). Without it, "not dirty" is meaningless — manual edits
+   * would go unseen — so builds never clear `graphDirty` and every call
+   * falls back to the fingerprint comparison (the pre-cache behavior).
+   */
+  graphTrusted: boolean;
+  /** Observability hook: called when a warm check reuses the clean graph. */
+  onGraphReuse?: () => void;
+}
+
+/** Mark the cached dependency graph stale; the next check rebuilds or re-fingerprints. */
+export function markGraphDirty(cache?: AnalysisCache): void {
+  if (cache) {
+    cache.graphDirty = true;
+  }
 }
 
 interface CachedSymbols {
@@ -159,6 +182,15 @@ export async function buildDependencyGraph(
   config: RuntimeConfig,
   cache?: AnalysisCache
 ): Promise<DaemonGraph> {
+  // Warm fast path: a clean cached graph under an active watcher skips the
+  // recursive source-tree fingerprint scan entirely. Correctness beats cache
+  // cleverness: any report or watcher event marks the graph dirty, and
+  // without a watcher the flag never clears (fingerprints run every call).
+  if (cache?.graph && !cache.graphDirty) {
+    cache.onGraphReuse?.();
+    return cache.graph.value;
+  }
+
   // Build each language's graph locally, then merge. Symbol ids are
   // language-prefixed (`ts:` / `py:` / `go:`), so the union never collides and the
   // conflict engine sees one graph spanning both.
@@ -173,6 +205,9 @@ export async function buildDependencyGraph(
     ...goFingerprints
   ]);
   if (cache?.graph?.fingerprint === graphFingerprint) {
+    // The scan just proved the cached graph current — under an active
+    // watcher the next check can take the fast path above.
+    cache.graphDirty = !cache.graphTrusted;
     return cache.graph.value;
   }
 
@@ -215,6 +250,7 @@ export async function buildDependencyGraph(
     const empty = { graph: emptyDependencyGraph, neighborsOf: () => [] };
     if (cache) {
       cache.graph = { fingerprint: graphFingerprint, value: empty };
+      cache.graphDirty = !cache.graphTrusted;
     }
     return empty;
   }
@@ -281,6 +317,7 @@ export async function buildDependencyGraph(
   const value = { graph: dependencyGraph, neighborsOf };
   if (cache) {
     cache.graph = { fingerprint: graphFingerprint, value };
+    cache.graphDirty = !cache.graphTrusted;
   }
   return value;
 }
