@@ -6,6 +6,7 @@ import { runDoctor } from "./commands/doctor.js";
 import { runFeedback } from "./commands/feedback.js";
 import { runJoin } from "./commands/join.js";
 import { runKeygen } from "./commands/keygen.js";
+import { runOnboard } from "./commands/onboard.js";
 import { runPush } from "./commands/push.js";
 import { runReport } from "./commands/report.js";
 import { runSession } from "./commands/session.js";
@@ -44,6 +45,9 @@ switch (command) {
     break;
   case "why":
     await runWhy(args.slice(1));
+    break;
+  case "onboard":
+    await runOnboard(args.slice(1));
     break;
   case "mcp":
     await runMcp(args.slice(1));
@@ -88,6 +92,7 @@ Commands:
   session  Start, heartbeat, or end a local session
   whatsup  Show the daemon's current team-state briefing
   why      Search Synapse memory with source citations
+  onboard  First-session deep briefing: team digest + cited decision history
   mcp      Run a stdio MCP server that forwards tools to the local daemon
   join     Write .synapse/config.json, install Claude Code hooks, and connect other agents
   connect  Wire other agents (Cursor, VS Code, Gemini, Windsurf, any MCP client) to the MCP server

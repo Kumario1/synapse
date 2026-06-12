@@ -1,5 +1,6 @@
 import type {
   RecallMatch,
+  SynapseOnboardResponse,
   SynapseWhatsupResponse,
   SynapseWhyResponse,
   SynapseWhySource,
@@ -206,6 +207,146 @@ export function mergeRecallIntoWhy(
   ].join("\n");
 
   return { ...response, rag: true, answer, sources };
+}
+
+/**
+ * The room's durable memory ordered by recency (no question filter) — the
+ * deterministic floor of the onboarding briefing. Thin wrapper so
+ * `whySources` stays private and scoring-free callers get a purpose-named
+ * seam.
+ */
+export function recentWhySources(state: TeamState, limit?: number): SynapseWhySource[] {
+  return whySources(state)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, clampWhyLimit(limit));
+}
+
+/**
+ * First-session deep briefing (plan C4 slice): the full team digest plus
+ * cited decision history. Unlike `sessionStartBriefing` (a diff against
+ * "while you were away"), onboarding has no baseline — it always answers,
+ * even for an empty room.
+ */
+export function buildOnboardResponse(
+  state: TeamState,
+  options: { degraded: boolean; limit?: number }
+): SynapseOnboardResponse {
+  const activity = buildWhatsupResponse(state, options);
+  const decisions = recentWhySources(state, options.limit);
+
+  const sections: string[] = [];
+
+  const active = activity.sessions.filter((session) => session.status !== "ended");
+  if (active.length > 0) {
+    sections.push(
+      `Active sessions:\n${active
+        .map(
+          (session) =>
+            `  • ${session.memberLogin} (${session.status}${session.lastTask ? `: ${session.lastTask}` : ""})`
+        )
+        .join("\n")}`
+    );
+  }
+
+  if (activity.recentPushes.length > 0) {
+    sections.push(
+      `Recent pushes:\n${activity.recentPushes
+        .map((push) => `  • ${push.memberId}: ${push.summary} (${push.filesAffected.length} file(s))`)
+        .join("\n")}`
+    );
+  }
+
+  if (activity.recentRepoEvents.length > 0) {
+    sections.push(
+      `Recent GitHub activity:\n${activity.recentRepoEvents
+        .map((event) => `  • ${event.actor}: ${event.summary}`)
+        .join("\n")}`
+    );
+  }
+
+  if (activity.unpushedDeltas.length > 0) {
+    sections.push(
+      `Unpushed contract changes:\n${activity.unpushedDeltas
+        .map((delta) => `  • ${delta.memberLogin}: ${delta.symbolId.raw} (${delta.changeKind})`)
+        .join("\n")}`
+    );
+  }
+
+  if (decisions.length > 0) {
+    sections.push(
+      `Decisions & history:\n${decisions
+        .map((source, index) => `  ${index + 1}. ${source.title} — ${source.summary}`)
+        .join("\n")}`
+    );
+  }
+
+  const header = `🧭 Synapse onboarding briefing for ${state.repoId}:`;
+  const briefing =
+    sections.length === 0
+      ? `${header}\nNo recorded team history yet — this room is new.`
+      : `${header}\n${sections.join("\n\n")}`;
+
+  return {
+    repoId: state.repoId,
+    generatedAt: new Date().toISOString(),
+    degraded: options.degraded,
+    briefing,
+    sections: { activity, decisions }
+  };
+}
+
+/**
+ * Fold vector-recall matches into an onboarding response's decisions —
+ * strictly additive, same dedupe key as `mergeRecallIntoWhy`
+ * (reference-then-title), but recall hits rank FIRST. Deliberate divergence
+ * from the why-merge: why's floor is question-scored, so it keeps rank;
+ * onboarding's floor is unfiltered recency padded up to the cap, so
+ * floor-first ordering would trim every semantically-selected recall hit
+ * right back off the end.
+ */
+export function mergeRecallIntoOnboard(
+  response: SynapseOnboardResponse,
+  matches: RecallMatch[],
+  limit?: number
+): SynapseOnboardResponse {
+  const cap = clampWhyLimit(limit);
+  const seen = new Set(
+    response.sections.decisions.map((source) => source.reference ?? source.title)
+  );
+  const added: SynapseWhySource[] = [];
+  for (const match of matches) {
+    const key = match.reference ?? match.title;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    added.push({
+      kind: match.kind,
+      title: match.title,
+      summary: match.summary,
+      createdAt: match.createdAt,
+      score: match.score,
+      ...(match.reference ? { reference: match.reference } : {})
+    });
+  }
+  if (added.length === 0) {
+    return response;
+  }
+
+  const decisions = [...added, ...response.sections.decisions].slice(0, cap);
+  const decisionsSection = `Decisions & history:\n${decisions
+    .map((source, index) => `  ${index + 1}. ${source.title} — ${source.summary}`)
+    .join("\n")}`;
+
+  // Re-render: replace the existing decisions section, or append one if the
+  // floor had none (recall can answer for a room with vector memory only).
+  const briefing = response.briefing.includes("Decisions & history:")
+    ? response.briefing.replace(/Decisions & history:[\s\S]*$/, decisionsSection)
+    : response.briefing.includes("No recorded team history yet")
+      ? `🧭 Synapse onboarding briefing for ${response.repoId}:\n${decisionsSection}`
+      : `${response.briefing}\n\n${decisionsSection}`;
+
+  return { ...response, rag: true, briefing, sections: { ...response.sections, decisions } };
 }
 
 function whySources(state: TeamState): SynapseWhySource[] {
