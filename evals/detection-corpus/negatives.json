@@ -1,0 +1,207 @@
+[
+  {
+    "name": "no_active_state_stays_silent",
+    "description": "Bob checks a symbol with no other sessions, deltas, locks, or pushes touching it.",
+    "type": "state",
+    "selfSessionId": "bob",
+    "sessions": ["bob"],
+    "targets": [
+      { "filePath": "src/auth/login.ts", "symbol": "ts:src/auth/login.ts#login" }
+    ],
+    "expected": { "rules": [] }
+  },
+  {
+    "name": "different_symbol_same_file_no_relation",
+    "description": "Alice has an unpushed change to a different, unrelated symbol in the same file Bob is checking.",
+    "type": "state",
+    "selfSessionId": "bob",
+    "sessions": ["alice", "bob"],
+    "targets": [
+      { "filePath": "src/auth/token.ts", "symbol": "ts:src/auth/token.ts#Token" }
+    ],
+    "deltas": [
+      {
+        "sessionId": "alice",
+        "symbol": "ts:src/auth/token.ts#TOKEN_ISSUER",
+        "filePath": "src/auth/token.ts",
+        "summary": "renamed the issuer constant's value",
+        "before": { "raw": "const TOKEN_ISSUER: string", "params": [], "returns": "string" },
+        "after": { "raw": "const TOKEN_ISSUER: string", "params": [], "returns": "string" }
+      }
+    ],
+    "expected": { "rules": [] }
+  },
+  {
+    "name": "delta_already_pushed_stays_silent",
+    "description": "Alice's change to validate was already pushed (pushedAt set), so it is not an unpushed conflict for Bob.",
+    "type": "state",
+    "selfSessionId": "bob",
+    "sessions": ["alice", "bob"],
+    "targets": [
+      { "filePath": "src/auth/token.ts", "symbol": "ts:src/auth/token.ts#validate" }
+    ],
+    "deltas": [
+      {
+        "sessionId": "alice",
+        "symbol": "ts:src/auth/token.ts#validate",
+        "filePath": "src/auth/token.ts",
+        "summary": "validate now returns Result<Token>",
+        "before": {
+          "raw": "function validate(input: string): boolean",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "boolean"
+        },
+        "after": {
+          "raw": "function validate(input: string): Result<Token>",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "Result<Token>"
+        },
+        "pushedAt": "2026-06-08T00:00:01.000Z"
+      }
+    ],
+    "expected": { "rules": [] }
+  },
+  {
+    "name": "self_unpushed_delta_not_a_conflict",
+    "description": "Bob's own unpushed delta to the symbol he is checking is not a conflict against himself.",
+    "type": "state",
+    "selfSessionId": "bob",
+    "sessions": ["bob"],
+    "targets": [
+      { "filePath": "src/auth/token.ts", "symbol": "ts:src/auth/token.ts#validate" }
+    ],
+    "deltas": [
+      {
+        "sessionId": "bob",
+        "symbol": "ts:src/auth/token.ts#validate",
+        "filePath": "src/auth/token.ts",
+        "summary": "validate now returns Result<Token>",
+        "before": {
+          "raw": "function validate(input: string): boolean",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "boolean"
+        },
+        "after": {
+          "raw": "function validate(input: string): Result<Token>",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "Result<Token>"
+        }
+      }
+    ],
+    "expected": { "rules": [] }
+  },
+  {
+    "name": "ended_session_editing_file_not_flagged",
+    "description": "Alice's session has ended but still lists the file as being edited; ended sessions are excluded from same_file_no_overlap.",
+    "type": "state",
+    "selfSessionId": "bob",
+    "sessions": [
+      { "id": "alice", "filesEditing": ["src/auth/token.ts"], "status": "ended" },
+      "bob"
+    ],
+    "targets": [
+      { "filePath": "src/auth/token.ts", "symbol": "ts:src/auth/token.ts#Token" }
+    ],
+    "expected": { "rules": [] }
+  },
+  {
+    "name": "transitive_dependency_three_hops_not_flagged",
+    "description": "Alice's change is 3 hops away from Bob's target; only 1- and 2-hop dependencies are flagged.",
+    "type": "state",
+    "selfSessionId": "bob",
+    "sessions": ["alice", "bob"],
+    "targets": [
+      { "filePath": "src/http/handler.ts", "symbol": "ts:src/http/handler.ts#handleRequest" }
+    ],
+    "dependencies": {
+      "ts:src/http/handler.ts#handleRequest": [
+        { "symbol": "ts:src/auth/token.ts#validate", "hops": 3 }
+      ]
+    },
+    "deltas": [
+      {
+        "sessionId": "alice",
+        "symbol": "ts:src/auth/token.ts#validate",
+        "filePath": "src/auth/token.ts",
+        "summary": "validate now returns Result<Token>",
+        "before": {
+          "raw": "function validate(input: string): boolean",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "boolean"
+        },
+        "after": {
+          "raw": "function validate(input: string): Result<Token>",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "Result<Token>"
+        }
+      }
+    ],
+    "expected": { "rules": [] }
+  },
+  {
+    "name": "recent_push_unrelated_file_stays_silent",
+    "description": "A recent push touched an unrelated file and symbol that have nothing to do with Bob's target.",
+    "type": "state",
+    "selfSessionId": "bob",
+    "sessions": ["alice", "bob"],
+    "targets": [
+      { "filePath": "src/auth/token.ts", "symbol": "ts:src/auth/token.ts#validate" }
+    ],
+    "recentPushes": [
+      {
+        "memberId": "alice",
+        "summary": "Pushed unrelated billing changes",
+        "filesAffected": ["src/billing/invoice.ts"],
+        "symbols": ["ts:src/billing/invoice.ts#renderInvoice"],
+        "sha": "def456"
+      }
+    ],
+    "expected": { "rules": [] }
+  },
+  {
+    "name": "same_file_no_overlap_suppressed_by_specific_conflict",
+    "description": "Alice is editing the same file AND has an unpushed delta on the exact symbol Bob is checking; same_file_no_overlap is suppressed in favor of the more specific same_symbol_unpushed.",
+    "type": "state",
+    "selfSessionId": "bob",
+    "sessions": [
+      { "id": "alice", "filesEditing": ["src/auth/token.ts"] },
+      "bob"
+    ],
+    "targets": [
+      { "filePath": "src/auth/token.ts", "symbol": "ts:src/auth/token.ts#validate" }
+    ],
+    "deltas": [
+      {
+        "sessionId": "alice",
+        "symbol": "ts:src/auth/token.ts#validate",
+        "filePath": "src/auth/token.ts",
+        "summary": "validate now returns Result<Token>",
+        "before": {
+          "raw": "function validate(input: string): boolean",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "boolean"
+        },
+        "after": {
+          "raw": "function validate(input: string): Result<Token>",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "Result<Token>"
+        }
+      }
+    ],
+    "expected": { "rules": ["same_symbol_unpushed"] }
+  },
+  {
+    "name": "idle_session_other_file_stays_silent",
+    "description": "An idle teammate session exists but is editing a different file unrelated to Bob's target.",
+    "type": "state",
+    "selfSessionId": "bob",
+    "sessions": [
+      { "id": "alice", "filesEditing": ["src/billing/invoice.ts"], "status": "idle" },
+      "bob"
+    ],
+    "targets": [
+      { "filePath": "src/auth/token.ts", "symbol": "ts:src/auth/token.ts#Token" }
+    ],
+    "expected": { "rules": [] }
+  }
+]

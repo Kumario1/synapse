@@ -76,6 +76,7 @@ const entries = (await readdir(join(rootDir, "scripts")))
   .filter((name) => /^verify-.+\.mjs$/.test(name))
   .sort();
 entries.push("eval-conflicts.mjs");
+entries.push("eval-detection.mjs");
 
 const results = [];
 for (const entry of entries) {
