@@ -4,6 +4,18 @@
 >
 > **Drift check (run first)**: `git diff --stat 3a0b685..HEAD -- packages/protocol/src/index.ts packages/protocol/src/wire-schema.ts packages/protocol/src/wire-schema.test.ts apps/cli/src/daemon.ts apps/server/src/state.ts apps/server/src/state.test.ts scripts/verify-branch-aware-severity.mjs packages/conflict-engine/src/branch-aware.test.ts`
 > If any in-scope file changed since this plan was written, compare the current-state excerpts below against the live code before proceeding.
+>
+> Known drift (verified by review on 2026-06-11): PRs #51 and #52 merged
+> after this plan was stamped — the drift check WILL report
+> `apps/cli/src/daemon.ts` and `packages/protocol/src/wire-schema.ts`; that
+> alone is NOT a STOP. Re-verified anchors on the post-merge tree: the
+> periodic heartbeat send is now at `daemon.ts:279` (was cited 265), the
+> manual/session heartbeat at `daemon.ts:538` (was ~518), `makeSession`'s
+> `branch:` at `daemon.ts:628` (was 601), and `currentGitBranch` is defined
+> in `apps/cli/src/config.ts:203` (imported by the daemon). `state.ts:48`
+> and `touchSession` (now `state.ts:180`) are unchanged. Locate by symbol
+> (`grep -n 'session.heartbeat' apps/cli/src/daemon.ts` → 2 send sites),
+> not by the cited line numbers.
 
 ## Status
 
@@ -110,7 +122,7 @@ In `packages/protocol/src/index.ts`, update the `session.heartbeat` payload type
 
 Also update the `Session.branch` comment to remove the stale "can lag until reconnect" statement. Replace it with a note that new clients refresh branch on heartbeat and old clients may omit it.
 
-**Verify**: `npm run typecheck` -> exit 0 after later code updates; it may fail immediately until consumers are updated.
+**Verify**: `npm run typecheck` -> exit 0 immediately (the field is optional and additive; nothing consumes it yet, so no consumer updates are needed for this step to pass).
 
 ### Step 2: Update runtime schema and tests
 
@@ -128,10 +140,10 @@ Keep the existing heartbeat-without-branch case to prove backward compatibility.
 
 ### Step 3: Send current branch on all daemon heartbeats
 
-In `apps/cli/src/daemon.ts`, include `branch: currentGitBranch(config.worktreeRoot)` in:
-
-- The periodic heartbeat at line 264.
-- The `/tools/synapse_session` heartbeat action path around line 518.
+In `apps/cli/src/daemon.ts`, include `branch: currentGitBranch(config.worktreeRoot)` in
+both `session.heartbeat` send sites (find them with
+`grep -n 'session.heartbeat' apps/cli/src/daemon.ts` — ~line 279 periodic,
+~line 538 in the `/tools/synapse_session` action path):
 
 Do not include branch when `currentGitBranch` returns `undefined`; preserve optional-field semantics if the helper currently omits detached HEAD.
 

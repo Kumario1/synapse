@@ -13,14 +13,14 @@
 > "Current state" excerpts against the live code before proceeding; on a
 > mismatch, treat it as a STOP condition.
 >
-> Known in-flight drift: plan 004 (daemon input hardening) was being executed
-> in this worktree when this plan was written — it shifts
-> `apps/cli/src/daemon.ts` line numbers by roughly +14 and routes request-body
-> parsing through `JsonBodyError`. The `/tools/synapse_whatsup` and
-> `/tools/synapse_why` handlers survive unchanged in substance. Re-anchor by
-> handler path strings, not line numbers; that change alone is NOT a STOP
-> condition — your new handler should match whatever body-parsing idiom the
-> merged `synapse_why` handler then uses.
+> Known drift (verified post-review): plan 004 (daemon input hardening)
+> MERGED after this plan was stamped (PR #52, commit `776a717`), so the
+> drift check WILL report `apps/cli/src/daemon.ts` and
+> `packages/protocol/src/wire-schema.ts` — expected, not a STOP. This plan's
+> citations were re-verified against the post-merge tree and already match
+> (do NOT apply any line offset). One consequence of 004 to honor: request
+> bodies now parse through `JsonBodyError` — your new handler must use the
+> same body-parsing idiom as the merged `synapse_why` handler.
 
 ## Status
 
@@ -108,9 +108,7 @@ calls, no server changes.
 | Typecheck | `npm run typecheck` | exit 0 |
 | Unit tests | `npm test` | all pass |
 | New verify | `npm run verify:onboard` | prints PASS lines, exit 0 |
-| Adjacent verifies stay green | `node scripts/ci-verify-all.mjs --only why,why-rag,whatsup 2>/dev/null \|\| npm run verify:why` | exit 0 |
-
-(If `--only whatsup` names no script, drop it — check `ls scripts/verify-*.mjs` first.)
+| Adjacent verifies stay green | `node scripts/ci-verify-all.mjs --only why,why-rag,whatsup` | exit 0 (all three scripts exist — `verify-why.mjs`, `verify-why-rag.mjs`, `verify-whatsup.mjs`; confirmed at review time with `ls scripts/verify-why*.mjs scripts/verify-whatsup.mjs`) |
 
 ## Scope
 
@@ -174,16 +172,21 @@ Behavior:
 2. `decisions` floor = the why-source list built from the room's durable
    memory with **no question filter**: take `whySources(state)` ordering by
    recency (`createdAt` desc) capped at the clamped limit. `whySources` is
-   currently module-private (line 211) — export it or add a thin
-   `recentWhySources(state, limit)` next to it; do not duplicate its logic.
+   currently module-private (line 211) — add a thin exported
+   `recentWhySources(state, limit)` next to it that sorts and caps
+   (RECOMMENDED — keeps `whySources` private and gives the daemon a
+   purpose-named seam); do not duplicate its logic.
 3. `briefing` = rendered text in the `sessionStartBriefing` style: a
    `🧭 Synapse onboarding briefing for <repoId>:` header, then sections —
    active sessions, recent pushes, recent GitHub activity, teammates'
    unpushed contract changes (all from `activity`), then
    `Decisions & history:` as numbered `title — summary` citation lines
-   (same format as the why answer, lines 150–153). Empty room → a briefing
-   that says the room has no recorded history yet (never `null` — unlike the
-   catch-up, an onboarding request always deserves an answer).
+   (same format as the why answer, lines 150–153). Empty room → the
+   briefing is exactly
+   `🧭 Synapse onboarding briefing for <repoId>:\nNo recorded team history yet — this room is new.`
+   (never `null` — unlike the catch-up, an onboarding request always
+   deserves an answer; the verify in Step 5 asserts on the literal
+   "No recorded team history yet").
 
 **Verify**: `npm run typecheck` → exit 0.
 
@@ -200,9 +203,10 @@ add `POST /tools/synapse_onboard`:
    Fold matches into `decisions` using the same dedupe rule as
    `mergeRecallIntoWhy` (key = `reference ?? title`, appended after floor
    sources, capped); set `rag: true` and re-render `briefing` when anything
-   was added. Reuse `mergeRecallIntoWhy` by mapping through a
-   `SynapseWhyResponse` if that is simpler than duplicating the dedupe —
-   either is acceptable; duplicated *logic* is not.
+   was added. Do this by mapping through a `SynapseWhyResponse` so
+   `mergeRecallIntoWhy` is reused as-is (RECOMMENDED: build a temporary
+   why-response from the `decisions` floor, merge, then read back the
+   merged sources) — duplicating the dedupe logic is not acceptable.
 3. Count a metric: `metrics.count("synapse_onboard_total")` (and
    `synapse_onboard_rag_total` when rag contributed) — match the
    `synapse_why_rag_total` idiom at line 341.
@@ -240,8 +244,8 @@ server + daemon and stubs embeddings). Assertions:
    `verify-adaptive-severity.mjs` seed state). `POST /tools/synapse_onboard`
    → response has `briefing` containing the repoId, a pushes section, and at
    least one numbered decision line; `rag` absent/false; `degraded: false`.
-2. **Empty room**: fresh repoId → `briefing` states there is no history yet;
-   exit 0, never a throw.
+2. **Empty room**: fresh repoId → `briefing` contains the literal
+   `No recorded team history yet` (the Step 2 string); exit 0, never a throw.
 3. **RAG (gated)**: when `SYNAPSE_VERIFY_PG_URL` is set, configure the stub
    embedding provider exactly as `verify-why-rag.mjs` does, index a memory
    whose prose does NOT lexically overlap the seeded floor content, call

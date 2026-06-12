@@ -92,8 +92,8 @@ irreversible public action — it is an explicit STOP/hand-off at the end.
 
 | Purpose | Command | Expected on success |
 |---------|---------|---------------------|
-| Registry state (read-only) | `npm view @kumario/synapse versions` | `[ '0.1.0', '0.1.1' ]` |
-| Build + stage release | `node scripts/build-package.mjs` | ends with `tarball: dist-release/kumario-synapse-<version>.tgz` |
+| Registry state (read-only) | `npm view @kumario/synapse versions` | `[ '0.1.0', '0.1.1' ]` (needs network — if the registry is unreachable, skip this row and note it in your report; do NOT treat network failure as the extra-versions STOP) |
+| Build + stage release | `node scripts/build-package.mjs` | prints `tarball: dist-release/kumario-synapse-<version>.tgz` followed by a final `publish with: npm publish …` line |
 | Verify the tarball | `npm run verify:package` | exit 0 |
 | Full hygiene (slow, optional) | `npm run verify:npm-pack` | exit 0 |
 
@@ -185,9 +185,11 @@ Re-read the changed README sections top to bottom once; confirm the code
 fences render (balanced backticks — the nested fence in step 3's template
 must be flattened to a single level when you write the real file).
 
-**Verify**: `npx --yes markdownlint-cli2 README.md` is NOT required (repo has
-no markdownlint config) — instead: `node -e "require('fs').readFileSync('README.md','utf8')"`
-exits 0 and a manual scan shows balanced fences in the edited region.
+**Verify**:
+`node -e "const s=require('fs').readFileSync('README.md','utf8');const n=(s.match(/^\`\`\`/gm)||[]).length;if(n%2)throw new Error('odd fence count: '+n);console.log('fences ok:',n)"`
+→ prints `fences ok: <even number>` (an odd count means an unclosed code
+fence — find and fix it). Then re-read the edited region once for prose
+sense.
 
 ## Test plan
 

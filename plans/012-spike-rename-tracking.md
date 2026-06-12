@@ -13,12 +13,13 @@
 > "Current state" excerpts against the live code before proceeding; on a
 > mismatch, treat it as a STOP condition.
 >
-> Known in-flight drift: plan 004 (daemon input hardening) was being executed
-> in this worktree when this plan was written — it shifts
-> `apps/cli/src/daemon.ts` line numbers by roughly +14. The differ dispatch
-> and change→delta mapping survive unchanged. Re-anchor by symbol names
-> (`diffTypeScriptContracts`, `summarizeSymbolChange`); that change alone is
-> NOT a STOP condition.
+> Known drift (verified 2026-06-11, post-review): plan 004 (daemon input
+> hardening) has MERGED since this plan was stamped (PR #52, commit `776a717`),
+> so the drift check WILL report `apps/cli/src/daemon.ts` changes — that is
+> expected, not a STOP. The daemon citations in this plan have been corrected
+> to the post-merge tree; `packages/analyzer-ts` is unchanged. Re-anchor by
+> symbol names (`diffTypeScriptContracts`, `summarizeSymbolChange`) if lines
+> shift further.
 
 ## Status
 
@@ -69,28 +70,44 @@ out.
   ```
 
 - **The name is baked into the signature**, so `sigHash` CANNOT be the
-  rename-matching key: `toCodeSymbol` hashes the normalized signature
-  (`packages/analyzer-ts/src/index.ts:547–558`), and `callableSignature`
-  builds `signature.raw` from the label + **name** + params + return
-  (lines 564+). A renamed function has a different `sigHash` by
-  construction. The matching key must be a *name-independent* shape derived
-  from the structured fields: `kind` + ordered `params` (`name`,`type`,`optional`)
-  + `returns` + type params. Note param *names* are part of `SignatureParam`
-  — decide deliberately: include param names in the shape key (stricter,
-  fewer false pairs — RECOMMENDED for the spike) and document it.
+  rename-matching key: `buildSymbol` (the helper at
+  `packages/analyzer-ts/src/index.ts:539`; the hash assignment is at
+  lines 547–558 inside it) hashes the normalized signature, and
+  `callableSignature` builds `signature.raw` from the label + **name** +
+  params + return (lines 564+). A renamed function has a different `sigHash`
+  by construction. The matching key must be a *name-independent* shape
+  derived from the structured `Signature` fields, which are
+  (`packages/protocol/src/index.ts:97–102`):
+
+  ```ts
+  export interface Signature {
+    params: SignatureParam[];
+    returns: string | null;
+    generics?: string[];
+    raw: string;
+  }
+  ```
+
+  Use `kind` + ordered `params` (`name`,`type`,`optional`) + `returns` +
+  `generics` — never `raw` or `sigHash` (both embed the name). Note param
+  *names* are part of `SignatureParam` — decide deliberately: include param
+  names in the shape key (stricter, fewer false pairs — RECOMMENDED for the
+  spike) and document it.
 
 - `packages/protocol/src/index.ts:143–148` — `SymbolChange { symbolId, changeKind, before, after }`:
   `before`/`after` are full `CodeSymbol`s, so a `renamed` change can carry
   the old symbol in `before` and the new one in `after` with
   `symbolId = after.id` (the surviving identity). No protocol change needed.
 
-- `apps/cli/src/daemon.ts:902–907` — the daemon picks the per-language
-  differ; TS path calls `diffTypeScriptContracts(previous, current)` and
-  maps each change into a `ContractDelta` (with `dependents` computed from
-  the dependency graph). Find the exact mapping function around line 907
-  (`toContractChanges`/`buildDelta` area, lines ~900–940) and confirm where
-  `dependents` are looked up — for a rename, dependents must be computed
-  from the **old** symbol id (that's who breaks).
+- `apps/cli/src/daemon.ts` (post-004-merge line numbers): the differ
+  dispatch is at ~line 927 — the daemon picks the per-language differ; the
+  TS path calls `diffTypeScriptContracts(previous, current)` and maps each
+  change into a `ContractDelta` (with `dependents` computed from the
+  dependency graph). Locate it with `grep -n 'diffTypeScriptContracts' apps/cli/src/daemon.ts`
+  (expect an import near the top and one call site) and confirm where
+  `dependents` are looked up in the surrounding mapping code — for a
+  rename, dependents must be computed from the **old** symbol id (that's
+  who breaks).
 
 - `packages/conflict-engine/src/compare.ts` — consumes deltas via
   `changeKind` (line 106 passes it through). Grep `changeKind` in
@@ -107,7 +124,10 @@ out.
   function with no env access — thread the toggle as an options parameter
   defaulted on, read the env in the daemon (`apps/cli/src/daemon.ts:902–907`).
 - Test conventions: `node --test`, colocated `*.test.ts` —
-  `packages/analyzer-ts/src/index.test.ts` already exists (9 tests); extend it.
+  `packages/analyzer-ts/src/index.test.ts` already exists (10 tests as of
+  this review; confirm with `grep -c 'test(' packages/analyzer-ts/src/index.test.ts`
+  and use the count YOU observe as the "old" number in Step 2's gate);
+  extend it.
 - Verify-script conventions: hermetic `scripts/verify-*.mjs` +
   root `package.json` alias; `scripts/verify-dependency-ts-check.mjs` and
   `scripts/verify-tsx-check.mjs` are the closest exemplars (they drive two
@@ -159,10 +179,11 @@ Algorithm — run AFTER the existing loops compute the would-be
 `removed`/`added` sets but BEFORE pushing them into `changes`
 (restructure minimally; keep the existing matched-id branches untouched):
 
-1. Build `shapeKey(symbol)`: `JSON.stringify([symbol.kind, params.map(p => [p.name, p.type, p.optional]), returns, typeParams])`
-   from the structured `signature` fields — never from `signature.raw` or
-   `sigHash` (both embed the name). Symbols whose signature lacks structure
-   (e.g. kinds without params/returns) get key `null` → never paired.
+1. Build `shapeKey(symbol)`: `JSON.stringify([symbol.kind, signature.params.map(p => [p.name, p.type, p.optional]), signature.returns, signature.generics ?? []])`
+   from the structured `Signature` fields (excerpted in Current state) —
+   never from `signature.raw` or `sigHash` (both embed the name). Symbols
+   whose signature lacks structure (e.g. kinds without params/returns) get
+   key `null` → never paired.
 2. Group removed and added candidates by `(filePath, shapeKey)` — same-file
    only; `filePath` is available on the symbol id/span.
 3. Pair ONLY when a group has exactly one removed and exactly one added
@@ -191,26 +212,32 @@ extract-then-diff test style:
    the test name that trivial shapes are allowed *because* of the
    one-to-one rule.
 
-**Verify**: `npm test --workspace @synapse/analyzer-ts` → all pass (9 old + 6 new).
+**Verify**: `npm test --workspace @synapse/analyzer-ts` → all pass (the
+old count you recorded in Current state + 6 new; 16 total if the old count
+was 10).
 
 ### Step 3: Daemon threading
 
-In `apps/cli/src/daemon.ts:902–907`, pass
+At the differ dispatch in `apps/cli/src/daemon.ts` (~line 927; locate via
+`grep -n 'diffTypeScriptContracts' apps/cli/src/daemon.ts`), pass
 `{ detectRenames: process.env.SYNAPSE_RENAME_TRACKING !== "0" }` to
 `diffTypeScriptContracts` (py/go differs keep their signatures). Then:
 
-1. In the change→delta mapping (lines ~907–940), make a `renamed` delta's
-   `dependents` come from the **old** symbol id's graph entry (dependents
-   reference the old name). Read how `dependents` is resolved for `removed`
-   and mirror it with `change.before.id`.
-2. `summarizeSymbolChange` (line 979) — confirm the existing
-   `case "renamed"` text mentions both names; if it only has the raw id,
-   improve it to `"<old> renamed to <new>"` using `before`/`after` (check
-   the function's inputs; extend them only if it already receives the
-   symbols — otherwise leave the text as-is and note it in the report).
+1. In the change→delta mapping just below the dispatch, make a `renamed`
+   delta's `dependents` come from the **old** symbol id's graph entry
+   (dependents reference the old name). Read how `dependents` is resolved
+   for `removed` and mirror it with `change.before.id`.
+2. `summarizeSymbolChange` (~line 1000; the `case "renamed"` is ~line 1012 —
+   locate via `grep -n 'summarizeSymbolChange' apps/cli/src/daemon.ts`) —
+   confirm the existing `case "renamed"` text mentions both names; if it
+   only has the raw id, improve it to `"<old> renamed to <new>"` using
+   `before`/`after` (check the function's inputs; extend them only if it
+   already receives the symbols — otherwise leave the text as-is and note
+   it in the report).
 3. Add metric label coverage: `synapse_deltas_emitted_total{changeKind="renamed"}`
-   works automatically (lines 244/442 use `delta.changeKind`) — nothing to do,
-   just confirm.
+   works automatically (both emit sites use `delta.changeKind` — confirm
+   with `grep -n 'synapse_deltas_emitted_total' apps/cli/src/daemon.ts`,
+   expect 2 matches) — nothing to do, just confirm.
 
 **Verify**: `npm run build && npm test` → exit 0.
 
