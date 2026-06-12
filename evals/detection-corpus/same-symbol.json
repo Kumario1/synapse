@@ -1,0 +1,140 @@
+[
+  {
+    "name": "same_symbol_breaking_warns",
+    "description": "Alice changes validate's return type from boolean to Result<Token>; Bob checks the same symbol.",
+    "type": "state",
+    "selfSessionId": "bob",
+    "sessions": ["alice", "bob"],
+    "targets": [
+      { "filePath": "src/auth/token.ts", "symbol": "ts:src/auth/token.ts#validate" }
+    ],
+    "deltas": [
+      {
+        "sessionId": "alice",
+        "symbol": "ts:src/auth/token.ts#validate",
+        "filePath": "src/auth/token.ts",
+        "summary": "validate now returns Result<Token>",
+        "before": {
+          "raw": "function validate(input: string): boolean",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "boolean"
+        },
+        "after": {
+          "raw": "function validate(input: string): Result<Token>",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "Result<Token>"
+        }
+      }
+    ],
+    "expected": { "rules": ["same_symbol_unpushed"] }
+  },
+  {
+    "name": "same_symbol_compatible_is_info",
+    "description": "Alice adds an optional parameter to validate; Bob checks the same symbol.",
+    "type": "state",
+    "selfSessionId": "bob",
+    "sessions": ["alice", "bob"],
+    "targets": [
+      { "filePath": "src/auth/token.ts", "symbol": "ts:src/auth/token.ts#validate" }
+    ],
+    "deltas": [
+      {
+        "sessionId": "alice",
+        "symbol": "ts:src/auth/token.ts#validate",
+        "filePath": "src/auth/token.ts",
+        "summary": "validate accepts optional options",
+        "before": {
+          "raw": "function validate(input: string): Token | null",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "Token | null"
+        },
+        "after": {
+          "raw": "function validate(input: string, opts?: Options): Token | null",
+          "params": [
+            { "name": "input", "type": "string", "optional": false },
+            { "name": "opts", "type": "Options", "optional": true }
+          ],
+          "returns": "Token | null"
+        }
+      }
+    ],
+    "expected": { "rules": ["same_symbol_unpushed"] }
+  },
+  {
+    "name": "same_symbol_divergent_warns",
+    "description": "Alice and Bob both have unpushed, mutually incompatible changes to validate.",
+    "type": "state",
+    "selfSessionId": "bob",
+    "sessions": ["alice", "bob"],
+    "targets": [
+      { "filePath": "src/auth/token.ts", "symbol": "ts:src/auth/token.ts#validate" }
+    ],
+    "deltas": [
+      {
+        "sessionId": "alice",
+        "symbol": "ts:src/auth/token.ts#validate",
+        "filePath": "src/auth/token.ts",
+        "summary": "validate now returns Result<Token>",
+        "before": {
+          "raw": "function validate(input: string): boolean",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "boolean"
+        },
+        "after": {
+          "raw": "function validate(input: string): Result<Token>",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "Result<Token>"
+        }
+      },
+      {
+        "sessionId": "bob",
+        "symbol": "ts:src/auth/token.ts#validate",
+        "filePath": "src/auth/token.ts",
+        "summary": "validate is now async",
+        "before": {
+          "raw": "function validate(input: string): boolean",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "boolean"
+        },
+        "after": {
+          "raw": "function validate(input: string): Promise<Token>",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "Promise<Token>"
+        }
+      }
+    ],
+    "expected": { "rules": ["contract_divergent"] }
+  },
+  {
+    "name": "same_symbol_active_edit_lock_warns",
+    "description": "Alice holds an active edit lock on validate while Bob checks the same symbol.",
+    "type": "state",
+    "selfSessionId": "bob",
+    "sessions": ["alice", "bob"],
+    "targets": [
+      { "filePath": "src/auth/token.ts", "symbol": "ts:src/auth/token.ts#validate" }
+    ],
+    "editLocks": [
+      {
+        "sessionId": "alice",
+        "symbol": "ts:src/auth/token.ts#validate",
+        "filePath": "src/auth/token.ts"
+      }
+    ],
+    "expected": { "rules": ["same_symbol_active"] }
+  },
+  {
+    "name": "same_file_without_symbol_overlap_is_info",
+    "description": "Alice is editing the same file as Bob but neither has a delta or lock on Bob's target symbol.",
+    "type": "state",
+    "selfSessionId": "bob",
+    "sessions": [
+      { "id": "alice", "filesEditing": ["src/auth/token.ts"] },
+      "bob"
+    ],
+    "targets": [
+      { "filePath": "src/auth/token.ts", "symbol": "ts:src/auth/token.ts#Token" }
+    ],
+    "expected": { "rules": ["same_file_no_overlap"] }
+  }
+]

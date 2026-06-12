@@ -22,7 +22,7 @@ This plan set came from a deep advisory audit. Source files were not modified wh
 | [012](012-spike-rename-tracking.md) | Spike TypeScript rename tracking (`renamed` deltas, F5 slice) | P3 | M | - | DONE (renamed deltas keep the OLD symbol id — deliberate divergence from the plan so dependency_changed keeps firing; see PR) |
 | [013](013-pr-decision-memory.md) | Carry distilled PR-thread prose into repo events + vector memory (C3 slice) | P2 | M | - | DONE |
 | [014](014-synapse-demo-command.md) | Build `synapse demo` — one-command sandboxed conflict demo | P2 | M | 010 pairs well | DONE |
-| [015](015-detection-quality-benchmark.md) | Detection-quality benchmark — per-rule precision/recall ratchet | P3 | M | 012 bonus, not required | TODO |
+| [015](015-detection-quality-benchmark.md) | Detection-quality benchmark — per-rule precision/recall ratchet | P3 | M | 012 bonus, not required | DONE (25 scenarios; `dependency_changed` baselined at 0.833 precision — a real, documented FP on compatible 1-hop dependency changes) |
 | [016](016-command-grounded-llm-actions.md) | Ground the LLM layer in Synapse's command catalog (suggested actions) | P2 | M | - | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)

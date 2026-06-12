@@ -1,0 +1,126 @@
+[
+  {
+    "name": "direct_dependency_change_warns",
+    "description": "Bob checks login, which depends on Alice's breaking change to validate's contract.",
+    "type": "state",
+    "selfSessionId": "bob",
+    "sessions": ["alice", "bob"],
+    "targets": [
+      { "filePath": "src/auth/login.ts", "symbol": "ts:src/auth/login.ts#login" }
+    ],
+    "dependencies": {
+      "ts:src/auth/login.ts#login": [
+        { "symbol": "ts:src/auth/token.ts#validate", "hops": 1 }
+      ]
+    },
+    "deltas": [
+      {
+        "sessionId": "alice",
+        "symbol": "ts:src/auth/token.ts#validate",
+        "filePath": "src/auth/token.ts",
+        "summary": "validate now returns Result<Token>",
+        "before": {
+          "raw": "function validate(input: string): boolean",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "boolean"
+        },
+        "after": {
+          "raw": "function validate(input: string): Result<Token>",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "Result<Token>"
+        }
+      }
+    ],
+    "expected": { "rules": ["dependency_changed"] }
+  },
+  {
+    "name": "transitive_dependency_two_hops_is_info",
+    "description": "Bob checks the HTTP handler, which depends (2 hops) on Alice's changed validate contract via the session module.",
+    "type": "state",
+    "selfSessionId": "bob",
+    "sessions": ["alice", "bob"],
+    "targets": [
+      { "filePath": "src/http/handler.ts", "symbol": "ts:src/http/handler.ts#handleRequest" }
+    ],
+    "dependencies": {
+      "ts:src/http/handler.ts#handleRequest": [
+        { "symbol": "ts:src/auth/token.ts#validate", "hops": 2 }
+      ]
+    },
+    "deltas": [
+      {
+        "sessionId": "alice",
+        "symbol": "ts:src/auth/token.ts#validate",
+        "filePath": "src/auth/token.ts",
+        "summary": "validate now returns Result<Token>",
+        "before": {
+          "raw": "function validate(input: string): boolean",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "boolean"
+        },
+        "after": {
+          "raw": "function validate(input: string): Result<Token>",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "Result<Token>"
+        }
+      }
+    ],
+    "expected": { "rules": ["transitive_dependency"] }
+  },
+  {
+    "name": "dependency_changed_but_compatible",
+    "description": "Bob checks login, which depends on validate; Alice's change to validate only adds an optional parameter (backward-compatible). The engine flags dependency_changed regardless of compatibility, so this is a known precision gap for that rule (documented, not hidden).",
+    "type": "state",
+    "selfSessionId": "bob",
+    "sessions": ["alice", "bob"],
+    "targets": [
+      { "filePath": "src/auth/login.ts", "symbol": "ts:src/auth/login.ts#login" }
+    ],
+    "dependencies": {
+      "ts:src/auth/login.ts#login": [
+        { "symbol": "ts:src/auth/token.ts#validate", "hops": 1 }
+      ]
+    },
+    "deltas": [
+      {
+        "sessionId": "alice",
+        "symbol": "ts:src/auth/token.ts#validate",
+        "filePath": "src/auth/token.ts",
+        "summary": "validate accepts an optional options parameter",
+        "before": {
+          "raw": "function validate(input: string): Token | null",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "Token | null"
+        },
+        "after": {
+          "raw": "function validate(input: string, opts?: Options): Token | null",
+          "params": [
+            { "name": "input", "type": "string", "optional": false },
+            { "name": "opts", "type": "Options", "optional": true }
+          ],
+          "returns": "Token | null"
+        }
+      }
+    ],
+    "expected": { "rules": [] }
+  },
+  {
+    "name": "recent_push_marks_stale_base",
+    "description": "A teammate's recent push touched the file Bob is about to edit.",
+    "type": "state",
+    "selfSessionId": "bob",
+    "sessions": ["alice", "bob"],
+    "targets": [
+      { "filePath": "src/auth/token.ts", "symbol": "ts:src/auth/token.ts#validate" }
+    ],
+    "recentPushes": [
+      {
+        "memberId": "alice",
+        "summary": "Pushed auth token changes",
+        "filesAffected": ["src/auth/token.ts"],
+        "sha": "abc123"
+      }
+    ],
+    "expected": { "rules": ["stale_base"] }
+  }
+]
