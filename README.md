@@ -24,7 +24,7 @@
   </tr>
   <tr>
     <td><b>Polyglot analyzers</b></td>
-    <td>TypeScript contract extraction and dependency edges in-process, including relative named/default/namespace imports; Python via a long-lived <b>tree-sitter + jedi</b> sidecar and Go via a warm <b>go/parser</b> sidecar, both over JSON-RPC/stdio. Same conflict engine for all three.</td>
+    <td>TypeScript contract extraction and dependency edges in-process, including relative named/default/namespace imports, with unambiguous same-file renames tracked as <code>renamed</code> deltas (opt out: <code>SYNAPSE_RENAME_TRACKING=0</code>); Python via a long-lived <b>tree-sitter + jedi</b> sidecar and Go via a warm <b>go/parser</b> sidecar, both over JSON-RPC/stdio. Same conflict engine for all three.</td>
   </tr>
   <tr>
     <td><b>Deterministic first</b></td>

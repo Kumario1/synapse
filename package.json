@@ -36,6 +36,7 @@
     "verify:multi-instance": "npm run build && node scripts/verify-multi-instance.mjs",
     "verify:file-watcher": "npm run build && node scripts/verify-file-watcher.mjs",
     "verify:tsx-check": "npm run build && node scripts/verify-tsx-check.mjs",
+    "verify:rename-tracking": "npm run build && node scripts/verify-rename-tracking.mjs",
     "verify:go-check": "npm run build && npm run setup:analyzer-go && node scripts/verify-go-check.mjs",
     "verify:protocol-compat": "npm run build && node scripts/verify-protocol-compat.mjs",
     "verify:security": "npm run build && node scripts/verify-security.mjs",
