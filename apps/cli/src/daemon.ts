@@ -39,6 +39,7 @@ import {
   type SynapseCheckRequest,
   type SynapseFeedbackRequest,
   type SynapseFeedbackResponse,
+  type SynapseOnboardRequest,
   type SynapsePushRequest,
   type SynapseReportRequest,
   type SynapseSessionRequest,
@@ -59,7 +60,13 @@ import {
   selfSignatures,
   type AnalysisCache
 } from "./analysis.js";
-import { buildWhatsupResponse, buildWhyResponse, mergeRecallIntoWhy } from "./briefings.js";
+import {
+  buildOnboardResponse,
+  buildWhatsupResponse,
+  buildWhyResponse,
+  mergeRecallIntoOnboard,
+  mergeRecallIntoWhy
+} from "./briefings.js";
 import { currentGitBranch, type RuntimeConfig } from "./config.js";
 import {
   createOpenRouterAnalysisProvider,
@@ -349,6 +356,35 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
               );
         if (merged.rag) {
           metrics.count("synapse_why_rag_total");
+        }
+        writeJson(response, 200, merged);
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/tools/synapse_onboard") {
+        const body = (await readJson(request)) as Partial<SynapseOnboardRequest>;
+        const floor = buildOnboardResponse(teamState, {
+          degraded: socket?.readyState !== WebSocket.OPEN,
+          limit: body.limit
+        });
+        // Same hybrid contract as synapse_why: the deterministic digest always
+        // answers; vector recall (over a fixed, room-agnostic query) can only
+        // add cited decisions on top. SYNAPSE_RAG=0 disables.
+        const merged =
+          process.env.SYNAPSE_RAG === "0"
+            ? floor
+            : mergeRecallIntoOnboard(
+                floor,
+                await fetchRecall(
+                  config,
+                  "key decisions, architecture choices, and gotchas in this repository",
+                  body.limit
+                ),
+                body.limit
+              );
+        metrics.count("synapse_onboard_total");
+        if (merged.rag) {
+          metrics.count("synapse_onboard_rag_total");
         }
         writeJson(response, 200, merged);
         return;
@@ -937,19 +973,25 @@ async function reportContractChanges(
     return [];
   }
 
-  const diff = isPythonLike(filePath)
-    ? diffPythonContracts
+  const changes = isPythonLike(filePath)
+    ? diffPythonContracts(previous, current)
     : isGoLike(filePath)
-      ? diffGoContracts
-      : diffTypeScriptContracts;
-  return diff(previous, current).map((change) =>
+      ? diffGoContracts(previous, current)
+      : diffTypeScriptContracts(previous, current, {
+          detectRenames: process.env.SYNAPSE_RENAME_TRACKING !== "0"
+        });
+  return changes.map((change) =>
     createContractDelta(config, {
       symbolId: change.symbolId,
       filePath,
       changeKind: change.changeKind,
       before: change.before?.signature ?? null,
       after: change.after?.signature ?? null,
-      summary: body.summary ?? summarizeSymbolChange(change.changeKind, change.symbolId.raw),
+      summary:
+        body.summary ??
+        (change.changeKind === "renamed" && change.after
+          ? `Renamed ${change.symbolId.raw} to ${change.after.id.raw}`
+          : summarizeSymbolChange(change.changeKind, change.symbolId.raw)),
       baseSha: body.baseSha,
       dependents: body.dependents
     })
