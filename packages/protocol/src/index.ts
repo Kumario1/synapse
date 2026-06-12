@@ -1,5 +1,6 @@
 import { createHmac } from "node:crypto";
 
+export * from "./command-catalog.js";
 export * from "./log.js";
 export * from "./metrics.js";
 export * from "./wire-schema.js";
@@ -185,6 +186,12 @@ export interface ConflictAction {
   /** `you` = the agent running the check; `counterpart` = the other agent. */
   audience: "you" | "counterpart" | "both";
   step: string;
+  /**
+   * Optional structured suggestion mapping this step to a Synapse tool the
+   * reading agent can call. Validated against the command catalog; Synapse
+   * only ever SUGGESTS — it never executes these.
+   */
+  command?: { tool: string; args?: Record<string, string> };
 }
 
 /**

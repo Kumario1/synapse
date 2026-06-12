@@ -228,6 +228,8 @@ The server is single-process with an in-memory hot path backed by a durable stor
 
 Set the key in `.env` (see `.env.example`). Model defaults to `anthropic/claude-haiku-4.5`, overridable via `SYNAPSE_LLM_MODEL`. Disable layers independently with `SYNAPSE_LLM_EXPLAIN=0`, `SYNAPSE_LLM_RESOLVE=0`, `SYNAPSE_LLM_SUMMARY=0`.
 
+An analysis's `actions[]` may carry a `command` suggesting a Synapse tool to call next (e.g. `synapse_whatsup`, `synapse_why`), rendered as `→ run: ...` in the Claude Code hook output. The deterministic floor attaches these for its own rule-appropriate suggestions even without a key; with a key, the model may also suggest one, validated against the same fixed allowlist (`packages/protocol/src/command-catalog.ts`) — an unknown tool is dropped but the step text is kept. Set `SYNAPSE_LLM_COMMANDS=0` to drop the command catalog from the LLM prompt (the allowlist check still runs).
+
 ---
 
 ## Server auth modes
