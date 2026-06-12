@@ -144,21 +144,20 @@ export function extractTypeScriptDependencyGraph(
 
 export function diffTypeScriptContracts(
   before: CodeSymbol[],
-  after: CodeSymbol[]
+  after: CodeSymbol[],
+  options?: { detectRenames?: boolean }
 ): SymbolChange[] {
+  const detectRenames = options?.detectRenames ?? true;
   const beforeById = bySymbolId(before);
   const afterById = bySymbolId(after);
   const changes: SymbolChange[] = [];
+  const removed: CodeSymbol[] = [];
+  const added: CodeSymbol[] = [];
 
   for (const [raw, beforeSymbol] of beforeById) {
     const afterSymbol = afterById.get(raw);
     if (!afterSymbol) {
-      changes.push({
-        symbolId: beforeSymbol.id,
-        changeKind: "removed",
-        before: beforeSymbol,
-        after: null
-      });
+      removed.push(beforeSymbol);
       continue;
     }
 
@@ -184,6 +183,53 @@ export function diffTypeScriptContracts(
 
   for (const [raw, afterSymbol] of afterById) {
     if (!beforeById.has(raw)) {
+      added.push(afterSymbol);
+    }
+  }
+
+  // Rename pairing (plan F5 slice): a removed and an added symbol in the
+  // same file with an identical name-independent shape — and exactly one of
+  // each per shape (the unambiguity rule, this heuristic's precision
+  // guarantee) — is one rename, not two changes. The delta keeps the OLD
+  // symbol id: dependents' graphs reference the old name, so detection
+  // (dependency_changed et al) keys on it exactly as `removed` does today;
+  // the new identity travels in `after`.
+  const pairedRemoved = new Set<string>();
+  const pairedAdded = new Set<string>();
+  if (detectRenames) {
+    const removedByShape = groupByShape(removed);
+    const addedByShape = groupByShape(added);
+    for (const [shape, removedGroup] of removedByShape) {
+      const addedGroup = addedByShape.get(shape);
+      if (removedGroup.length !== 1 || addedGroup?.length !== 1) {
+        continue;
+      }
+      const [from] = removedGroup;
+      const [to] = addedGroup;
+      pairedRemoved.add(from.id.raw);
+      pairedAdded.add(to.id.raw);
+      changes.push({
+        symbolId: from.id,
+        changeKind: "renamed",
+        before: from,
+        after: to
+      });
+    }
+  }
+
+  for (const beforeSymbol of removed) {
+    if (!pairedRemoved.has(beforeSymbol.id.raw)) {
+      changes.push({
+        symbolId: beforeSymbol.id,
+        changeKind: "removed",
+        before: beforeSymbol,
+        after: null
+      });
+    }
+  }
+
+  for (const afterSymbol of added) {
+    if (!pairedAdded.has(afterSymbol.id.raw)) {
       changes.push({
         symbolId: afterSymbol.id,
         changeKind: "added",
@@ -194,6 +240,34 @@ export function diffTypeScriptContracts(
   }
 
   return changes.sort((a, b) => a.symbolId.raw.localeCompare(b.symbolId.raw));
+}
+
+/**
+ * Group symbols by `(file, name-independent shape)`. The shape is built from
+ * the structured `Signature` fields — never `raw`/`sigHash`, which embed the
+ * symbol name. Symbols without structured params/returns get no shape and
+ * never pair.
+ */
+function groupByShape(symbols: CodeSymbol[]): Map<string, CodeSymbol[]> {
+  const groups = new Map<string, CodeSymbol[]>();
+  for (const symbol of symbols) {
+    const signature = symbol.signature;
+    if (!signature || (signature.params.length === 0 && signature.returns === null)) {
+      continue;
+    }
+    const file = symbol.id.raw.split("#")[0];
+    const shape = JSON.stringify([
+      file,
+      symbol.kind,
+      signature.params.map((param) => [param.name, param.type, param.optional]),
+      signature.returns,
+      signature.generics ?? []
+    ]);
+    const group = groups.get(shape) ?? [];
+    group.push(symbol);
+    groups.set(shape, group);
+  }
+  return groups;
 }
 
 function createProject(): Project {

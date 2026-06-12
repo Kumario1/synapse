@@ -973,19 +973,25 @@ async function reportContractChanges(
     return [];
   }
 
-  const diff = isPythonLike(filePath)
-    ? diffPythonContracts
+  const changes = isPythonLike(filePath)
+    ? diffPythonContracts(previous, current)
     : isGoLike(filePath)
-      ? diffGoContracts
-      : diffTypeScriptContracts;
-  return diff(previous, current).map((change) =>
+      ? diffGoContracts(previous, current)
+      : diffTypeScriptContracts(previous, current, {
+          detectRenames: process.env.SYNAPSE_RENAME_TRACKING !== "0"
+        });
+  return changes.map((change) =>
     createContractDelta(config, {
       symbolId: change.symbolId,
       filePath,
       changeKind: change.changeKind,
       before: change.before?.signature ?? null,
       after: change.after?.signature ?? null,
-      summary: body.summary ?? summarizeSymbolChange(change.changeKind, change.symbolId.raw),
+      summary:
+        body.summary ??
+        (change.changeKind === "renamed" && change.after
+          ? `Renamed ${change.symbolId.raw} to ${change.after.id.raw}`
+          : summarizeSymbolChange(change.changeKind, change.symbolId.raw)),
       baseSha: body.baseSha,
       dependents: body.dependents
     })
