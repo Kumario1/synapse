@@ -19,6 +19,8 @@ export const SYNAPSE_AGENT_GUIDANCE = `Synapse is a realtime coordination layer 
 4. AFTER PUSHING — after you commit or push, call \`synapse_push\` with the affected files and the sha so shared state can clear stale deltas and edit locks.
 5. FEEDBACK (optional) — call \`synapse_feedback\` to record whether a surfaced conflict was acted on or dismissed; this is telemetry only and never changes verdicts.
 
+Conflict analyses may include \`actions[].command\`, a suggested Synapse tool call (e.g. \`synapse_whatsup\`, \`synapse_why\`) for resolving that specific conflict — consider making that call next when present.
+
 Identity (repoId, sessionId, daemon port) resolves automatically from \`.synapse/config.json\`, so you usually do not need to pass it.`;
 
 const MANAGED_BEGIN = "<!-- BEGIN SYNAPSE (managed by `synapse connect`) -->";

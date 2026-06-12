@@ -53,7 +53,7 @@ export async function runMcp(rawArgs: string[]): Promise<void> {
     {
       title: "Check Synapse Conflicts",
       description:
-        "Check the local Synapse daemon before editing files. Returns deterministic conflict verdicts, analysis, and resolutions.",
+        "Check the local Synapse daemon before editing files. Returns deterministic conflict verdicts, analysis, and resolutions. A conflict's analysis.actions may include a `command` suggesting another Synapse tool to call next (e.g. synapse_whatsup, synapse_why).",
       inputSchema: {
         ...commonShape,
         file: z.string().min(1).optional(),

@@ -10,6 +10,7 @@ import type {
   ConflictRecommendation,
   ProposedResolution
 } from "@synapse/protocol";
+import { isKnownSynapseCommand, renderCommandCatalogForPrompt } from "@synapse/protocol";
 
 /**
  * Optional LLM analysis provider backed by OpenRouter (Rung 5).
@@ -66,7 +67,7 @@ export function createOpenRouterAnalysisProvider(): AnalysisProvider | null {
             max_tokens: 700,
             temperature: 0.2,
             messages: [
-              { role: "system", content: SYSTEM_PROMPT },
+              { role: "system", content: buildSystemPrompt() },
               { role: "user", content: buildUserPrompt(input) }
             ]
           })
@@ -96,18 +97,36 @@ export function createOpenRouterAnalysisProvider(): AnalysisProvider | null {
   };
 }
 
-const SYSTEM_PROMPT = [
+const BASE_SYSTEM_PROMPT = [
   "You coordinate AI coding agents working on the same repository.",
   "You are given ONE contract conflict, with the code-level diffs from both sides:",
   "the OTHER agent's change and YOUR current contract / your own change.",
   "Analyze how the two diffs interact and decide what each side must do.",
   "Reply with STRICT JSON only (no markdown, no prose outside the object) of the shape:",
   '{"assessment": string, "recommendation": "block"|"warn"|"info"|"proceed",',
-  '"actions": [{"audience": "you"|"counterpart"|"both", "step": string}]}',
+  '"actions": [{"audience": "you"|"counterpart"|"both", "step": string, "command": {"tool": string, "args": object}|null}]}',
   '"you" = the agent running the check; "counterpart" = the other agent.',
   "Be concrete: reference the actual signature change. Keep assessment under 60 words.",
   "Use 'block' only when the two changes are directly incompatible and one must yield."
 ].join(" ");
+
+const COMMAND_CATALOG_PROMPT = [
+  "Synapse exposes these tools to the reading agent:",
+  renderCommandCatalogForPrompt(),
+  "When a step maps to one of these tools, set command accordingly; otherwise command=null.",
+  "These are suggestions for the reading agent — never claim they were executed."
+].join("\n");
+
+/**
+ * `SYNAPSE_LLM_COMMANDS=0` drops the command catalog from the prompt (the
+ * model then never volunteers `command`, but `asActions` still validates any
+ * it does send — the allowlist is never env-gated).
+ */
+function buildSystemPrompt(): string {
+  return process.env.SYNAPSE_LLM_COMMANDS === "0"
+    ? BASE_SYSTEM_PROMPT
+    : `${BASE_SYSTEM_PROMPT}\n${COMMAND_CATALOG_PROMPT}`;
+}
 
 function buildUserPrompt(input: ConflictAnalysisInput): string {
   return JSON.stringify(
@@ -126,7 +145,7 @@ function buildUserPrompt(input: ConflictAnalysisInput): string {
   );
 }
 
-function parseAnalysis(content: string | undefined, model: string): ConflictAnalysis | null {
+export function parseAnalysis(content: string | undefined, model: string): ConflictAnalysis | null {
   if (!content) {
     return null;
   }
@@ -164,7 +183,7 @@ function asRecommendation(value: unknown): ConflictRecommendation | null {
   return value === "block" || value === "warn" || value === "info" || value === "proceed" ? value : null;
 }
 
-function asActions(value: unknown): ConflictAction[] {
+export function asActions(value: unknown): ConflictAction[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -183,11 +202,46 @@ function asActions(value: unknown): ConflictAction[] {
         : "both";
 
     if (step) {
-      actions.push({ audience, step });
+      const command = asCommand(record.command);
+      actions.push(command ? { audience, step, command } : { audience, step });
     }
   }
 
   return actions;
+}
+
+/**
+ * Validate a model-supplied `command` against the catalog allowlist. An
+ * unknown tool drops the whole `command` (the action's step text is kept
+ * regardless — a bad command suggestion must never fail the analysis).
+ */
+function asCommand(value: unknown): ConflictAction["command"] | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const tool = typeof record.tool === "string" ? record.tool : "";
+  if (!tool || !isKnownSynapseCommand(tool)) {
+    return undefined;
+  }
+
+  if (record.args === undefined || record.args === null) {
+    return { tool };
+  }
+
+  if (typeof record.args !== "object") {
+    return { tool };
+  }
+
+  const args: Record<string, string> = {};
+  for (const [key, val] of Object.entries(record.args as Record<string, unknown>)) {
+    if (typeof val === "string") {
+      args[key] = val;
+    }
+  }
+
+  return Object.keys(args).length > 0 ? { tool, args } : { tool };
 }
 
 function cacheKey(input: ConflictAnalysisInput): string {
@@ -303,7 +357,8 @@ const RESOLUTION_SYSTEM_PROMPT = [
   '{"reconciled": boolean, "proposedContract": string|null, "rationale": string,',
   '"recommendation": "warn"|"block", "instruction": string}',
   "proposedContract must be a complete TypeScript declaration (so it parses standalone) when reconciled=true, else null.",
-  "instruction is identical for both sides ('write exactly this'). Use recommendation 'warn' when merged, 'block' when escalating."
+  "instruction is identical for both sides ('write exactly this'). Use recommendation 'warn' when merged, 'block' when escalating.",
+  "instruction may reference Synapse CLI commands (e.g. 'after adopting this contract, run synapse report --file <file>') when that helps the reader act on it."
 ].join(" ");
 
 function buildResolutionPrompt(req: ResolutionRequest): string {
