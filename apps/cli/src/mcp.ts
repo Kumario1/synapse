@@ -7,6 +7,7 @@ import type {
   SynapseFeedbackRequest,
   SynapseInsightsRequest,
   SynapseOnboardRequest,
+  SynapsePrBriefRequest,
   SynapsePushRequest,
   SynapseReportRequest,
   SynapseSessionRequest,
@@ -109,6 +110,28 @@ export async function runMcp(rawArgs: string[]): Promise<void> {
           sessionId: defaultSessionId,
           limit: 20
         } satisfies SynapseOnboardRequest)
+      })
+  );
+
+  server.registerResource(
+    "synapse-pr-brief",
+    "synapse://pr-brief",
+    {
+      title: "Synapse PR Brief",
+      description:
+        "Read-only local PR handoff briefing for the current branch: unresolved deltas, GitHub activity, pushes, and cited context.",
+      mimeType: "application/json"
+    },
+    async (uri) =>
+      jsonResource(uri.href, {
+        kind: "synapse_pr_brief",
+        tool: "synapse_pr_brief",
+        context: await daemonContext("synapse_pr_brief", {
+          repoId: defaultRepoId,
+          sessionId: defaultSessionId,
+          base: "main",
+          limit: 20
+        } satisfies SynapsePrBriefRequest)
       })
   );
 
@@ -388,6 +411,37 @@ export async function runMcp(rawArgs: string[]): Promise<void> {
       };
 
       return jsonResult(await daemonPost(args.port ?? defaultPort, "synapse_onboard", request));
+    }
+  );
+
+  server.registerTool(
+    "synapse_pr_brief",
+    {
+      title: "Synapse PR Brief",
+      description:
+        "Return a local PR handoff briefing for a base/head branch pair: unresolved deltas, active sessions, recent pushes, GitHub PR/review/comment activity, and cited team context.",
+      inputSchema: {
+        ...commonShape,
+        base: z.string().min(1).optional(),
+        head: z.string().min(1).optional(),
+        limit: z.number().int().positive().max(50).optional()
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true
+      }
+    },
+    async (args) => {
+      const request: SynapsePrBriefRequest = {
+        repoId: args.repoId ?? defaultRepoId,
+        sessionId: args.sessionId ?? defaultSessionId,
+        base: args.base,
+        head: args.head,
+        limit: args.limit
+      };
+
+      return jsonResult(await daemonPost(args.port ?? defaultPort, "synapse_pr_brief", request));
     }
   );
 

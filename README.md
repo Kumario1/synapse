@@ -44,7 +44,7 @@
   </tr>
   <tr>
     <td><b>Team briefings</b></td>
-    <td><code>synapse whatsup</code> gives a deterministic team-state briefing from the daemon's warm cache.</td>
+    <td><code>synapse whatsup</code> gives a deterministic team-state briefing from the daemon's warm cache; <code>synapse pr-brief</code> turns local state plus GitHub webhook history into a PR handoff.</td>
   </tr>
   <tr>
     <td><b>Memory search</b></td>
@@ -168,7 +168,7 @@ synapse connect --agent cursor,vscode  # or just the ones you use
 This does two things so other agents connect seamlessly and then use Synapse the way it's intended:
 
 1. **Registers the stdio MCP server** in each client's own config — `.cursor/mcp.json`, `.vscode/mcp.json`, `.gemini/settings.json`, and the cross-agent `.mcp.json` — pointing at `synapse mcp`. The adapter resolves its room (repoId, session, daemon port) from `.synapse/config.json`, so there is nothing else to configure.
-2. **Exposes MCP resources for passive context** — `synapse://briefing`, `synapse://team-state`, and `synapse://decisions` — so clients can list/read the current team digest and cited memories without making a tool call. Tools remain the action surface for checks, reports, pushes, feedback, and argument-specific memory searches.
+2. **Exposes MCP resources for passive context** — `synapse://briefing`, `synapse://team-state`, `synapse://decisions`, and `synapse://pr-brief` — so clients can list/read the current team digest, cited memories, and PR handoff context without making a tool call. Tools remain the action surface for checks, reports, pushes, feedback, and argument-specific memory searches.
 3. **Drops rules files that encode the hooks as instructions** — `AGENTS.md`, `.cursor/rules/synapse.mdc`, and `.windsurf/rules/synapse.md` — telling the agent to read context resources when available, call `synapse_check` before editing, `synapse_report` after, and use `synapse_whatsup` as the fallback session-start catch-up. The MCP server also advertises the same guidance via the protocol-native `instructions` field, so even clients that ignore rules files still receive it.
 
 Every write is idempotent and preserves your existing content (managed blocks for markdown, key-merge for JSON), so it is safe to re-run.
@@ -190,6 +190,7 @@ The CLI binary is `synapse` (`apps/cli/src/index.ts`). In a dev checkout, run an
 | `session` | Start, heartbeat, or end a local session |
 | `whatsup` | Show the daemon's current team-state briefing |
 | `why` | Search Synapse memory with source citations |
+| `pr-brief` | Local PR handoff briefing for a base/head branch pair |
 | `mcp` | Run a stdio MCP server exposing Synapse tools plus read-only context resources |
 | `connect` | Wire other agents (Cursor, VS Code/Copilot, Gemini CLI, Windsurf, any MCP client) to the MCP server |
 | `join` | Write `.synapse/config.json`, install Claude Code hooks, and `connect` other agents |
@@ -336,7 +337,7 @@ Run with `npm run <script>`. See [`package.json`](package.json) for the complete
 | `verify:branch-aware-severity` | Cross-branch `stale_base`/`dependency_changed` demote to `info`; merge-blocking rules and same-branch conflicts still warn |
 | `verify:docker` | Builds the server image, boots it, drives one edit→report |
 | `verify:npm-pack` | Compatibility alias for `verify:package` so npm-pack and release smoke use the same public tarball |
-| `verify:github-webhook` / `verify:github-briefing` | GitHub push/PR/review/comment webhooks and catch-ups |
+| `verify:github-webhook` / `verify:github-briefing` / `verify:pr-brief` | GitHub push/PR/review/comment webhooks, catch-ups, and local PR handoff briefing |
 | `verify:all` | One build, then every verify (the CI matrix) |
 | `eval:conflicts` | Recorded conflict eval suite (overlap, breaking, compatible, divergent, …) — hard pass/fail gate on 7 fixed scenarios |
 | `eval:detection` | Detection-quality benchmark — per-rule precision/recall over `evals/detection-corpus/` against a committed ratchet baseline (see "Detection quality" below) |

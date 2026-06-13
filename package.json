@@ -35,6 +35,7 @@
     "verify:insights": "npm run build && node scripts/verify-insights.mjs",
     "verify:github-webhook": "npm run build && node scripts/verify-github-webhook.mjs",
     "verify:github-briefing": "npm run build && node scripts/verify-github-briefing.mjs",
+    "verify:pr-brief": "npm run build && node scripts/verify-pr-brief.mjs",
     "verify:persistence": "npm run build && node scripts/verify-persistence.mjs",
     "verify:persistence-pg": "npm run build && node scripts/verify-persistence-pg.mjs",
     "verify:multi-instance": "npm run build && node scripts/verify-multi-instance.mjs",
