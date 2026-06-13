@@ -62,7 +62,7 @@ export async function runUp(rawArgs: string[]): Promise<void> {
 
   if (serve) {
     const serverPort = numberDefault(flags["server-port"], process.env.SYNAPSE_SERVER_PORT, 4010);
-    const healthUrl = `http://localhost:${serverPort}/health`;
+    const healthUrl = `http://127.0.0.1:${serverPort}/health`;
     if (await isHealthy(healthUrl)) {
       console.log(`synapse: reusing the server already listening on :${serverPort}`);
     } else {
@@ -70,9 +70,9 @@ export async function runUp(rawArgs: string[]): Promise<void> {
       await waitForHealth(healthUrl, 10_000);
       console.log(`synapse: server listening on :${serverPort}`);
     }
-    // The host's own daemon talks to the server over localhost — no NAT round
+    // The host's own daemon talks to the server over loopback — no NAT round
     // trip. Only teammates use the tunnel URL.
-    serverUrl = `ws://localhost:${serverPort}`;
+    serverUrl = `ws://127.0.0.1:${serverPort}`;
 
     if (tunnel) {
       const publicUrl = await startTunnel(serverPort, children);
@@ -171,4 +171,3 @@ function printTeammateInstructions(publicUrl: string, authToken: string): void {
   }
   console.log("──────────────────────────────────────────────────────\n");
 }
-

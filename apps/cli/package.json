@@ -34,16 +34,5 @@
   "license": "MIT",
   "files": [
     "dist"
-  ],
-  "publishConfig": {
-    "access": "public"
-  },
-  "bundleDependencies": [
-    "@synapse/analyzer-go",
-    "@synapse/analyzer-py",
-    "@synapse/analyzer-ts",
-    "@synapse/conflict-engine",
-    "@synapse/protocol",
-    "@synapse/server"
   ]
 }
