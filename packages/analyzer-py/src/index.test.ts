@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { after, test } from "node:test";
 import {
   closePythonAnalyzer,
@@ -12,7 +15,50 @@ after(() => {
   closePythonAnalyzer();
 });
 
+async function createHungSidecarExecutable(): Promise<{ path: string; cleanup: () => Promise<void> }> {
+  const dir = await mkdtemp(join(tmpdir(), "synapse-py-timeout-"));
+  const path = join(dir, "hung-sidecar");
+  await writeFile(path, "#!/usr/bin/env node\nprocess.stdin.resume();\nsetInterval(() => {}, 1000);\n");
+  await chmod(path, 0o755);
+  return {
+    path,
+    cleanup: () => rm(dir, { recursive: true, force: true })
+  };
+}
+
 test("the python sidecar is available (venv installed)", async () => {
+  assert.equal(await pythonAnalyzerAvailable(), true);
+});
+
+test("times out a hung python sidecar request and restarts on the next request", async () => {
+  const originalPython = process.env.SYNAPSE_PYTHON;
+  const originalTimeout = process.env.SYNAPSE_ANALYZER_REQUEST_TIMEOUT_MS;
+  const hungSidecar = await createHungSidecarExecutable();
+
+  closePythonAnalyzer();
+  process.env.SYNAPSE_PYTHON = hungSidecar.path;
+  process.env.SYNAPSE_ANALYZER_REQUEST_TIMEOUT_MS = "25";
+
+  try {
+    await assert.rejects(
+      () => extractPythonContracts({ filePath: "hung.py", source: "def f():\n    pass\n" }),
+      /python analyzer request timed out \(method extractFile, id \d+, timeout 25ms\)/
+    );
+  } finally {
+    closePythonAnalyzer();
+    if (originalPython === undefined) {
+      delete process.env.SYNAPSE_PYTHON;
+    } else {
+      process.env.SYNAPSE_PYTHON = originalPython;
+    }
+    if (originalTimeout === undefined) {
+      delete process.env.SYNAPSE_ANALYZER_REQUEST_TIMEOUT_MS;
+    } else {
+      process.env.SYNAPSE_ANALYZER_REQUEST_TIMEOUT_MS = originalTimeout;
+    }
+    await hungSidecar.cleanup();
+  }
+
   assert.equal(await pythonAnalyzerAvailable(), true);
 });
 
