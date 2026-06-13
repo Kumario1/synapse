@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative } from "node:path";
 import {
   extractGoContracts,
   extractGoDependencyGraph
@@ -30,6 +30,7 @@ import type {
   TeamState
 } from "@synapse/protocol";
 import { normalizePath, type RuntimeConfig } from "./config.js";
+import { resolveWorktreePath } from "./path-safety.js";
 
 export interface AnalysisCache {
   symbolsByFile: Map<string, CachedSymbols>;
@@ -361,7 +362,7 @@ export async function extractSymbolsForFile(
   filePath: string,
   cache?: AnalysisCache
 ): Promise<CodeSymbol[]> {
-  const fullPath = resolve(config.worktreeRoot, filePath);
+  const fullPath = await resolveWorktreePath(config.worktreeRoot, filePath);
   const fingerprint = await fileFingerprint(fullPath);
   const cached = cache?.symbolsByFile.get(filePath);
   if (cached?.fingerprint === fingerprint) {
@@ -522,4 +523,3 @@ export function ignoredDirectory(name: string): boolean {
     "build"
   ]).has(name);
 }
-
