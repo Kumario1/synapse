@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -24,12 +24,17 @@ const binaryPath = join(
   "packages/analyzer-go/bin",
   process.platform === "win32" ? "synapse-analyzer-go.exe" : "synapse-analyzer-go"
 );
-if (!existsSync(binaryPath)) {
+const hasGoToolchain = spawnSync("go", ["version"], { stdio: "ignore" }).status === 0;
+if (!existsSync(binaryPath) && !hasGoToolchain) {
   console.log(
     "Go check verification skipped: analyzer binary not built (install Go and run `npm run setup:analyzer-go`)."
   );
   process.exit(0);
 }
+assert.ok(
+  existsSync(binaryPath),
+  "Go analyzer binary was not built even though Go is available; run `npm run setup:analyzer-go` and fix build failures"
+);
 
 const serverPort = await freePort();
 const alicePort = await freePort();

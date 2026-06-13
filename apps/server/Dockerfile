@@ -39,6 +39,7 @@ COPY --from=builder /app/packages/conflict-engine/dist ./packages/conflict-engin
 
 # Pass-through configuration (see .env.example):
 #   SYNAPSE_SERVER_PORT            listen port (default 4010)
+#   SYNAPSE_SERVER_HOST            listen host (default 127.0.0.1; use 0.0.0.0 in containers)
 #   SYNAPSE_MASTER_SECRET          enables project-key auth + tenancy
 #   SYNAPSE_AUTH_TOKEN             legacy shared-token auth (alternative)
 #   SYNAPSE_DB_PATH                durable SQLite state (mount a volume)

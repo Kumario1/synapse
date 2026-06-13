@@ -36,7 +36,7 @@
   </tr>
   <tr>
     <td><b>Any-agent onboarding</b></td>
-    <td><code>synapse connect</code> (run automatically by <code>join</code>) registers the stdio MCP server in Cursor, VS Code/Copilot, Gemini CLI, Windsurf, and any MCP client, and drops rules files that carry the <i>same</i> check-before-edit / report-after-edit guidance the Claude Code hooks encode — so non-Claude agents get hook-equivalent behavior with zero manual setup.</td>
+    <td><code>synapse connect</code> (run automatically by <code>join</code>) registers the stdio MCP server in Cursor, VS Code/Copilot, Gemini CLI, Windsurf, and any MCP client, and drops rules files that carry the <i>same</i> check-before-edit / report-after-edit guidance the Claude Code hooks encode — so non-Claude agents get hook-equivalent behavior with zero manual setup. Rules files include a generated command reference (from the same catalog that grounds LLM action suggestions), so agents know they can self-serve context — e.g. <code>synapse why</code> on a confusing conflict.</td>
   </tr>
   <tr>
     <td><b>MCP adapter</b></td>
@@ -80,7 +80,7 @@
 
 ## Quick Start
 
-**Prerequisites:** Node.js 20+ and npm. Python 3.10+ and Go 1.22+ are optional — needed only to analyze `.py` / `.go` files; without them, those languages degrade gracefully to file-level detection.
+**Prerequisites:** Node.js 20.19.0+ and npm 11.4.1. Python 3.10+ and Go 1.22+ are optional — needed only to analyze `.py` / `.go` files; without them, those languages degrade gracefully to file-level detection.
 
 ```bash
 npm install
@@ -100,6 +100,8 @@ SYNAPSE_AUTH_TOKEN=<token> synapse up
 ```
 
 `synapse doctor` diagnoses a setup without starting anything (resolved identity, server reachability, auth vs. unreachable, protocol version, live peers).
+
+By default, local Synapse daemons and servers bind only to loopback (`127.0.0.1`). Set `SYNAPSE_DAEMON_HOST` or `SYNAPSE_SERVER_HOST` explicitly when you intentionally need a LAN/public listener, for example `SYNAPSE_SERVER_HOST=0.0.0.0` in a container or VM.
 
 ---
 
@@ -279,6 +281,7 @@ To build the same tarball from a checkout (release flow):
 ```bash
 node scripts/build-package.mjs    # stages + packs dist-release/<name>-<version>.tgz
 npm run verify:package            # installs from the tarball and smoke-tests it
+npm run verify:npm-pack           # compatibility alias for verify:package
 npm publish --access public dist-release/<tarball>   # maintainers only
 ```
 
@@ -303,7 +306,7 @@ Run with `npm run <script>`. See [`package.json`](package.json) for the complete
 | `verify:m0` | Runnable skeleton + realtime stub loop (milestone 0) |
 | `verify:analyzer-ts` / `verify:analyzer-py` | Per-language contract extraction, signature diffing, and TS import-edge coverage |
 | `verify:python-check` | Full realtime Python loop → `contract_divergent` + resolution |
-| `verify:analyzer-go` / `verify:go-check` | Go contract extraction/diff (warm `go/parser` sidecar); full realtime Go loop → `contract_divergent` + resolution. SKIPs without a Go toolchain |
+| `verify:analyzer-go` / `verify:go-check` | Go contract extraction/diff (warm `go/parser` sidecar); full realtime Go loop → `contract_divergent` + resolution. Skips only when no Go toolchain is available; fails if Go is installed but the sidecar cannot build |
 | `verify:daemon-ts-report` / `verify:file-only-ts-check` | Automatic TS report path; symbol-level conflicts from a file path |
 | `verify:dependency-ts-check` | Warns when a file depends on another's unpushed change through TS dependency edges |
 | `verify:tsx-check` | React-shaped repos: default-exported `.tsx` component props change → symbol delta + `dependency_changed` for the importing component; `.mjs` modules join the same graph |
@@ -329,7 +332,7 @@ Run with `npm run <script>`. See [`package.json`](package.json) for the complete
 | `verify:adaptive-severity` | Feedback-tuned demotion of noisy warnings |
 | `verify:branch-aware-severity` | Cross-branch `stale_base`/`dependency_changed` demote to `info`; merge-blocking rules and same-branch conflicts still warn |
 | `verify:docker` | Builds the server image, boots it, drives one edit→report |
-| `verify:npm-pack` | Packs the CLI, installs into a fresh project, joins, drives a check |
+| `verify:npm-pack` | Compatibility alias for `verify:package` so npm-pack and release smoke use the same public tarball |
 | `verify:github-webhook` / `verify:github-briefing` | GitHub push/PR/review/comment webhooks and catch-ups |
 | `verify:all` | One build, then every verify (the CI matrix) |
 | `eval:conflicts` | Recorded conflict eval suite (overlap, breaking, compatible, divergent, …) — hard pass/fail gate on 7 fixed scenarios |
