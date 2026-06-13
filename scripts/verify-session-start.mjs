@@ -132,7 +132,7 @@ async function report(port, sessionId, filePath) {
 async function pushWebhook() {
   const payload = {
     after: "deadbeef",
-    repository: { full_name: "acme/widgets" },
+    repository: { full_name: "local" },
     sender: { login: "carol" },
     head_commit: { message: "Ship the config loader" },
     commits: [{ modified: ["src/config.ts"], added: [], removed: [] }]

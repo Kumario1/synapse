@@ -62,7 +62,7 @@ try {
 
   await postGitHub("pull_request", {
     action: "opened",
-    repository: { full_name: "acme/widgets" },
+    repository: { full_name: "local" },
     sender: { login: "carol" },
     pull_request: {
       number: 42,
