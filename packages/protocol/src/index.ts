@@ -508,6 +508,42 @@ export interface SynapseFeedbackResponse {
   feedback: ConflictFeedback;
 }
 
+export interface SynapseInsightsRequest {
+  repoId: string;
+  sessionId: string;
+  /** Max rows for ranked sections. Defaults to 5. */
+  limit?: number;
+}
+
+export interface SynapseInsightsBucket {
+  name: string;
+  count: number;
+}
+
+export interface SynapseInsightsResponse {
+  repoId: string;
+  generatedAt: string;
+  degraded: boolean;
+  summary: string[];
+  totals: {
+    feedback: number;
+    acted: number;
+    dismissed: number;
+    activeSessions: number;
+    unpushedDeltas: number;
+    activeEditLocks: number;
+  };
+  topRulesByFeedback: SynapseInsightsBucket[];
+  topConflictTargets: SynapseInsightsBucket[];
+  recentFeedback: Array<{
+    conflictId: string;
+    outcome: ConflictFeedbackOutcome;
+    rule?: Conflict["rule"];
+    targetSymbol?: SymbolId;
+    createdAt: string;
+  }>;
+}
+
 export interface SynapseWhatsupRequest {
   repoId: string;
   sessionId: string;

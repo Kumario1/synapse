@@ -55,6 +55,7 @@ try {
     [
       "synapse_check",
       "synapse_feedback",
+      "synapse_insights",
       "synapse_onboard",
       "synapse_push",
       "synapse_report",
@@ -171,6 +172,16 @@ try {
       state.conflictFeedback[0].conflictId === check.conflicts[0].id
   );
 
+  const insights = await callJson(client, "synapse_insights", {
+    port: bobPort,
+    sessionId: "bob"
+  });
+  assert.equal(insights.degraded, false);
+  assert.equal(insights.totals.feedback, 1);
+  assert.equal(insights.totals.acted, 1);
+  assert.equal(insights.topRulesByFeedback[0].name, "same_symbol_unpushed");
+  assert.equal(insights.topRulesByFeedback[0].count, 1);
+
   const push = await callJson(client, "synapse_push", {
     port: alicePort,
     sessionId: "alice",
@@ -200,6 +211,7 @@ try {
         why,
         check,
         feedback,
+        insights,
         stateAfterPush
       },
       null,

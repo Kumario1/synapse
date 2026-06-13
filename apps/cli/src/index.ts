@@ -5,6 +5,7 @@ import { runConnect } from "./commands/connect.js";
 import { runDemo } from "./commands/demo.js";
 import { runDoctor } from "./commands/doctor.js";
 import { runFeedback } from "./commands/feedback.js";
+import { runInsights } from "./commands/insights.js";
 import { runJoin } from "./commands/join.js";
 import { runKeygen } from "./commands/keygen.js";
 import { runOnboard } from "./commands/onboard.js";
@@ -37,6 +38,9 @@ switch (command) {
     break;
   case "feedback":
     await runFeedback(args.slice(1));
+    break;
+  case "insights":
+    await runInsights(args.slice(1));
     break;
   case "session":
     await runSession(args.slice(1));
@@ -93,6 +97,7 @@ Commands:
   report   Call the local synapse_report endpoint
   push     Notify Synapse that files were pushed
   feedback Record explicit acted/dismissed feedback for a conflict warning
+  insights Show local aggregate coordination insights
   session  Start, heartbeat, or end a local session
   whatsup  Show the daemon's current team-state briefing
   why      Search Synapse memory with source citations
@@ -122,6 +127,7 @@ Examples:
   synapse push --port 4011 --file src/auth/token.ts --sha abc123 --summary "Pushed auth token changes"
   synapse check --port 4012 --file src/auth/token.ts --symbol ts:src/auth/token.ts#TokenValidator.validate
   synapse feedback --port 4012 --conflict-id conflict:abc123 --outcome acted --note "Adjusted caller"
+  synapse insights --port 4012
   synapse whatsup --port 4012
   synapse why --port 4012 --question "why did auth validation change?"
   synapse analyze --file packages/analyzer-ts/src/index.ts

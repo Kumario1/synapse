@@ -62,6 +62,13 @@ export const SYNAPSE_COMMAND_CATALOG: SynapseCommandSpec[] = [
     usage: "synapse feedback --conflict-id <conflictId> --outcome <outcome>"
   },
   {
+    tool: "synapse_insights",
+    cli: "synapse insights",
+    when: "To review local aggregate coordination health: feedback outcomes, noisy rules, active sessions, unpushed deltas, and edit locks.",
+    args: [],
+    usage: "synapse insights"
+  },
+  {
     tool: "synapse_session",
     cli: "synapse session",
     when: "To start, heartbeat, or end your local coordination session.",
