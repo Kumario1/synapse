@@ -1,7 +1,7 @@
 # Design: Incremental `state.delta` Broadcast (Decision D3)
 
-> Status: PROPOSED — written per `plans/009-design-state-delta-broadcast.md`;
-> awaiting owner review before any implementation plan is written.
+> Status: IMPLEMENTED — protocol v2 emits per-entity `state.delta` frames for
+> v2 sockets while v1 sockets and remote fanout continue to receive snapshots.
 > Ground truth: `main` @ `65bc8a3` (post PR #54), 2026-06-11. Every
 > current-behavior claim below cites `file:line` at that commit.
 
