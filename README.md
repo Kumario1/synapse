@@ -304,7 +304,7 @@ Run with `npm run <script>`. See [`package.json`](package.json) for the complete
 | `verify:m0` | Runnable skeleton + realtime stub loop (milestone 0) |
 | `verify:analyzer-ts` / `verify:analyzer-py` | Per-language contract extraction, signature diffing, and TS import-edge coverage |
 | `verify:python-check` | Full realtime Python loop → `contract_divergent` + resolution |
-| `verify:analyzer-go` / `verify:go-check` | Go contract extraction/diff (warm `go/parser` sidecar); full realtime Go loop → `contract_divergent` + resolution. SKIPs without a Go toolchain |
+| `verify:analyzer-go` / `verify:go-check` | Go contract extraction/diff (warm `go/parser` sidecar); full realtime Go loop → `contract_divergent` + resolution. Skips only when no Go toolchain is available; fails if Go is installed but the sidecar cannot build |
 | `verify:daemon-ts-report` / `verify:file-only-ts-check` | Automatic TS report path; symbol-level conflicts from a file path |
 | `verify:dependency-ts-check` | Warns when a file depends on another's unpushed change through TS dependency edges |
 | `verify:tsx-check` | React-shaped repos: default-exported `.tsx` component props change → symbol delta + `dependency_changed` for the importing component; `.mjs` modules join the same graph |

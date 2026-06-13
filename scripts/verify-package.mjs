@@ -72,6 +72,10 @@ console.log("resolved:" + (imported.length + 1));
   for (const piece of ["python", "requirements.txt", join("scripts", "setup-venv.mjs")]) {
     assert.ok(existsSync(join(analyzerPyRoot, piece)), `analyzer-py ships ${piece}`);
   }
+  const analyzerGoRoot = join(dirname(cli), "..", "node_modules", "@synapse", "analyzer-go");
+  for (const piece of ["dist/index.js", "go", join("scripts", "setup-go.mjs")]) {
+    assert.ok(existsSync(join(analyzerGoRoot, piece)), `analyzer-go ships ${piece}`);
+  }
 
   // 4. The installed analyzer extracts contracts.
   const samplePath = join(installRoot, "sample.ts");
