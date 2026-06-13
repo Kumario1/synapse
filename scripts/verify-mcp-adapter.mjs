@@ -56,6 +56,7 @@ try {
       "synapse_check",
       "synapse_feedback",
       "synapse_onboard",
+      "synapse_pr_brief",
       "synapse_push",
       "synapse_report",
       "synapse_session",
@@ -67,7 +68,7 @@ try {
   const resources = await client.listResources();
   assert.deepEqual(
     resources.resources.map((resource) => resource.uri).sort(),
-    ["synapse://briefing", "synapse://decisions", "synapse://team-state"]
+    ["synapse://briefing", "synapse://decisions", "synapse://pr-brief", "synapse://team-state"]
   );
   assert.ok(
     resources.resources.every((resource) => resource.mimeType === "application/json"),
@@ -110,10 +111,22 @@ try {
   assert.ok(why.answer.includes("TokenValidator.validate"));
   assert.ok(why.sources.some((source) => source.kind === "unpushed_delta"));
 
+  const prBrief = await callJson(client, "synapse_pr_brief", {
+    port: bobPort,
+    sessionId: "bob",
+    base: "main",
+    head: "feature/auth"
+  });
+  assert.equal(prBrief.degraded, false);
+  assert.equal(prBrief.base, "main");
+  assert.equal(prBrief.head, "feature/auth");
+  assert.ok(prBrief.briefing.includes("TokenValidator.validate"));
+
   const resourceReads = {
     briefing: await readJsonResource(client, "synapse://briefing"),
     teamState: await readJsonResource(client, "synapse://team-state"),
-    decisions: await readJsonResource(client, "synapse://decisions")
+    decisions: await readJsonResource(client, "synapse://decisions"),
+    prBrief: await readJsonResource(client, "synapse://pr-brief")
   };
   assert.equal(resourceReads.briefing.kind, "synapse_briefing");
   assert.equal(resourceReads.briefing.tool, "synapse_onboard");
@@ -139,6 +152,11 @@ try {
       (source) => source.kind === "unpushed_delta" && source.summary.includes("TokenValidator.validate")
     )
   );
+
+  assert.equal(resourceReads.prBrief.kind, "synapse_pr_brief");
+  assert.equal(resourceReads.prBrief.tool, "synapse_pr_brief");
+  assert.equal(resourceReads.prBrief.context.degraded, false);
+  assert.ok(resourceReads.prBrief.context.briefing.includes("TokenValidator.validate"));
 
   const check = await callJson(client, "synapse_check", {
     port: bobPort,

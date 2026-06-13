@@ -81,6 +81,16 @@ export const SYNAPSE_COMMAND_CATALOG: SynapseCommandSpec[] = [
     usage: "synapse onboard"
   },
   {
+    tool: "synapse_pr_brief",
+    cli: "synapse pr-brief",
+    when: "Before opening or reviewing a PR, to get a local handoff for a base/head branch pair.",
+    args: [
+      { name: "base", type: "string", required: false, hint: "target branch, usually main" },
+      { name: "head", type: "string", required: false, hint: "source branch; defaults to current branch" }
+    ],
+    usage: "synapse pr-brief --base <base> --head <head>"
+  },
+  {
     tool: "synapse_why",
     cli: "synapse why",
     when: "To search team memory for why something changed, with cited sources.",

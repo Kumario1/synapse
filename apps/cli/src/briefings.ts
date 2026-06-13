@@ -1,6 +1,7 @@
 import type {
   RecallMatch,
   SynapseOnboardResponse,
+  SynapsePrBriefResponse,
   SynapseWhatsupResponse,
   SynapseWhyResponse,
   SynapseWhySource,
@@ -108,7 +109,8 @@ export function buildWhatsupResponse(
       status: session.status,
       lastTask: session.lastTask,
       filesEditing: session.filesEditing,
-      lastSeen: session.lastSeen
+      lastSeen: session.lastSeen,
+      branch: session.branch
     })),
     unpushedDeltas: unpushedDeltas.slice(0, limit).map((delta) => ({
       id: delta.id,
@@ -163,6 +165,70 @@ export function buildWhyResponse(
   };
 }
 
+export function buildPrBriefResponse(
+  state: TeamState,
+  options: { degraded: boolean; base?: string; head?: string; limit?: number }
+): SynapsePrBriefResponse {
+  const limit = clampLimit(options.limit);
+  const base = options.base?.trim() || "main";
+  const head = options.head?.trim() || null;
+  const activity = buildWhatsupResponse(state, { degraded: options.degraded, limit: 50 });
+  const sessionById = new Map(state.sessions.map((session) => [session.id, session]));
+
+  const activeSessions = activity.sessions
+    .filter((session) => branchRelevant(session.branch, base, head))
+    .slice(0, limit);
+  const unpushedDeltas = activity.unpushedDeltas
+    .filter((delta) => branchRelevant(sessionById.get(delta.sessionId)?.branch, base, head))
+    .slice(0, limit);
+  const editLocks = activity.editLocks
+    .filter((lock) => branchRelevant(sessionById.get(lock.sessionId)?.branch, base, head))
+    .slice(0, limit);
+  const recentPushes = activity.recentPushes
+    .filter((push) => branchRelevant(push.branch, base, head))
+    .slice(0, limit);
+  const recentRepoEvents = activity.recentRepoEvents.slice(0, limit);
+  const decisions = recentWhySources(state, limit);
+
+  const summary = [
+    `${activeSessions.length} branch-relevant active session${activeSessions.length === 1 ? "" : "s"}`,
+    `${unpushedDeltas.length} unresolved unpushed delta${unpushedDeltas.length === 1 ? "" : "s"}`,
+    `${editLocks.length} branch-relevant edit lock${editLocks.length === 1 ? "" : "s"}`,
+    `${recentPushes.length} recent push${recentPushes.length === 1 ? "" : "es"}`,
+    `${recentRepoEvents.length} recent GitHub repo event${recentRepoEvents.length === 1 ? "" : "s"}`,
+    `${decisions.length} cited context item${decisions.length === 1 ? "" : "s"}`
+  ];
+
+  return {
+    repoId: state.repoId,
+    generatedAt: new Date().toISOString(),
+    degraded: options.degraded,
+    base,
+    head,
+    summary,
+    briefing: renderPrBriefMarkdown({
+      repoId: state.repoId,
+      base,
+      head,
+      summary,
+      activeSessions,
+      unpushedDeltas,
+      editLocks,
+      recentPushes,
+      recentRepoEvents,
+      decisions
+    }),
+    sections: {
+      activeSessions,
+      unpushedDeltas,
+      editLocks,
+      recentPushes,
+      recentRepoEvents,
+      decisions
+    }
+  };
+}
+
 /**
  * Hybrid recall (plan C1/C2): fold the server's vector-memory matches into a
  * deterministic `why` answer. Strictly additive — the lexical floor's sources
@@ -207,6 +273,89 @@ export function mergeRecallIntoWhy(
   ].join("\n");
 
   return { ...response, rag: true, answer, sources };
+}
+
+function renderPrBriefMarkdown(input: {
+  repoId: string;
+  base: string;
+  head: string | null;
+  summary: string[];
+  activeSessions: SynapsePrBriefResponse["sections"]["activeSessions"];
+  unpushedDeltas: SynapsePrBriefResponse["sections"]["unpushedDeltas"];
+  editLocks: SynapsePrBriefResponse["sections"]["editLocks"];
+  recentPushes: SynapsePrBriefResponse["sections"]["recentPushes"];
+  recentRepoEvents: SynapsePrBriefResponse["sections"]["recentRepoEvents"];
+  decisions: SynapsePrBriefResponse["sections"]["decisions"];
+}): string {
+  const sections: string[] = [
+    `# Synapse PR brief`,
+    "",
+    `Repo: ${input.repoId}`,
+    `Base: ${input.base}`,
+    `Head: ${input.head ?? "unknown"}`,
+    "",
+    `## Summary`,
+    ...input.summary.map((line) => `- ${line}`)
+  ];
+
+  appendSection(
+    sections,
+    "Active sessions",
+    input.activeSessions.map(
+      (session) =>
+        `- ${session.memberLogin} on ${session.branch ?? "unknown branch"} (${session.status}${session.lastTask ? `: ${session.lastTask}` : ""})`
+    )
+  );
+  appendSection(
+    sections,
+    "Unresolved deltas",
+    input.unpushedDeltas.map(
+      (delta) =>
+        `- ${delta.memberLogin}: ${delta.symbolId.raw} (${delta.changeKind}) in ${delta.filePath} — ${delta.summary}`
+    )
+  );
+  appendSection(
+    sections,
+    "Edit locks",
+    input.editLocks.map((lock) => `- ${lock.sessionId}: ${lock.symbolId.raw} in ${lock.filePath}`)
+  );
+  appendSection(
+    sections,
+    "Recent pushes",
+    input.recentPushes.map(
+      (push) =>
+        `- ${push.memberId}: ${push.summary} (${push.filesAffected.join(", ") || "no files"}, ${push.sha}${push.branch ? `, ${push.branch}` : ""})`
+    )
+  );
+  appendSection(
+    sections,
+    "Recent GitHub activity",
+    input.recentRepoEvents.map((event) => {
+      const ref =
+        event.number && !event.summary.includes(`#${event.number}`) ? ` #${event.number}` : "";
+      const detail = event.detail ? ` — ${event.detail}` : "";
+      return `- ${event.actor}: ${event.summary}${ref}${event.url ? ` (${event.url})` : ""}${detail}`;
+    })
+  );
+  appendSection(
+    sections,
+    "Cited context",
+    input.decisions.map((source, index) => {
+      const ref = source.reference ? ` [${source.reference}]` : "";
+      return `${index + 1}. ${source.title}${ref} — ${source.summary}`;
+    })
+  );
+
+  return sections.join("\n");
+}
+
+function appendSection(lines: string[], title: string, items: string[]): void {
+  lines.push("", `## ${title}`);
+  lines.push(...(items.length > 0 ? items : ["- None recorded."]));
+}
+
+function branchRelevant(branch: string | undefined, base: string, head: string | null): boolean {
+  return !branch || branch === base || branch === head;
 }
 
 /**
@@ -491,4 +640,3 @@ function clampLimit(value: number | undefined): number {
 
   return Math.max(1, Math.min(50, Math.trunc(value)));
 }
-

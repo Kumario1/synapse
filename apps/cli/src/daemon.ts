@@ -40,6 +40,7 @@ import {
   type SynapseFeedbackRequest,
   type SynapseFeedbackResponse,
   type SynapseOnboardRequest,
+  type SynapsePrBriefRequest,
   type SynapsePushRequest,
   type SynapseReportRequest,
   type SynapseSessionRequest,
@@ -62,6 +63,7 @@ import {
 } from "./analysis.js";
 import {
   buildOnboardResponse,
+  buildPrBriefResponse,
   buildWhatsupResponse,
   buildWhyResponse,
   mergeRecallIntoOnboard,
@@ -326,6 +328,21 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
           200,
           buildWhatsupResponse(teamState, {
             degraded: socket?.readyState !== WebSocket.OPEN,
+            limit: body.limit
+          })
+        );
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/tools/synapse_pr_brief") {
+        const body = (await readJson(request)) as Partial<SynapsePrBriefRequest>;
+        writeJson(
+          response,
+          200,
+          buildPrBriefResponse(teamState, {
+            degraded: socket?.readyState !== WebSocket.OPEN,
+            base: body.base,
+            head: body.head ?? currentGitBranch(config.worktreeRoot),
             limit: body.limit
           })
         );
