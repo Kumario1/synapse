@@ -81,6 +81,11 @@ import { startFileWatcher } from "./watcher.js";
 export async function startDaemon(config: RuntimeConfig): Promise<void> {
   let teamState = createEmptyTeamState(config.repoId);
   let socket: WebSocket | null = null;
+  // Last task set via /tools/synapse_session (action: "start"), remembered so
+  // a reconnect's session.start re-asserts it instead of wiping it back to
+  // null (plan 032) — upsertSession spreads the incoming session over the
+  // existing row, so lastTask: null on reconnect previously clobbered it.
+  let currentTask: string | null = null;
   const log = createLogger("synapse-daemon");
   const metrics = new MetricsRegistry();
   const contractSnapshots = new Map<string, CodeSymbol[]>();
@@ -187,7 +192,7 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
     socket.on("open", () => {
       connectionWarned = false;
       reconnectAttempt = 0;
-      sendToServer("session.start", { session: makeSession(config) });
+      sendToServer("session.start", { session: makeSession(config, currentTask) });
       flushOutbox();
     });
 
@@ -580,7 +585,8 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
             sessionId: config.sessionId
           });
         } else if (action === "start") {
-          sendToServer("session.start", { session: makeSession(config, body.task) });
+          currentTask = body.task ?? currentTask;
+          sendToServer("session.start", { session: makeSession(config, currentTask) });
         } else {
           sendToServer("session.heartbeat", {
             repoId: config.repoId,
