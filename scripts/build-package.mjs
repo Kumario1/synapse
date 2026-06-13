@@ -2,8 +2,8 @@
 // Assembles the publishable CLI package in dist-release/package and packs it
 // into dist-release/<name>-<version>.tgz.
 //
-// Strategy: ship ONE public package. The five internal @synapse/* workspace
-// packages are copied into the staged package's node_modules and declared as
+// Strategy: ship ONE public package. The bundled @synapse/* workspace packages
+// are copied into the staged package's node_modules and declared as
 // bundleDependencies, so `npm pack` includes them in the tarball verbatim and
 // `npm install` extracts them as-is — no extra names to claim on the registry,
 // and every runtime resolution path (require.resolve("@synapse/server/..."),
@@ -17,12 +17,17 @@
 // the product never touches this script.
 import { execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const releaseConfig = JSON.parse(readFileSync(join(rootDir, "release.config.json"), "utf8"));
-const stageDir = join(rootDir, "dist-release", "package");
+const destFlag = process.argv.indexOf("--dest");
+const releaseDir = resolve(destFlag !== -1 && process.argv[destFlag + 1] ? process.argv[destFlag + 1] : join(rootDir, "dist-release"));
+if (releaseDir === rootDir) {
+  throw new Error("--dest must not be the repository root");
+}
+const stageDir = join(releaseDir, "package");
 
 const BUNDLED = [
   { name: "@synapse/protocol", dir: "packages/protocol", copy: ["dist"] },
@@ -49,12 +54,22 @@ function log(message) {
   process.stdout.write(`[build-package] ${message}\n`);
 }
 
+function copyBundledEntry(source, target) {
+  cpSync(source, target, {
+    recursive: true,
+    filter: (path) => {
+      const name = basename(path);
+      return name !== "__pycache__" && !name.endsWith(".pyc");
+    }
+  });
+}
+
 // 1. Fresh build of every workspace so dist/ is current.
 log("building workspaces (turbo run build)");
 execFileSync("npm", ["run", "build"], { cwd: rootDir, stdio: "inherit" });
 
 // 2. Stage the package.
-rmSync(join(rootDir, "dist-release"), { recursive: true, force: true });
+rmSync(releaseDir, { recursive: true, force: true });
 mkdirSync(stageDir, { recursive: true });
 
 cpSync(join(rootDir, "apps/cli/dist"), join(stageDir, "dist"), { recursive: true });
@@ -87,7 +102,7 @@ for (const pkg of BUNDLED) {
   for (const entry of pkg.copy) {
     const target = join(targetRoot, entry);
     mkdirSync(dirname(target), { recursive: true });
-    cpSync(join(sourceRoot, entry), target, { recursive: true });
+    copyBundledEntry(join(sourceRoot, entry), target);
   }
 }
 
@@ -119,7 +134,7 @@ const manifest = {
   type: "module",
   bin: { synapse: "dist/index.js" },
   main: "dist/index.js",
-  engines: { node: ">=20.6" },
+  engines: { node: ">=20.19.0" },
   keywords: ["coding-agents", "mcp", "claude-code", "cursor", "conflict-detection", "coordination"],
   dependencies: { ...externalDeps, ...bundledDeps },
   bundleDependencies: Object.keys(bundledDeps),
@@ -131,9 +146,11 @@ writeFileSync(join(stageDir, "package.json"), `${JSON.stringify(manifest, null, 
 log(`packing ${releaseConfig.name}@${releaseConfig.version}`);
 const packOutput = execFileSync(
   "npm",
-  ["pack", "--pack-destination", join(rootDir, "dist-release")],
+  ["pack", "--pack-destination", releaseDir],
   { cwd: stageDir, encoding: "utf8" }
 );
 const tarball = packOutput.trim().split("\n").pop();
-log(`tarball: dist-release/${tarball}`);
-log("publish with: npm publish --access public dist-release/" + tarball);
+const tarballPath = join(releaseDir, tarball);
+log(`tarball: ${tarballPath}`);
+log("publish with: npm publish --access public " + tarballPath);
+console.log(tarballPath);

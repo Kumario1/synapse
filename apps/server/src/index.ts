@@ -27,6 +27,7 @@ import { getCachedState } from "./state-cache.js";
 import { createStateStore, type StateStoreOps } from "./store.js";
 
 const port = Number(process.env.SYNAPSE_SERVER_PORT ?? 4010);
+const host = process.env.SYNAPSE_SERVER_HOST ?? "127.0.0.1";
 // Reported on /health so `synapse doctor` can compare client/server versions.
 const SERVER_VERSION =
   (createRequire(import.meta.url)("../package.json") as { version?: string }).version ?? "0.0.0";
@@ -343,8 +344,8 @@ const pingTimer = setInterval(() => {
 }, pingIntervalMs);
 pingTimer.unref();
 
-httpServer.listen(port, () => {
-  console.log(`synapse server listening on http://localhost:${port}`);
+httpServer.listen(port, host, () => {
+  console.log(`synapse server listening on http://${host}:${port}`);
 });
 
 // Drain the store's op queue and close it cleanly on shutdown so a restart
