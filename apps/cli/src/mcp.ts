@@ -47,6 +47,69 @@ export async function runMcp(rawArgs: string[]): Promise<void> {
   // hooks: compliant clients surface it to the model, so any connecting agent is
   // told to check before edits and report after — no rules file required.
   const server = new McpServer(serverInfo, { instructions: SYNAPSE_AGENT_GUIDANCE });
+  const daemonContext = (tool: string, body: unknown) => daemonPost(defaultPort, tool, body);
+
+  server.registerResource(
+    "synapse-briefing",
+    "synapse://briefing",
+    {
+      title: "Synapse Briefing",
+      description:
+        "Read-only team briefing for passive context: active sessions, recent activity, and cited decisions.",
+      mimeType: "application/json"
+    },
+    async (uri) =>
+      jsonResource(uri.href, {
+        kind: "synapse_briefing",
+        tool: "synapse_onboard",
+        context: await daemonContext("synapse_onboard", {
+          repoId: defaultRepoId,
+          sessionId: defaultSessionId,
+          limit: 20
+        } satisfies SynapseOnboardRequest)
+      })
+  );
+
+  server.registerResource(
+    "synapse-team-state",
+    "synapse://team-state",
+    {
+      title: "Synapse Team State",
+      description:
+        "Read-only current team state: active sessions, unpushed deltas, edit locks, recent pushes, and resolutions.",
+      mimeType: "application/json"
+    },
+    async (uri) =>
+      jsonResource(uri.href, {
+        kind: "synapse_team_state",
+        tool: "synapse_whatsup",
+        context: await daemonContext("synapse_whatsup", {
+          repoId: defaultRepoId,
+          sessionId: defaultSessionId,
+          limit: 50
+        } satisfies SynapseWhatsupRequest)
+      })
+  );
+
+  server.registerResource(
+    "synapse-decisions",
+    "synapse://decisions",
+    {
+      title: "Synapse Decisions",
+      description: "Read-only cited decisions and team memory relevant to the current repository.",
+      mimeType: "application/json"
+    },
+    async (uri) =>
+      jsonResource(uri.href, {
+        kind: "synapse_decisions",
+        tool: "synapse_onboard",
+        context: await daemonContext("synapse_onboard", {
+          repoId: defaultRepoId,
+          sessionId: defaultSessionId,
+          limit: 20
+        } satisfies SynapseOnboardRequest)
+      })
+  );
 
   server.registerTool(
     "synapse_check",
@@ -371,6 +434,18 @@ function jsonResult(value: unknown) {
     content: [
       {
         type: "text" as const,
+        text: JSON.stringify(value, null, 2)
+      }
+    ]
+  };
+}
+
+function jsonResource(uri: string, value: unknown) {
+  return {
+    contents: [
+      {
+        uri,
+        mimeType: "application/json",
         text: JSON.stringify(value, null, 2)
       }
     ]
