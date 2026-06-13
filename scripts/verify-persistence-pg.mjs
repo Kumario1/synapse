@@ -109,7 +109,7 @@ async function pushWebhook(port) {
   const payload = {
     after: sha,
     ref: "refs/heads/main",
-    repository: { full_name: "acme/widgets" },
+    repository: { full_name: "local" },
     sender: { login: "alice" },
     head_commit: { message: "Ship the auth refactor" },
     commits: [{ modified: ["src/auth/token.ts"], added: [], removed: [] }]
