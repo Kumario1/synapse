@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -26,6 +27,7 @@ const WS_LIMIT = 20;
 const WEBHOOK_LIMIT = 5;
 const token = "security-verify-token";
 const webhookSecret = "security-verify-webhook-secret";
+const tempDirs = [];
 
 try {
   await assertLoopbackBindings();
@@ -92,6 +94,8 @@ try {
     "daemon remains healthy after bad local input"
   );
 
+  const pathSafety = await assertDaemonPathSafety(openPort);
+
   // Webhook flood: budget already partly spent; pushing past it answers 429.
   let saw429 = false;
   for (let i = 0; i < WEBHOOK_LIMIT + 2; i += 1) {
@@ -134,6 +138,7 @@ try {
         stateBounded: state.conflictFeedback.length,
         daemon413: tooLarge.status,
         daemon400: malformed.status,
+        daemonPathSafety: pathSafety,
         webhook429: saw429,
         authWithoutSecret: refused.status,
         signedAccepted: signed.status,
@@ -145,6 +150,7 @@ try {
   );
 } finally {
   await stopChildren();
+  await removeTempDirs();
 }
 
 function startServer(label, port, env) {
@@ -177,6 +183,86 @@ function startDaemon(label, serverPort, daemonPort) {
       SYNAPSE_FILE_WATCHER: "0"
     }
   );
+}
+
+function startDaemonForWorktree(label, serverPort, daemonPort, worktreeRoot) {
+  startProcess(
+    label,
+    [
+      "apps/cli/dist/index.js",
+      "daemon",
+      "--server",
+      `ws://127.0.0.1:${serverPort}`,
+      "--port",
+      String(daemonPort),
+      "--repo-id",
+      "local",
+      "--member",
+      label,
+      "--session-id",
+      label,
+      "--worktree-root",
+      worktreeRoot
+    ],
+    {
+      SYNAPSE_DAEMON_HOST: "127.0.0.1",
+      SYNAPSE_FILE_WATCHER: "0"
+    }
+  );
+}
+
+async function assertDaemonPathSafety(serverPort) {
+  const temp = await mkdtemp(join(tmpdir(), "synapse-security-paths-"));
+  tempDirs.push(temp);
+  const worktreeRoot = join(temp, "repo");
+  await mkdir(join(worktreeRoot, "src"), { recursive: true });
+  await writeFile(
+    join(worktreeRoot, "src/inside.ts"),
+    "export function inside(): string { return 'inside'; }\n"
+  );
+  const outsidePath = join(temp, "outside.ts");
+  await writeFile(outsidePath, "export function outside(): string { return 'outside'; }\n");
+
+  const daemonPort = await freePort();
+  startDaemonForWorktree("daemon-paths", serverPort, daemonPort, worktreeRoot);
+  await waitForHttp(`http://127.0.0.1:${daemonPort}/health`);
+
+  const normal = await postJson(`http://127.0.0.1:${daemonPort}/tools/synapse_report`, {
+    filePath: "src/inside.ts"
+  });
+  assert.equal(normal.status, 200, "normal in-worktree report path still works");
+
+  const traversal = await postJson(`http://127.0.0.1:${daemonPort}/tools/synapse_report`, {
+    filePath: "../outside.ts"
+  });
+  assert.notEqual(traversal.status, 200, "parent traversal report path is rejected");
+  assert.match(
+    traversal.body.error,
+    /inside the worktree/u,
+    "parent traversal rejection does not read outside the worktree"
+  );
+
+  const absolute = await postJson(`http://127.0.0.1:${daemonPort}/tools/synapse_report`, {
+    filePath: resolve(outsidePath)
+  });
+  assert.notEqual(absolute.status, 200, "absolute report path is rejected");
+  assert.match(
+    absolute.body.error,
+    /inside the worktree/u,
+    "absolute path rejection does not read outside the worktree"
+  );
+
+  assert.equal(
+    (await fetch(`http://127.0.0.1:${daemonPort}/health`)).ok,
+    true,
+    "daemon remains healthy after unsafe file paths"
+  );
+
+  return {
+    normal: normal.status,
+    traversal: traversal.status,
+    absolute: absolute.status
+  };
 }
 
 function feedbackMessage(id) {
@@ -224,6 +310,15 @@ async function postRaw(url, body) {
     method: "POST",
     headers: { "content-type": "application/json" },
     body
+  });
+  return { status: response.status, body: await response.json() };
+}
+
+async function postJson(url, body) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body)
   });
   return { status: response.status, body: await response.json() };
 }
@@ -343,4 +438,8 @@ async function stopChildren() {
         })
     )
   );
+}
+
+async function removeTempDirs() {
+  await Promise.all(tempDirs.map((dir) => rm(dir, { force: true, recursive: true })));
 }

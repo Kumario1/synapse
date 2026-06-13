@@ -30,10 +30,21 @@ export interface ExtractPythonDependencyGraphResult {
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const pythonDir = join(packageRoot, "python");
+const DEFAULT_REQUEST_TIMEOUT_MS = 5000;
 
 interface PendingRequest {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+function analyzerRequestTimeoutMs(): number {
+  const raw = process.env.SYNAPSE_ANALYZER_REQUEST_TIMEOUT_MS;
+  if (!raw) {
+    return DEFAULT_REQUEST_TIMEOUT_MS;
+  }
+  const timeoutMs = Number.parseInt(raw, 10);
+  return Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_REQUEST_TIMEOUT_MS;
 }
 
 /**
@@ -83,7 +94,7 @@ class PythonSidecar {
 
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => this.onData(chunk));
-    child.on("exit", (code) => this.onExit(code));
+    child.on("exit", (code) => this.onExit(child, code));
     child.on("error", (error) => this.failAll(error));
 
     this.child = child;
@@ -113,11 +124,10 @@ class PythonSidecar {
     if (typeof message.id !== "number") {
       return;
     }
-    const pending = this.pending.get(message.id);
+    const pending = this.clearPending(message.id);
     if (!pending) {
       return;
     }
-    this.pending.delete(message.id);
     if (message.error) {
       pending.reject(new Error(message.error.message ?? "python analyzer error"));
     } else {
@@ -125,16 +135,28 @@ class PythonSidecar {
     }
   }
 
-  private onExit(code: number | null): void {
-    this.child = null;
-    this.buffer = "";
+  private onExit(child: ChildProcessWithoutNullStreams, code: number | null): void {
+    if (this.child === child) {
+      this.child = null;
+      this.buffer = "";
+    }
     if (this.pending.size > 0) {
       this.failAll(new Error(`python analyzer exited (code ${code ?? "unknown"})`));
     }
   }
 
+  private clearPending(id: number): PendingRequest | undefined {
+    const pending = this.pending.get(id);
+    if (pending) {
+      clearTimeout(pending.timer);
+      this.pending.delete(id);
+    }
+    return pending;
+  }
+
   private failAll(error: Error): void {
     for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
       pending.reject(error);
     }
     this.pending.clear();
@@ -146,11 +168,27 @@ class PythonSidecar {
     const payload = `${JSON.stringify({ id, method, params })}\n`;
 
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject });
+      const timeoutMs = analyzerRequestTimeoutMs();
+      const timer = setTimeout(() => {
+        const pending = this.clearPending(id);
+        if (!pending) {
+          return;
+        }
+        pending.reject(new Error(`python analyzer request timed out (method ${method}, id ${id}, timeout ${timeoutMs}ms)`));
+        if (this.child === child) {
+          this.child = null;
+          this.buffer = "";
+        }
+        child.kill();
+      }, timeoutMs);
+
+      this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject, timer });
       child.stdin.write(payload, (error) => {
         if (error) {
-          this.pending.delete(id);
-          reject(error);
+          const pending = this.clearPending(id);
+          if (pending) {
+            pending.reject(error);
+          }
         }
       });
     });
