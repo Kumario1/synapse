@@ -8,11 +8,14 @@ import {
   deriveProjectKey,
   MetricsRegistry,
   MIN_SUPPORTED_PROTOCOL_VERSION,
+  isSupportedProtocolVersion,
   negotiateProtocolVersion,
   parseClientMessage,
   PROTOCOL_VERSION,
   type ClientMessage,
+  type ProtocolVersion,
   type ServerMessage,
+  type StateOp,
   type TeamState,
   type WireEnvelope
 } from "@synapse/protocol";
@@ -21,7 +24,7 @@ import { createEmbeddingProvider } from "./embeddings.js";
 import { gitHubPushToNotify, gitHubRepoEventToNotify } from "./github.js";
 import { applyMessage, pruneExpiredLocks, repoIdFor } from "./state.js";
 import { getCachedState } from "./state-cache.js";
-import { createStateStore } from "./store.js";
+import { createStateStore, type StateStoreOps } from "./store.js";
 
 const port = Number(process.env.SYNAPSE_SERVER_PORT ?? 4010);
 const host = process.env.SYNAPSE_SERVER_HOST ?? "127.0.0.1";
@@ -51,8 +54,10 @@ const authMode: "project-key" | "shared-token" | "open" = masterSecret
 const store = await createStateStore();
 const states = new Map<string, TeamState>();
 const roomClients = new Map<string, Set<WebSocket>>();
+const repoSeq = new Map<string, number>();
 const log = createLogger("synapse-server");
 const metrics = new MetricsRegistry();
+const deltaBroadcastEnabled = process.env.SYNAPSE_DELTA_BROADCAST !== "0";
 // Multi-instance fan-out (plan M9): with SYNAPSE_REDIS_URL set, a mutation on
 // any instance PUBLISHes the repo channel; the others re-read the repo from
 // the shared store and re-broadcast to their local rooms. Unset → null, and
@@ -88,7 +93,8 @@ const fanout = process.env.SYNAPSE_REDIS_URL
         });
         metrics.count("synapse_fanout_refreshes_total");
         log.debug("fanout.refreshed", { repoId, sessions: fresh.sessions.length });
-        broadcast(repoId, envelope("state.snapshot", { teamState: fresh }));
+        const seq = bumpRepoSeq(repoId);
+        broadcast(repoId, envelope("state.snapshot", { teamState: fresh, seq }));
       }
     })
   : null;
@@ -241,7 +247,7 @@ const wsServer = new WebSocketServer({
 // the socket is dead — terminate it so the daemon's backoff reconnects cleanly.
 const socketAlive = new WeakMap<WebSocket, boolean>();
 // Agreed wire version per socket (plan M15) — the downgrade seam for D3.
-const socketProtocol = new WeakMap<WebSocket, number>();
+const socketProtocol = new WeakMap<WebSocket, ProtocolVersion>();
 
 // Ingress rate limiting (G4): a sliding one-minute window per WS connection
 // and a global one for the webhook endpoint. The defaults are far above any
@@ -285,10 +291,14 @@ wsServer.on("connection", (socket, request) => {
   const repoId = url.searchParams.get("repoId") ?? "local";
   const announced = url.searchParams.get("v");
   const negotiated = negotiateProtocolVersion(announced === null ? undefined : Number(announced));
-  // The seam for graceful downgrade: outbound messages to this socket should
-  // use its agreed dialect. Today there is exactly one dialect (v1), so this
-  // is recorded (and observable) but never branches.
-  socketProtocol.set(socket, negotiated.ok ? negotiated.agreed : PROTOCOL_VERSION);
+  // The seam for graceful downgrade: outbound messages to this socket use its
+  // agreed dialect, so legacy clients keep seeing v1 envelopes.
+  socketProtocol.set(
+    socket,
+    negotiated.ok && isSupportedProtocolVersion(negotiated.agreed)
+      ? negotiated.agreed
+      : PROTOCOL_VERSION
+  );
   log.debug("protocol.negotiated", {
     repoId,
     announced,
@@ -299,7 +309,10 @@ wsServer.on("connection", (socket, request) => {
   metrics.count("synapse_ws_connections_total");
   log.info("ws.open", { repoId });
   void withRepo(repoId, () => getState(repoId)).then((state) =>
-    send(socket, envelope("state.snapshot", { teamState: state }))
+    send(
+      socket,
+      envelope("state.snapshot", { teamState: state, seq: currentRepoSeq(repoId) }, socketVersion(socket))
+    )
   );
 
   socket.on("pong", () => {
@@ -357,7 +370,7 @@ async function handleMessage(socket: WebSocket, fallbackRepoId: string, raw: str
     if (rate.count === WS_RATE_LIMIT_PER_MIN + 1) {
       log.warn("rate.limited", { surface: "ws", repoId: fallbackRepoId, limit: WS_RATE_LIMIT_PER_MIN });
     }
-    send(socket, envelope("ack", { forId: "unknown", ok: false, error: "rate_limited" }));
+    sendAck(socket, { forId: "unknown", ok: false, error: "rate_limited" });
     return;
   }
 
@@ -367,7 +380,7 @@ async function handleMessage(socket: WebSocket, fallbackRepoId: string, raw: str
     parsed = JSON.parse(raw);
   } catch {
     metrics.count("synapse_message_failures_total", { reason: "invalid_json" });
-    send(socket, envelope("ack", { forId: "unknown", ok: false, error: "invalid_json" }));
+    sendAck(socket, { forId: "unknown", ok: false, error: "invalid_json" });
     return;
   }
 
@@ -381,7 +394,7 @@ async function handleMessage(socket: WebSocket, fallbackRepoId: string, raw: str
         : "unknown";
     metrics.count("synapse_message_failures_total", { reason: "invalid_message" });
     log.warn("message.invalid", { error: validated.error });
-    send(socket, envelope("ack", { forId, ok: false, error: validated.error }));
+    sendAck(socket, { forId, ok: false, error: validated.error });
     return;
   }
   const message: ClientMessage = validated.message;
@@ -399,29 +412,32 @@ async function handleMessage(socket: WebSocket, fallbackRepoId: string, raw: str
     ) {
       metrics.count("synapse_message_failures_total", { reason: "forbidden_repo" });
       log.warn("message.forbidden_repo", { type: message.type, repoId: messageRepoId });
-      send(socket, envelope("ack", { forId: message.id, ok: false, error: "forbidden_repo" }));
+      sendAck(socket, { forId: message.id, ok: false, error: "forbidden_repo" });
       return;
     }
 
     const repoId = messageRepoId ?? fallbackRepoId;
     const startedAt = performance.now();
+    const ops: StateOp[] = [];
     const state = await withRepo(repoId, async () => {
       const current = await getState(repoId);
-      applyMessage(current, repoId, message, store);
+      applyMessage(current, repoId, message, teeStateStoreOps(ops));
       return current;
     });
     metrics.count("synapse_messages_total", { type: message.type });
     metrics.observe("synapse_message_apply_ms", performance.now() - startedAt);
     indexMemory(repoId, message);
     log.debug("message.applied", { type: message.type, repoId, sessions: state.sessions.length });
-    send(socket, envelope("ack", { forId: message.id, ok: true }));
-    broadcast(repoId, envelope("state.snapshot", { teamState: state }));
-    fanout?.publish(repoId);
+    sendAck(socket, { forId: message.id, ok: true });
+    if (ops.length > 0) {
+      broadcastStateChange(repoId, state, ops);
+      fanout?.publish(repoId);
+    }
   } catch (error) {
     const reason = error instanceof Error ? error.message : "unknown_error";
     metrics.count("synapse_message_failures_total", { reason: "apply_error" });
     log.error("message.failed", { type: message.type, reason });
-    send(socket, envelope("ack", { forId: message.id, ok: false, error: reason }));
+    sendAck(socket, { forId: message.id, ok: false, error: reason });
   }
 }
 
@@ -485,12 +501,18 @@ async function handleGitHubWebhook(
 
     if (event !== "push") {
       const repoEvent = gitHubRepoEventToNotify(event, payload, url.searchParams.get("repoId"));
+      const ops: StateOp[] = [];
       const state = await withRepo(repoEvent.repoId, async () => {
         const current = await getState(repoEvent.repoId);
-        applyMessage(current, repoEvent.repoId, clientEnvelope("repo.event", repoEvent.payload), store);
+        applyMessage(
+          current,
+          repoEvent.repoId,
+          clientEnvelope("repo.event", repoEvent.payload),
+          teeStateStoreOps(ops)
+        );
         return current;
       });
-      broadcast(repoEvent.repoId, envelope("state.snapshot", { teamState: state }));
+      broadcastStateChange(repoEvent.repoId, state, ops);
       fanout?.publish(repoEvent.repoId);
       writeJson(response, 202, {
         ok: true,
@@ -503,12 +525,13 @@ async function handleGitHubWebhook(
     }
 
     const push = gitHubPushToNotify(payload, url.searchParams.get("repoId"));
+    const ops: StateOp[] = [];
     const state = await withRepo(push.repoId, async () => {
       const current = await getState(push.repoId);
-      applyMessage(current, push.repoId, clientEnvelope("push.notify", push.payload), store);
+      applyMessage(current, push.repoId, clientEnvelope("push.notify", push.payload), teeStateStoreOps(ops));
       return current;
     });
-    broadcast(push.repoId, envelope("state.snapshot", { teamState: state }));
+    broadcastStateChange(push.repoId, state, ops);
     fanout?.publish(push.repoId);
     writeJson(response, 202, {
       ok: true,
@@ -604,8 +627,100 @@ function broadcast<TType extends ServerMessage["type"]>(
   message: Extract<ServerMessage, WireEnvelope<TType>>
 ): void {
   for (const client of roomClients.get(repoId) ?? []) {
-    send(client, message);
+    send(client, { ...message, v: socketVersion(client) });
   }
+}
+
+function broadcastStateChange(repoId: string, state: TeamState, ops: StateOp[]): void {
+  const seq = bumpRepoSeq(repoId);
+  for (const client of roomClients.get(repoId) ?? []) {
+    const version = socketVersion(client);
+    if (deltaBroadcastEnabled && version >= 2) {
+      send(client, envelope("state.delta", { repoId, seq, ops }, version));
+      metrics.count("synapse_state_deltas_sent_total");
+    } else {
+      send(client, envelope("state.snapshot", { teamState: state, seq }, version));
+      metrics.count("synapse_state_snapshots_sent_total");
+    }
+  }
+}
+
+function sendAck(
+  socket: WebSocket,
+  payload: Extract<ServerMessage, WireEnvelope<"ack">>["payload"]
+): void {
+  send(socket, envelope("ack", payload, socketVersion(socket)));
+}
+
+function socketVersion(socket: WebSocket): ProtocolVersion {
+  return socketProtocol.get(socket) ?? PROTOCOL_VERSION;
+}
+
+function currentRepoSeq(repoId: string): number {
+  return repoSeq.get(repoId) ?? 0;
+}
+
+function bumpRepoSeq(repoId: string): number {
+  const next = currentRepoSeq(repoId) + 1;
+  repoSeq.set(repoId, next);
+  return next;
+}
+
+function teeStateStoreOps(ops: StateOp[]): StateStoreOps {
+  return {
+    upsertSession: (repoId, session) => {
+      store.upsertSession(repoId, session);
+      ops.push({ op: "upsertSession", session: clone(session) });
+    },
+    upsertEditLock: (repoId, lock) => {
+      store.upsertEditLock(repoId, lock);
+      ops.push({ op: "upsertEditLock", lock: clone(lock) });
+    },
+    deleteEditLock: (repoId, sessionId, symbolRaw) => {
+      store.deleteEditLock(repoId, sessionId, symbolRaw);
+      ops.push({ op: "deleteEditLock", sessionId, symbolRaw });
+    },
+    deleteEditLocksForSession: (repoId, sessionId) => {
+      store.deleteEditLocksForSession(repoId, sessionId);
+      ops.push({ op: "deleteEditLocksForSession", sessionId });
+    },
+    upsertDelta: (repoId, delta) => {
+      store.upsertDelta(repoId, delta);
+      ops.push({ op: "upsertDelta", delta: clone(delta) });
+    },
+    deleteDelta: (repoId, deltaId) => {
+      store.deleteDelta(repoId, deltaId);
+      ops.push({ op: "deleteDelta", deltaId });
+    },
+    appendPush: (repoId, push, cap) => {
+      store.appendPush(repoId, push, cap);
+      ops.push({ op: "appendPush", push: clone(push), cap });
+    },
+    appendRepoEvent: (repoId, event, cap) => {
+      store.appendRepoEvent(repoId, event, cap);
+      ops.push({ op: "appendRepoEvent", event: clone(event), cap });
+    },
+    upsertResolution: (repoId, resolution) => {
+      store.upsertResolution(repoId, resolution);
+      ops.push({ op: "upsertResolution", resolution: clone(resolution) });
+    },
+    deleteResolution: (repoId, symbolRaw, inputsHash) => {
+      store.deleteResolution(repoId, symbolRaw, inputsHash);
+      ops.push({ op: "deleteResolution", symbolRaw, inputsHash });
+    },
+    appendSummary: (repoId, summary, cap) => {
+      store.appendSummary(repoId, summary, cap);
+      ops.push({ op: "appendSummary", summary: clone(summary), cap });
+    },
+    appendFeedback: (repoId, feedback, cap) => {
+      store.appendFeedback(repoId, feedback, cap);
+      ops.push({ op: "appendFeedback", feedback: clone(feedback), cap });
+    }
+  };
+}
+
+function clone<T>(value: T): T {
+  return structuredClone(value);
 }
 
 function send(socket: WebSocket, message: ServerMessage): void {
@@ -616,10 +731,11 @@ function send(socket: WebSocket, message: ServerMessage): void {
 
 function envelope<TType extends ServerMessage["type"]>(
   type: TType,
-  payload: Extract<ServerMessage, WireEnvelope<TType>>["payload"]
+  payload: Extract<ServerMessage, WireEnvelope<TType>>["payload"],
+  version: ProtocolVersion = PROTOCOL_VERSION
 ): Extract<ServerMessage, WireEnvelope<TType>> {
   return {
-    v: PROTOCOL_VERSION,
+    v: version,
     type,
     id: randomUUID(),
     ts: new Date().toISOString(),
