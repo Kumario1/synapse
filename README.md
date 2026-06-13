@@ -279,6 +279,7 @@ To build the same tarball from a checkout (release flow):
 ```bash
 node scripts/build-package.mjs    # stages + packs dist-release/<name>-<version>.tgz
 npm run verify:package            # installs from the tarball and smoke-tests it
+npm run verify:npm-pack           # compatibility alias for verify:package
 npm publish --access public dist-release/<tarball>   # maintainers only
 ```
 
@@ -329,7 +330,7 @@ Run with `npm run <script>`. See [`package.json`](package.json) for the complete
 | `verify:adaptive-severity` | Feedback-tuned demotion of noisy warnings |
 | `verify:branch-aware-severity` | Cross-branch `stale_base`/`dependency_changed` demote to `info`; merge-blocking rules and same-branch conflicts still warn |
 | `verify:docker` | Builds the server image, boots it, drives one edit→report |
-| `verify:npm-pack` | Packs the CLI, installs into a fresh project, joins, drives a check |
+| `verify:npm-pack` | Compatibility alias for `verify:package` so npm-pack and release smoke use the same public tarball |
 | `verify:github-webhook` / `verify:github-briefing` | GitHub push/PR/review/comment webhooks and catch-ups |
 | `verify:all` | One build, then every verify (the CI matrix) |
 | `eval:conflicts` | Recorded conflict eval suite (overlap, breaking, compatible, divergent, …) — hard pass/fail gate on 7 fixed scenarios |
