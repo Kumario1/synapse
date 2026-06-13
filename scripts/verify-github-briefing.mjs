@@ -52,7 +52,7 @@ try {
 
   const pr = await postGitHub("pull_request", {
     action: "opened",
-    repository: { full_name: "acme/widgets" },
+    repository: { full_name: "local" },
     sender: { login: "alice" },
     pull_request: {
       number: 42,
@@ -71,7 +71,7 @@ try {
 
   const review = await postGitHub("pull_request_review", {
     action: "submitted",
-    repository: { full_name: "acme/widgets" },
+    repository: { full_name: "local" },
     sender: { login: "carol" },
     pull_request: {
       number: 42,
@@ -88,7 +88,7 @@ try {
 
   const comment = await postGitHub("issue_comment", {
     action: "created",
-    repository: { full_name: "acme/widgets" },
+    repository: { full_name: "local" },
     sender: { login: "dana" },
     issue: {
       number: 42,
@@ -103,7 +103,7 @@ try {
   assert.equal(comment.kind, "issue_comment");
   assert.equal(comment.action, "created");
 
-  const ignored = await postGitHub("ping", { repository: { full_name: "acme/widgets" } });
+  const ignored = await postGitHub("ping", { repository: { full_name: "local" } });
   assert.deepEqual(ignored, { ok: true, ignored: true, event: "ping" });
 
   const state = await waitForState(serverPort, (candidate) => candidate.recentRepoEvents.length === 3);

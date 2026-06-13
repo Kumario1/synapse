@@ -86,7 +86,7 @@ export function gitHubPushToNotify(
   }
 
   const push = payload as GitHubPushPayload;
-  const repoId = repoIdOverride || stringAt(push.repository, "full_name") || "local";
+  const repoId = repoIdFromPayload(push.repository, repoIdOverride);
   const sha = typeof push.after === "string" && push.after ? push.after : "unknown";
   const files = unique(filesFromCommits(push.commits));
 
@@ -190,7 +190,7 @@ function pullRequestToNotify(
   }
 
   const pr = payload as GitHubPullRequestPayload;
-  const repoId = repoIdOverride || stringAt(pr.repository, "full_name") || "local";
+  const repoId = repoIdFromPayload(pr.repository, repoIdOverride);
   const action = stringValue(pr.action) ?? "unknown";
   const actor = stringAt(pr.sender, "login") ?? "github";
   const number = numberAt(pr.pull_request, "number");
@@ -228,7 +228,7 @@ function pullRequestReviewToNotify(
   }
 
   const review = payload as GitHubPullRequestReviewPayload;
-  const repoId = repoIdOverride || stringAt(review.repository, "full_name") || "local";
+  const repoId = repoIdFromPayload(review.repository, repoIdOverride);
   const action = stringValue(review.action) ?? "unknown";
   const actor = stringAt(review.sender, "login") ?? "github";
   const number = numberAt(review.pull_request, "number");
@@ -262,7 +262,7 @@ function issueCommentToNotify(
   }
 
   const comment = payload as GitHubIssueCommentPayload;
-  const repoId = repoIdOverride || stringAt(comment.repository, "full_name") || "local";
+  const repoId = repoIdFromPayload(comment.repository, repoIdOverride);
   const action = stringValue(comment.action) ?? "unknown";
   const actor = stringAt(comment.sender, "login") ?? "github";
   const number = numberAt(comment.issue, "number");
@@ -297,6 +297,15 @@ function filesFromCommits(commits: GitHubPushPayload["commits"]): string[] {
     ...strings(commit.modified),
     ...strings(commit.removed)
   ]);
+}
+
+function repoIdFromPayload(repository: unknown, repoIdOverride?: string | null): string {
+  const repoFullName = stringAt(repository, "full_name");
+  if (repoFullName && repoIdOverride && repoFullName !== repoIdOverride) {
+    throw new Error("GitHub webhook repository.full_name does not match repoId.");
+  }
+
+  return repoFullName || repoIdOverride || "local";
 }
 
 function summaryFor(payload: GitHubPushPayload, fileCount: number): string {

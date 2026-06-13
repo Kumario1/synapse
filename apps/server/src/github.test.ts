@@ -18,12 +18,12 @@ test("converts GitHub push payloads into push.notify payloads", () => {
         }
       ]
     },
-    "local"
+    "Kumario1/synapse"
   );
 
-  assert.equal(push.repoId, "local");
+  assert.equal(push.repoId, "Kumario1/synapse");
   assert.deepEqual(push.payload, {
-    repoId: "local",
+    repoId: "Kumario1/synapse",
     memberId: "alice",
     sha: "abc123",
     summary: "GitHub push: Update token contract",
@@ -60,6 +60,48 @@ test("uses repository full_name as repo id when no override is provided", () => 
   assert.equal(push.payload.summary, "GitHub push touched 1 file");
 });
 
+test("allows matching push repo id overrides", () => {
+  const push = gitHubPushToNotify(
+    {
+      after: "def456",
+      repository: { full_name: "Kumario1/synapse" },
+      commits: [{ modified: ["README.md"] }]
+    },
+    "Kumario1/synapse"
+  );
+
+  assert.equal(push.repoId, "Kumario1/synapse");
+  assert.equal(push.payload.repoId, "Kumario1/synapse");
+});
+
+test("rejects mismatched push repo id overrides", () => {
+  assert.throws(
+    () =>
+      gitHubPushToNotify(
+        {
+          after: "def456",
+          repository: { full_name: "Kumario1/synapse" },
+          commits: [{ modified: ["README.md"] }]
+        },
+        "Kumario1/other"
+      ),
+    /repository\.full_name does not match repoId/
+  );
+});
+
+test("uses repo id override when payload has no repository", () => {
+  const push = gitHubPushToNotify(
+    {
+      after: "def456",
+      commits: [{ modified: ["README.md"] }]
+    },
+    "local"
+  );
+
+  assert.equal(push.repoId, "local");
+  assert.equal(push.payload.repoId, "local");
+});
+
 test("rejects push payloads without changed files", () => {
   assert.throws(
     () => gitHubPushToNotify({ after: "abc123", commits: [] }),
@@ -81,12 +123,12 @@ test("converts pull_request payloads into repo events", () => {
         merged: true
       }
     },
-    "local"
+    "Kumario1/synapse"
   );
 
-  assert.equal(event.repoId, "local");
+  assert.equal(event.repoId, "Kumario1/synapse");
   assert.deepEqual(event.payload, {
-    repoId: "local",
+    repoId: "Kumario1/synapse",
     kind: "pull_request",
     action: "merged",
     actor: "alice",
@@ -95,6 +137,22 @@ test("converts pull_request payloads into repo events", () => {
     url: "https://github.com/Kumario1/synapse/pull/12",
     summary: "GitHub PR #12 merged: Add config loader"
   });
+});
+
+test("rejects mismatched pull_request repo id overrides", () => {
+  assert.throws(
+    () =>
+      gitHubRepoEventToNotify(
+        "pull_request",
+        {
+          action: "opened",
+          repository: { full_name: "Kumario1/synapse" },
+          pull_request: { number: 12, title: "Add config loader" }
+        },
+        "Kumario1/other"
+      ),
+    /repository\.full_name does not match repoId/
+  );
 });
 
 test("converts pull_request_review payloads into repo events", () => {
@@ -119,6 +177,23 @@ test("converts pull_request_review payloads into repo events", () => {
   assert.equal(event.payload.summary, "GitHub review approved on PR #13: Add auth");
 });
 
+test("rejects mismatched pull_request_review repo id overrides", () => {
+  assert.throws(
+    () =>
+      gitHubRepoEventToNotify(
+        "pull_request_review",
+        {
+          action: "submitted",
+          repository: { full_name: "Kumario1/synapse" },
+          pull_request: { number: 13, title: "Add auth" },
+          review: { state: "approved" }
+        },
+        "Kumario1/other"
+      ),
+    /repository\.full_name does not match repoId/
+  );
+});
+
 test("converts issue_comment payloads into repo events", () => {
   const event = gitHubRepoEventToNotify("issue_comment", {
     action: "created",
@@ -137,6 +212,23 @@ test("converts issue_comment payloads into repo events", () => {
 
   assert.equal(event.payload.kind, "issue_comment");
   assert.equal(event.payload.summary, "GitHub comment created on PR #14: Clarify auth behavior");
+});
+
+test("rejects mismatched issue_comment repo id overrides", () => {
+  assert.throws(
+    () =>
+      gitHubRepoEventToNotify(
+        "issue_comment",
+        {
+          action: "created",
+          repository: { full_name: "Kumario1/synapse" },
+          issue: { number: 14, title: "Clarify auth behavior", pull_request: {} },
+          comment: {}
+        },
+        "Kumario1/other"
+      ),
+    /repository\.full_name does not match repoId/
+  );
 });
 
 test("distillProse strips code, links, and noise, and caps at a word boundary", () => {
@@ -173,7 +265,7 @@ test("issue_comment bodies become detail; absent bodies stay absent", () => {
         body: "Decision: keep HMAC project keys.\n\n```js\nleak();\n```"
       }
     },
-    "local"
+    "Kumario1/synapse"
   );
   assert.equal(
     withBody.payload.detail,
@@ -188,7 +280,7 @@ test("issue_comment bodies become detail; absent bodies stay absent", () => {
       issue: { number: 5, title: "Auth design" },
       comment: { html_url: "https://github.com/x" }
     },
-    "local"
+    "Kumario1/synapse"
   );
   assert.equal("detail" in withoutBody.payload && withoutBody.payload.detail !== undefined, false);
 });
