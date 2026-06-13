@@ -13,7 +13,9 @@ export const SYNAPSE_MCP_SERVER_KEY = "synapse";
  */
 export const SYNAPSE_AGENT_GUIDANCE = `Synapse is a realtime coordination layer that stops your edits from colliding with other agents and teammates working the same repository. Use these MCP tools automatically — do not wait to be asked. This mirrors the Claude Code PreToolUse/PostToolUse/SessionStart hooks for agents that do not run those hooks.
 
-1. SESSION START — at the start of a task, call \`synapse_whatsup\` once to get a team catch-up: recent pushes, teammates' unpushed contract changes, edit locks, and recent session summaries. (Equivalent to the SessionStart hook.)
+For passive context, prefer MCP resources when your client exposes them: read \`synapse://briefing\` for the onboarding/team digest, \`synapse://team-state\` for current sessions, locks, deltas, pushes, and resolutions, and \`synapse://decisions\` for recent cited decisions and memories. Use tools for actions, checks, and context that needs arguments.
+
+1. SESSION START — at the start of a task, read \`synapse://briefing\` if resources are available; otherwise call \`synapse_whatsup\` once to get a team catch-up: recent pushes, teammates' unpushed contract changes, edit locks, and recent session summaries. (Equivalent to the SessionStart hook.)
 2. BEFORE EDITING — before you create, edit, or refactor a file, call \`synapse_check\` with that file (and the symbol(s) you intend to change). If it returns conflicts (verdict "warn" or higher), surface them to the user and decide together before proceeding. Synapse never auto-blocks — agents query, humans decide. (Equivalent to the PreToolUse hook on Edit/Write/MultiEdit.)
 3. AFTER EDITING — immediately after you finish writing a file, call \`synapse_report\` with that file path so your contract-level changes broadcast to the rest of the team. (Equivalent to the PostToolUse hook.)
 4. AFTER PUSHING — after you commit or push, call \`synapse_push\` with the affected files and the sha so shared state can clear stale deltas and edit locks.
