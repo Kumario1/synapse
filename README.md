@@ -80,7 +80,7 @@
 
 ## Quick Start
 
-**Prerequisites:** Node.js 20+ and npm. Python 3.10+ and Go 1.22+ are optional — needed only to analyze `.py` / `.go` files; without them, those languages degrade gracefully to file-level detection.
+**Prerequisites:** Node.js 20.19.0+ and npm 11.4.1. Python 3.10+ and Go 1.22+ are optional — needed only to analyze `.py` / `.go` files; without them, those languages degrade gracefully to file-level detection.
 
 ```bash
 npm install

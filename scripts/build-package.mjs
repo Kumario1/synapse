@@ -134,7 +134,7 @@ const manifest = {
   type: "module",
   bin: { synapse: "dist/index.js" },
   main: "dist/index.js",
-  engines: { node: ">=20.6" },
+  engines: { node: ">=20.19.0" },
   keywords: ["coding-agents", "mcp", "claude-code", "cursor", "conflict-detection", "coordination"],
   dependencies: { ...externalDeps, ...bundledDeps },
   bundleDependencies: Object.keys(bundledDeps),
