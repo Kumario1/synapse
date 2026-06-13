@@ -29,14 +29,14 @@
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │ Coding agents                                                  │
-│  • Claude Code  → PreToolUse/PostToolUse hooks → local socket  │
-│  • Cursor/Cline/Aider → MCP tools → daemon's local MCP server  │
+│  • Claude Code  → PreToolUse/PostToolUse hooks → local daemon  │
+│  • Cursor/Copilot/Gemini/Windsurf/any MCP client → stdio MCP   │
 └───────────────┬────────────────────────────────────────────────┘
-                │ localhost (HTTP+unix socket / MCP stdio)
+                │ localhost HTTP for daemon tools; stdio for MCP clients
 ┌───────────────▼────────────────────────────────────────────────┐
 │ SYNAPSE DAEMON  (Node/TS, long-lived)                           │
-│  • Local MCP server (tools agents call)                         │
-│  • Local hook endpoint (Claude Code shells into this)           │
+│  • Local tool endpoints (hooks + MCP adapter call these)        │
+│  • Stdio MCP adapter registration via `synapse connect`         │
 │  • Warm cache: replica of team live-state                       │
 │  • Git watcher (chokidar + simple-git)                          │
 │  • TS analyzer IN-PROCESS (ts-morph)                            │
@@ -44,11 +44,11 @@
 └───────────────┬───────────────────────────┬────────────────────┘
                 │ JSON-RPC over localhost      │ WSS (authenticated)
 ┌───────────────▼─────────────┐               │
-│ PYTHON ANALYZER SIDECAR      │               │
-│  (Python, long-lived)        │               │
-│  • tree-sitter + pyright/jedi│               │
-│  • Python contract extract   │               │
-│  • Python sub-graph build    │               │
+│ PYTHON / GO ANALYZER SIDECARS│               │
+│  (long-lived child processes)│               │
+│  • Python: tree-sitter + jedi│               │
+│  • Go: go/parser + go/ast    │               │
+│  • request timeout + restart │               │
 └──────────────────────────────┘               │
                                                ▼
                                    ┌────────────────────────┐
@@ -56,9 +56,10 @@
                                    └────────────────────────┘
 ```
 
-**Why two analyzer homes:** Node owns TS analysis (ts-morph wraps the TS compiler — the only way to
-get real TS symbol resolution). Python owns Python analysis (pyright/jedi). The daemon speaks a single
-**Analyzer Protocol** (§4) to both, so the rest of the system is language-agnostic.
+**Why analyzer homes are split:** Node owns TS analysis (ts-morph wraps the TS compiler — the only
+way to get real TS symbol resolution). Python and Go live in sidecars that use their native parser
+stacks. The daemon speaks one **Analyzer Protocol** (§4) to all analyzers, so the rest of the system
+is language-agnostic.
 
 ### On the server (self-hosted, Docker Compose)
 ```
@@ -84,7 +85,8 @@ redis:        live sessions, edit locks (TTL), pub/sub fan-out
 Current implementation: `synapse join` writes `.synapse/config.json` with `repoId`, `serverUrl`,
 `daemonPort`, `member`, `sessionId`, `agentType`, and `worktreeRoot`. The daemon and local CLI
 commands read that file as defaults, with precedence `flags > environment > .synapse/config.json >
-built-ins`.
+built-ins`. `synapse connect` also registers `synapse mcp` in supported clients and writes
+catalog-derived rules files; the MCP server advertises the same guidance through its `instructions`.
 
 ---
 
@@ -100,6 +102,7 @@ type SymbolKind =
 interface SymbolId {        // stable, deterministic, language-prefixed
   // e.g. "ts:src/auth/token.ts#TokenValidator.validate"
   //      "py:src/auth/token.py#TokenValidator.validate"
+  //      "go:pkg/auth/token.go#Validator.Validate"
   raw: string;
 }
 
@@ -118,7 +121,7 @@ interface Symbol {
   signature: Signature | null;   // null for fields w/o type, etc.
   sigHash: string;          // hash(normalized signature) — change detection
   span: { path: string; startLine: number; endLine: number };
-  lang: "ts" | "py";
+  lang: "ts" | "py" | "go";
 }
 ```
 
@@ -143,13 +146,22 @@ analyzer.health()                      -> { ok, version, lang }
 Extracts: exported functions (params+types+return+generics), exported classes (public methods/fields),
 `interface`/`type` shapes, exported `const`/`enum`, and — phase 2 — framework route definitions
 (Next.js route handlers, Express/Hono routes). Uses the TS compiler's type checker for real types.
-The dependency graph resolves relative named, aliased, default, and namespace imports to exported
-symbol ids, so `dependency_changed` warnings survive common TypeScript import styles.
+The dependency graph resolves relative named, aliased, default, namespace, and barrel re-export
+imports to exported symbol ids, preserving the defining-file symbol identity so `dependency_changed`
+warnings survive common TypeScript import styles.
 
 ### Python analyzer (Python sidecar, pyright/jedi + tree-sitter)
 Extracts: module-level `def` (params + annotations + return annotation), class public methods &
 attributes, dataclass/Pydantic model fields, and — phase 2 — FastAPI/Flask route decorators.
 tree-sitter gives fast structural parse; pyright/jedi give cross-file reference resolution.
+
+### Go analyzer (Go sidecar, stdlib parser)
+Extracts exported functions, methods, types, interfaces, structs, constants, and variables using
+`go/parser`/`go/ast`. Export visibility follows Go's uppercase-name rule and symbol ids use the
+`go:` prefix.
+
+Python and Go sidecar requests have bounded timeouts. A hung sidecar request fails loudly, the child
+process is torn down, and the next request starts a fresh sidecar instead of poisoning the daemon.
 
 **Detection is deterministic AST/signature diffing — never the LLM.** The optional LLM layer only
 upgrades already-detected conflicts into richer, side-addressed action plans (§12).
@@ -183,6 +195,9 @@ defines       container → member (class → method)
 
 **Privacy note:** the graph is built locally; only **symbol IDs + signatures + dependent ID lists**
 are ever sent to the server — never edges' source code, never bodies.
+
+All daemon file reads resolve caller-provided paths under `worktreeRoot`. Absolute paths, `..`
+traversal, and symlink escapes are rejected before any analyzer or file read runs.
 
 ---
 
@@ -284,23 +299,28 @@ synapse_push         { sha, summary, files[], symbols?: SymbolId[] }
                      -> { ok: true, sha, files[] }
 synapse_feedback     { conflictId, outcome: "acted"|"dismissed", note?, rule?, targetSymbol? }
                      -> { ok: true, feedback }
+synapse_insights     { limit?: number }      -> SynapseInsightsResponse
 synapse_whatsup      { limit?: number }      -> SynapseWhatsupResponse        // Layer II
 synapse_why          { question: string, limit?: number } -> SynapseWhyResponse // Layer III seed
+synapse_pr_brief     { base?: string, head?: string } -> SynapsePrBriefResponse
 synapse_session      { action: "start"|"heartbeat"|"end", task?: string } -> { sessionId }
 ```
 
 Current implementation: `synapse mcp` starts a stdio MCP adapter for Cursor/Cline/Aider-style
 clients. The adapter does not duplicate Synapse logic; it forwards tool calls to the local daemon's
 HTTP endpoints so the daemon remains the owner of extraction, conflict detection, analysis, and
-resolution. `synapse_feedback` records explicit acted/dismissed telemetry for a surfaced conflict but
-does not change verdicts. `synapse_whatsup` is deterministic today: it reads the daemon's warm cache
-and returns active sessions, unpushed deltas, edit locks, recent pushes, shared resolutions, and
-recent feedback. `synapse_why` is also deterministic today: it ranks matching session summaries, repo
-events, pushes, resolutions, conflict feedback, unpushed deltas, and active sessions by question terms,
-then returns a source-cited answer. When `SYNAPSE_DATABASE_URL` (Postgres + pgvector) and an
-OpenAI-compatible embeddings endpoint are configured, `synapse_why` additionally ranks by vector
-recall on top of the deterministic floor (`rag: true`); without embeddings, `/recall` reports
-`degraded: true` and the floor answers alone.
+resolution. It also exposes read-only resources for passive context: `synapse://briefing`,
+`synapse://team-state`, `synapse://decisions`, and `synapse://pr-brief`. `synapse_feedback` records
+explicit acted/dismissed telemetry for a surfaced conflict but does not change detection.
+`synapse_insights` aggregates local coordination health from that same warm cache. `synapse_whatsup`
+is deterministic today: it reads the daemon's warm cache and returns active sessions, unpushed deltas,
+edit locks, recent pushes, shared resolutions, and recent feedback. `synapse_pr_brief` turns local
+state plus GitHub webhook history into a base/head PR handoff. `synapse_why` is also deterministic
+today: it ranks matching session summaries, repo events, pushes, resolutions, conflict feedback,
+unpushed deltas, and active sessions by question terms, then returns a source-cited answer. When
+`SYNAPSE_DATABASE_URL` (Postgres + pgvector) and an OpenAI-compatible embeddings endpoint are
+configured, `synapse_why` additionally ranks by vector recall on top of the deterministic floor
+(`rag: true`); without embeddings, `/recall` reports `degraded: true` and the floor answers alone.
 
 **Claude Code hooks** (the first-class automatic path) — installed into the repo's settings:
 - `PreToolUse` on `Edit|Write|MultiEdit`: shells into the daemon's local endpoint = `synapse_check`
@@ -312,7 +332,9 @@ recall on top of the deterministic floor (`rag: true`); without embeddings, `/re
 
 ### 8b. Daemon ↔ Server (WSS, authenticated, per-repo room)
 
-Envelope: `{ v: 1, type, id, ts, payload }`. Bidirectional.
+Envelope: `{ v, type, id, ts, payload }`. Bidirectional. Protocol negotiation happens during the
+WebSocket handshake: legacy clients with no announcement connect as v1, overlapping newer clients
+agree on the lower supported dialect, and non-overlapping clients are refused with HTTP 426.
 
 Client → Server:
 ```
@@ -328,12 +350,14 @@ query.briefing       { since? }
 ```
 Server → Client (implemented subset):
 ```
-state.snapshot       { teamState: TeamState }     // on connect / resync AND after each mutation
-state.delta          { teamState: TeamState }     // accepted by daemon, reserved for incremental fan-out
+state.snapshot       { teamState: TeamState, seq?: number }         // on connect/resync; also v1 fallback
+state.delta          { repoId: string, seq: number, ops: StateOp[] } // v2 incremental fan-out
 ack                  { forId, ok, error? }
 ```
-(`state.delta` incremental fan-out and proactive `conflict.alert` remain on the design board; today the
-server re-broadcasts a full `state.snapshot` after every mutation.)
+Protocol v2 sockets receive `state.delta` frames after local mutations; v1 sockets and remote
+multi-instance fanout still receive snapshots as a compatibility/resync baseline. A daemon applies
+deltas only after a snapshot baseline, ignores duplicates, and reconnects on sequence gaps. Proactive
+`conflict.alert` remains on the design board.
 
 Runtime validation is bidirectional at process boundaries. The server validates every inbound
 client message with the shared zod wire schemas before mutation; the daemon parses server frames
@@ -353,12 +377,15 @@ graph. The server is the fan-out hub + source of truth, not in the hot path.
 Current implementation accepts GitHub events at `POST /webhooks/github`.
 
 - `push`: converts changed files into the existing `push.notify` state mutation, records a
-  `RecentPush`, clears matching live deltas/locks, and broadcasts a fresh `state.snapshot`.
+  `RecentPush`, clears matching live deltas/locks, and broadcasts the resulting state change.
 - `pull_request`, `pull_request_review`, `issue_comment`: converts the payload into `repo.event`,
-  records recent repo activity, and surfaces it in `whatsup` / `SessionStart` catch-ups.
+  records recent repo activity, and surfaces it in `whatsup`, `pr-brief`, and `SessionStart`
+  catch-ups.
 
-Local/dev verification may pass `?repoId=local`; production defaults to `repository.full_name`. When
-`SYNAPSE_GITHUB_WEBHOOK_SECRET` is set, the route requires a valid `X-Hub-Signature-256` HMAC.
+Webhook events are bound to the signed payload's `repository.full_name`. Local verification can use
+the `local` identity, but the override must match the payload identity used in the verifier fixture;
+arbitrary repo remapping is rejected. When `SYNAPSE_GITHUB_WEBHOOK_SECRET` is set, the route requires
+a valid `X-Hub-Signature-256` HMAC.
 
 ---
 
