@@ -142,6 +142,7 @@ try {
     "synapse_feedback",
     "synapse_insights",
     "synapse_onboard",
+    "synapse_pr_brief",
     "synapse_push",
     "synapse_report",
     "synapse_session",

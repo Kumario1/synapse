@@ -9,6 +9,7 @@ import { runInsights } from "./commands/insights.js";
 import { runJoin } from "./commands/join.js";
 import { runKeygen } from "./commands/keygen.js";
 import { runOnboard } from "./commands/onboard.js";
+import { runPrBrief } from "./commands/pr-brief.js";
 import { runPush } from "./commands/push.js";
 import { runReport } from "./commands/report.js";
 import { runSession } from "./commands/session.js";
@@ -53,6 +54,9 @@ switch (command) {
     break;
   case "onboard":
     await runOnboard(args.slice(1));
+    break;
+  case "pr-brief":
+    await runPrBrief(args.slice(1));
     break;
   case "mcp":
     await runMcp(args.slice(1));
@@ -102,6 +106,7 @@ Commands:
   whatsup  Show the daemon's current team-state briefing
   why      Search Synapse memory with source citations
   onboard  First-session deep briefing: team digest + cited decision history
+  pr-brief Local PR handoff briefing for a base/head branch pair
   mcp      Run a stdio MCP server that forwards tools to the local daemon
   join     Write .synapse/config.json, install Claude Code hooks, and connect other agents
   connect  Wire other agents (Cursor, VS Code, Gemini, Windsurf, any MCP client) to the MCP server
@@ -123,6 +128,7 @@ Examples:
   synapse connect --agent cursor,vscode        # only specific agents
   synapse daemon
   synapse mcp --port 4011
+  synapse pr-brief --base main --head my-branch
   synapse report --port 4011 --file src/auth/token.ts --symbol ts:src/auth/token.ts#TokenValidator.validate
   synapse push --port 4011 --file src/auth/token.ts --sha abc123 --summary "Pushed auth token changes"
   synapse check --port 4012 --file src/auth/token.ts --symbol ts:src/auth/token.ts#TokenValidator.validate

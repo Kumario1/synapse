@@ -559,6 +559,7 @@ export interface WhatsupSessionSummary {
   lastTask: string | null;
   filesEditing: string[];
   lastSeen: string;
+  branch?: string;
 }
 
 export interface WhatsupDeltaSummary extends ContractDeltaSummary {
@@ -620,6 +621,36 @@ export interface SynapseWhyResponse {
   question: string;
   answer: string;
   sources: SynapseWhySource[];
+}
+
+export interface SynapsePrBriefRequest {
+  repoId: string;
+  sessionId: string;
+  /** Target branch the PR will merge into. Defaults to main. */
+  base?: string;
+  /** Source branch for the PR. Defaults to the daemon worktree's current branch. */
+  head?: string;
+  /** Max rows per repeated section. Defaults to 10. */
+  limit?: number;
+}
+
+export interface SynapsePrBriefResponse {
+  repoId: string;
+  generatedAt: string;
+  degraded: boolean;
+  base: string;
+  head: string | null;
+  summary: string[];
+  /** Markdown handoff intended for local CLI/MCP consumption. */
+  briefing: string;
+  sections: {
+    activeSessions: WhatsupSessionSummary[];
+    unpushedDeltas: WhatsupDeltaSummary[];
+    editLocks: EditLock[];
+    recentPushes: RecentPush[];
+    recentRepoEvents: RecentRepoEvent[];
+    decisions: SynapseWhySource[];
+  };
 }
 
 export interface SynapseOnboardRequest {
