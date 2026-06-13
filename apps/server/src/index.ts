@@ -20,6 +20,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { createEmbeddingProvider } from "./embeddings.js";
 import { gitHubPushToNotify, gitHubRepoEventToNotify } from "./github.js";
 import { applyMessage, pruneExpiredLocks, repoIdFor } from "./state.js";
+import { getCachedState } from "./state-cache.js";
 import { createStateStore } from "./store.js";
 
 const port = Number(process.env.SYNAPSE_SERVER_PORT ?? 4010);
@@ -570,27 +571,14 @@ function repoEventSupported(event: string): boolean {
 }
 
 async function getState(repoId: string): Promise<TeamState> {
-  let state = states.get(repoId);
-  // Cache miss or remote change: rebuild from persisted rows. One load per
-  // repo is in flight at a time and every caller awaits the same promise, so
-  // a slow load can never overwrite a cache entry that a faster path (or a
-  // local mutation) refreshed in the meantime. Loop: a dirty mark set while a
-  // load was already in flight needs one more pass to be observed.
-  while (!state || dirtyRepos.has(repoId)) {
-    let inFlight = loadsInFlight.get(repoId);
-    if (!inFlight) {
-      inFlight = (async () => {
-        dirtyRepos.delete(repoId);
-        const fresh = (await store.load(repoId)) ?? createEmptyTeamState(repoId);
-        states.set(repoId, fresh);
-        loadsInFlight.delete(repoId);
-        log.debug("state.loaded", { repoId, sessions: fresh.sessions.length });
-        return fresh;
-      })();
-      loadsInFlight.set(repoId, inFlight);
-    }
-    state = await inFlight;
-  }
+  const state = await getCachedState(repoId, {
+    states,
+    dirtyRepos,
+    loadsInFlight,
+    load: (id) => store.load(id),
+    createEmpty: createEmptyTeamState,
+    onLoaded: (id, fresh) => log.debug("state.loaded", { repoId: id, sessions: fresh.sessions.length })
+  });
 
   pruneExpiredLocks(state, store);
   return state;
