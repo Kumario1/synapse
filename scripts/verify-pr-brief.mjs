@@ -66,7 +66,7 @@ try {
 
   await postGitHub("pull_request", {
     action: "opened",
-    repository: { full_name: "acme/widgets" },
+    repository: { full_name: "local" },
     sender: { login: "alice" },
     pull_request: {
       number: 42,
@@ -77,7 +77,7 @@ try {
   });
   await postGitHub("pull_request_review", {
     action: "submitted",
-    repository: { full_name: "acme/widgets" },
+    repository: { full_name: "local" },
     sender: { login: "carol" },
     pull_request: {
       number: 42,
@@ -92,7 +92,7 @@ try {
   });
   await postGitHub("issue_comment", {
     action: "created",
-    repository: { full_name: "acme/widgets" },
+    repository: { full_name: "local" },
     sender: { login: "dana" },
     issue: {
       number: 42,
