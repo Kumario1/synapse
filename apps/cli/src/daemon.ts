@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import { resolve } from "node:path";
 import { closeGoAnalyzer, diffGoContracts } from "@synapse/analyzer-go";
 import { closePythonAnalyzer, diffPythonContracts } from "@synapse/analyzer-py";
 import { diffTypeScriptContracts, extractTypeScriptContracts } from "@synapse/analyzer-ts";
@@ -19,6 +18,7 @@ import {
   type ResolutionSide
 } from "@synapse/conflict-engine";
 import {
+  applyStateOp,
   createEmptyTeamState,
   createLogger,
   MetricsRegistry,
@@ -76,10 +76,13 @@ import {
   type SummaryProvider
 } from "./explain-openrouter.js";
 import { JsonBodyError, readJson, writeJson } from "./http.js";
+import { resolveWorktreePath } from "./path-safety.js";
 import { startFileWatcher } from "./watcher.js";
 
 export async function startDaemon(config: RuntimeConfig): Promise<void> {
   let teamState = createEmptyTeamState(config.repoId);
+  let hasStateBaseline = false;
+  let lastStateSeq = 0;
   let socket: WebSocket | null = null;
   const log = createLogger("synapse-daemon");
   const metrics = new MetricsRegistry();
@@ -207,8 +210,33 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
       }
 
       const message = parsed.message;
-      if (message.type === "state.snapshot" || message.type === "state.delta") {
+      if (message.type === "state.snapshot") {
         teamState = message.payload.teamState;
+        hasStateBaseline = true;
+        lastStateSeq = message.payload.seq ?? 0;
+      } else if (message.type === "state.delta") {
+        if (!hasStateBaseline || message.payload.repoId !== config.repoId) {
+          metrics.count("synapse_delta_ignored_total");
+          return;
+        }
+        if (message.payload.seq <= lastStateSeq) {
+          metrics.count("synapse_delta_ignored_total");
+          return;
+        }
+        if (message.payload.seq !== lastStateSeq + 1) {
+          metrics.count("synapse_delta_resyncs_total");
+          log.warn("state.delta_gap", {
+            expected: lastStateSeq + 1,
+            actual: message.payload.seq
+          });
+          socket?.close();
+          return;
+        }
+        for (const op of message.payload.ops) {
+          applyStateOp(teamState, op);
+        }
+        lastStateSeq = message.payload.seq;
+        metrics.count("synapse_delta_applied_total");
       }
     });
 
@@ -232,6 +260,8 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
     });
 
     socket.on("close", () => {
+      hasStateBaseline = false;
+      lastStateSeq = 0;
       const ceiling = Math.min(reconnectMaxMs, reconnectBaseMs * 2 ** reconnectAttempt);
       const delayMs = Math.max(50, Math.floor(Math.random() * ceiling));
       reconnectAttempt = Math.min(reconnectAttempt + 1, 16);
@@ -878,7 +908,7 @@ function toProposed(resolution: ContractResolution): ProposedResolution {
 
 async function readFileContext(config: RuntimeConfig, filePath: string): Promise<string | undefined> {
   try {
-    return await readFile(resolve(config.worktreeRoot, filePath), "utf8");
+    return await readFile(await resolveWorktreePath(config.worktreeRoot, filePath), "utf8");
   } catch {
     return undefined;
   }

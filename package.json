@@ -42,6 +42,7 @@
     "verify:rename-tracking": "npm run build && node scripts/verify-rename-tracking.mjs",
     "verify:go-check": "npm run build && npm run setup:analyzer-go && node scripts/verify-go-check.mjs",
     "verify:protocol-compat": "npm run build && node scripts/verify-protocol-compat.mjs",
+    "verify:delta-broadcast": "npm run build && node scripts/verify-delta-broadcast.mjs",
     "verify:security": "npm run build && node scripts/verify-security.mjs",
     "verify:why-rag": "npm run build && node scripts/verify-why-rag.mjs",
     "verify:onboard": "npm run build && node scripts/verify-onboard.mjs",

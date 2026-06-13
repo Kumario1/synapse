@@ -3,11 +3,11 @@ import { z } from "zod";
 // would be a runtime cycle (PROTOCOL_VERSION would still be in its TDZ).
 import type { ClientMessage, ServerMessage } from "./index.js";
 
-// Must equal PROTOCOL_VERSION in index.ts (kept literal to avoid the cycle).
-// Version negotiation happens at the WS handshake (M15, `negotiateProtocolVersion`);
-// by the time a message reaches this schema both sides have agreed on the
-// dialect, so the per-message check stays a strict literal.
-const WIRE_VERSION = 1 as const;
+// Must cover [MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION] in index.ts
+// (kept literal to avoid the cycle). Version negotiation happens at the WS
+// handshake; schemas still accept v1 envelopes so a v2 build can speak to
+// legacy peers on the downgraded dialect.
+const wireVersion = z.union([z.literal(1), z.literal(2)]);
 
 /**
  * Runtime validation for every inbound wire message — the single source shared
@@ -163,10 +163,52 @@ const teamState = z.looseObject({
 });
 
 const envelope = {
-  v: z.literal(WIRE_VERSION),
+  v: wireVersion,
   id: z.string().min(1),
   ts: z.string()
 };
+
+const stateOp = z.discriminatedUnion("op", [
+  z.looseObject({ op: z.literal("upsertSession"), session }),
+  z.looseObject({ op: z.literal("upsertEditLock"), lock: editLock }),
+  z.looseObject({
+    op: z.literal("deleteEditLock"),
+    sessionId: z.string().min(1),
+    symbolRaw: z.string().min(1)
+  }),
+  z.looseObject({
+    op: z.literal("deleteEditLocksForSession"),
+    sessionId: z.string().min(1)
+  }),
+  z.looseObject({ op: z.literal("upsertDelta"), delta: contractDelta }),
+  z.looseObject({ op: z.literal("deleteDelta"), deltaId: z.string().min(1) }),
+  z.looseObject({
+    op: z.literal("appendPush"),
+    push: recentPush,
+    cap: z.number().int().positive()
+  }),
+  z.looseObject({
+    op: z.literal("appendRepoEvent"),
+    event: recentRepoEvent,
+    cap: z.number().int().positive()
+  }),
+  z.looseObject({ op: z.literal("upsertResolution"), resolution: contractResolution }),
+  z.looseObject({
+    op: z.literal("deleteResolution"),
+    symbolRaw: z.string().min(1),
+    inputsHash: z.string().min(1)
+  }),
+  z.looseObject({
+    op: z.literal("appendSummary"),
+    summary: sessionSummary,
+    cap: z.number().int().positive()
+  }),
+  z.looseObject({
+    op: z.literal("appendFeedback"),
+    feedback: conflictFeedback,
+    cap: z.number().int().positive()
+  })
+]);
 
 export const clientMessageSchema = z.discriminatedUnion("type", [
   z.looseObject({
@@ -260,12 +302,16 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   z.looseObject({
     ...envelope,
     type: z.literal("state.snapshot"),
-    payload: z.looseObject({ teamState })
+    payload: z.looseObject({ teamState, seq: z.number().int().nonnegative().optional() })
   }),
   z.looseObject({
     ...envelope,
     type: z.literal("state.delta"),
-    payload: z.looseObject({ teamState })
+    payload: z.looseObject({
+      repoId: z.string().min(1),
+      seq: z.number().int().nonnegative(),
+      ops: z.array(stateOp)
+    })
   }),
   z.looseObject({
     ...envelope,

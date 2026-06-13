@@ -168,7 +168,8 @@ synapse connect --agent cursor,vscode  # or just the ones you use
 This does two things so other agents connect seamlessly and then use Synapse the way it's intended:
 
 1. **Registers the stdio MCP server** in each client's own config — `.cursor/mcp.json`, `.vscode/mcp.json`, `.gemini/settings.json`, and the cross-agent `.mcp.json` — pointing at `synapse mcp`. The adapter resolves its room (repoId, session, daemon port) from `.synapse/config.json`, so there is nothing else to configure.
-2. **Drops rules files that encode the hooks as instructions** — `AGENTS.md`, `.cursor/rules/synapse.mdc`, and `.windsurf/rules/synapse.md` — telling the agent to call `synapse_check` before editing, `synapse_report` after, and `synapse_whatsup` at the start. The MCP server also advertises the same guidance via the protocol-native `instructions` field, so even clients that ignore rules files still receive it.
+2. **Exposes MCP resources for passive context** — `synapse://briefing`, `synapse://team-state`, and `synapse://decisions` — so clients can list/read the current team digest and cited memories without making a tool call. Tools remain the action surface for checks, reports, pushes, feedback, and argument-specific memory searches.
+3. **Drops rules files that encode the hooks as instructions** — `AGENTS.md`, `.cursor/rules/synapse.mdc`, and `.windsurf/rules/synapse.md` — telling the agent to read context resources when available, call `synapse_check` before editing, `synapse_report` after, and use `synapse_whatsup` as the fallback session-start catch-up. The MCP server also advertises the same guidance via the protocol-native `instructions` field, so even clients that ignore rules files still receive it.
 
 Every write is idempotent and preserves your existing content (managed blocks for markdown, key-merge for JSON), so it is safe to re-run.
 
@@ -188,7 +189,7 @@ The CLI binary is `synapse` (`apps/cli/src/index.ts`). In a dev checkout, run an
 | `session` | Start, heartbeat, or end a local session |
 | `whatsup` | Show the daemon's current team-state briefing |
 | `why` | Search Synapse memory with source citations |
-| `mcp` | Run a stdio MCP server forwarding tools to the local daemon |
+| `mcp` | Run a stdio MCP server exposing Synapse tools plus read-only context resources |
 | `connect` | Wire other agents (Cursor, VS Code/Copilot, Gemini CLI, Windsurf, any MCP client) to the MCP server |
 | `join` | Write `.synapse/config.json`, install Claude Code hooks, and `connect` other agents |
 | `up` | join + preflight + start daemon (`--serve` / `--tunnel` for the host) |
@@ -315,7 +316,7 @@ Run with `npm run <script>`. See [`package.json`](package.json) for the complete
 | `verify:whatsup` / `verify:why` / `verify:feedback` | Team briefing; memory search; conflict feedback telemetry |
 | `verify:session-summary` / `verify:session-start` | Layer II session summaries and catch-up briefing |
 | `verify:hooks` | Claude Code `join` + `hook pre`/`hook post` as invoked by Claude Code, including check-before-edit then first post-edit delta reporting |
-| `verify:mcp-adapter` | Stdio MCP adapter forwarding to the daemon |
+| `verify:mcp-adapter` | Stdio MCP adapter tools/resources forwarding to the daemon |
 | `verify:connect` | `synapse connect` wires up every agent (configs + rules), idempotently, and the MCP server advertises hook-equivalent `instructions` |
 | `verify:auth` / `verify:tenancy` | Shared-token and project-key auth paths |
 | `verify:up` / `verify:up-tunnel` / `verify:doctor` | Multi-machine setup, tunnels, and preflight diagnostics |
@@ -326,6 +327,7 @@ Run with `npm run <script>`. See [`package.json`](package.json) for the complete
 | `verify:reconnect` | A delta emitted while the server is down still reaches the team after restart |
 | `verify:metrics` | Structured logs and `/metrics` counters |
 | `verify:protocol-compat` | Handshake version negotiation: legacy accepted, newer downgraded, out-of-range refused with 426 + range headers |
+| `verify:delta-broadcast` | Protocol v2 clients receive `state.delta` after mutations while legacy clients keep receiving snapshots |
 | `verify:security` | WS flood → `rate_limited` acks, state bounded; local daemon JSON 413/400 regressions; webhook 429 past budget; auth-mode server refuses unsigned webhooks (403) until a secret is set, then signed-only |
 | `verify:fuzz` | Seeded malformed-source corpus against all three analyzers: the TS extractor never throws; the Python/Go sidecars answer or reject every request and stay healthy |
 | `verify:why-rag` | Hybrid recall: a question with zero lexical overlap finds the memory through vectors (stub embeddings, advisory-locked pgvector init); the lexical floor alone finds nothing; no provider → `degraded: true`. Needs pgvector (CI image), SKIPs offline |
