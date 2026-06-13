@@ -624,9 +624,10 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
     }
   });
 
-  localServer.listen(config.daemonPort, () => {
+  const daemonHost = process.env.SYNAPSE_DAEMON_HOST ?? "127.0.0.1";
+  localServer.listen(config.daemonPort, daemonHost, () => {
     console.log(
-      `synapse daemon ${config.sessionId} listening on http://localhost:${config.daemonPort}`
+      `synapse daemon ${config.sessionId} listening on http://${daemonHost}:${config.daemonPort}`
     );
   });
 
