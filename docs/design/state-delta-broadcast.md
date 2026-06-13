@@ -2,8 +2,9 @@
 
 > Status: IMPLEMENTED — protocol v2 emits per-entity `state.delta` frames for
 > v2 sockets while v1 sockets and remote fanout continue to receive snapshots.
-> Ground truth: `main` @ `65bc8a3` (post PR #54), 2026-06-11. Every
-> current-behavior claim below cites `file:line` at that commit.
+> Ground truth: `main` @ `2d208ce` (PR #76) with follow-up docs refreshed at
+> `7e9409c`, 2026-06-13. Older line citations below describe the design input;
+> implementation status is verified by `verify:delta-broadcast`.
 
 ## 0. Problem
 
@@ -17,7 +18,7 @@ per client. Cost is O(state × clients × mutations); `plan-future.md` §2
 finding #5 names it the scaling ceiling. The write side was fixed by
 per-entity store ops (M8); this design fixes the broadcast side.
 
-`state.delta` is already reserved in the wire union
+At design time, `state.delta` was already reserved in the wire union
 (`packages/protocol/src/index.ts:644`) with a placeholder full-snapshot
 payload, and the daemon already accepts the type
 (`apps/cli/src/daemon.ts:197` treats it identically to a snapshot).
@@ -218,20 +219,19 @@ Following the existing `metrics.count` idiom (`apps/server/src/index.ts`):
 - Full regression: `verify:reconnect`, `verify:protocol-compat`,
   `verify:multi-instance` unchanged and green.
 
-## 9. Rollout
+## 9. Rollout Status
 
-1. **Plan A (protocol + server + client):** v2 bump, `StateOp` +
-   `applyStateOp` + equivalence property test in `@synapse/protocol`;
-   server op-tee + per-socket broadcast switch + seq; daemon apply path;
-   `SYNAPSE_DELTA_BROADCAST=0` kill switch; `verify-delta-broadcast.mjs`.
-   Single PR-sized, no migration (additive negotiation).
-2. **Plan B (observability + soak):** size histograms, resync counters,
-   README/protocol docs; run the two-agent demo + multi-instance verify in
-   a loop to soak the gap path.
-3. **Phase 2 (separate owner decision):** Redis op relay (§4) once
-   delta traffic dominates and multi-instance deployments are real.
+Plan A shipped in PR #76: protocol v2, `StateOp`, `applyStateOp`, server
+op capture, per-socket delta-vs-snapshot broadcast, daemon apply/gap handling,
+the `SYNAPSE_DELTA_BROADCAST=0` kill switch, and
+`scripts/verify-delta-broadcast.mjs`.
 
-## 10. Open questions for the owner
+The current implementation intentionally keeps remote multi-instance fanout on
+snapshots as described in §4. Phase 2 Redis op relay remains a separate owner
+decision once multi-instance delta traffic is worth the extra Redis message
+contract.
+
+## 10. Remaining Owner Questions
 
 1. Is per-socket dual serialization (one delta + one snapshot per
    broadcast in mixed rooms) acceptable until v1 clients age out, or
