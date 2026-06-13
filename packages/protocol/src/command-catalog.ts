@@ -7,6 +7,8 @@
  *  - the deterministic analysis floor's rule-appropriate command
  *    suggestions (no LLM key required);
  *  - the Claude Code hook output's "→ run: <cli>" rendering, via `usage`.
+ *  - the agent guidance in `apps/cli/src/connect.ts`, so rules files,
+ *    AGENTS.md, and MCP `instructions` carry the same command reference.
  *
  * Synapse only ever SUGGESTS these commands — nothing here executes them.
  * When a new MCP tool ships, add its entry here in the same PR.
@@ -106,5 +108,23 @@ export function renderCommandCatalogForPrompt(): string {
   return SYNAPSE_COMMAND_CATALOG.map((entry) => {
     const args = entry.args.map((arg) => arg.name).join(", ");
     return `${entry.tool}(${args}): ${entry.when}`;
+  }).join("\n");
+}
+
+/**
+ * Markdown command reference for agent-facing guidance (rules files, AGENTS.md,
+ * MCP `instructions`). One bullet per tool: MCP name, CLI form, when to reach
+ * for it, and argument hints. Deriving the on-disk guidance from the catalog
+ * keeps the two from drifting — a new catalog entry ships in every rules file
+ * automatically.
+ */
+export function renderCommandCatalogMarkdown(): string {
+  return SYNAPSE_COMMAND_CATALOG.map((entry) => {
+    const args = entry.args.length
+      ? ` Args: ${entry.args
+          .map((arg) => `${arg.name}${arg.required ? "" : " (optional)"} — ${arg.hint}`)
+          .join("; ")}.`
+      : "";
+    return `- \`${entry.tool}\` (CLI: \`${entry.usage}\`) — ${entry.when}${args}`;
   }).join("\n");
 }
