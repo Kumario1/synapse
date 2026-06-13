@@ -5,6 +5,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type {
   SynapseCheckRequest,
   SynapseFeedbackRequest,
+  SynapseInsightsRequest,
   SynapseOnboardRequest,
   SynapsePushRequest,
   SynapseReportRequest,
@@ -175,6 +176,33 @@ export async function runMcp(rawArgs: string[]): Promise<void> {
       };
 
       return jsonResult(await daemonPost(args.port ?? defaultPort, "synapse_feedback", request));
+    }
+  );
+
+  server.registerTool(
+    "synapse_insights",
+    {
+      title: "Show Synapse Coordination Insights",
+      description:
+        "Return local aggregate coordination insights from the daemon: feedback outcomes, noisy rules, active sessions, unpushed deltas, and edit locks. Does not expose raw code.",
+      inputSchema: {
+        ...commonShape,
+        limit: z.number().int().positive().max(20).optional()
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true
+      }
+    },
+    async (args) => {
+      const request: SynapseInsightsRequest = {
+        repoId: args.repoId ?? defaultRepoId,
+        sessionId: args.sessionId ?? defaultSessionId,
+        limit: args.limit
+      };
+
+      return jsonResult(await daemonPost(args.port ?? defaultPort, "synapse_insights", request));
     }
   );
 

@@ -183,6 +183,7 @@ The CLI binary is `synapse` (`apps/cli/src/index.ts`). In a dev checkout, run an
 | `report` | Call the local `synapse_report` endpoint |
 | `push` | Notify Synapse that files were pushed |
 | `feedback` | Record acted/dismissed feedback for a conflict warning |
+| `insights` | Show local aggregate coordination insights |
 | `session` | Start, heartbeat, or end a local session |
 | `whatsup` | Show the daemon's current team-state briefing |
 | `why` | Search Synapse memory with source citations |
@@ -309,7 +310,7 @@ Run with `npm run <script>`. See [`package.json`](package.json) for the complete
 | `verify:tsx-check` | React-shaped repos: default-exported `.tsx` component props change → symbol delta + `dependency_changed` for the importing component; `.mjs` modules join the same graph |
 | `verify:contract-compat` / `verify:resolution` | Compatibility classification; merged-contract resolution |
 | `verify:hot-path-latency` / `verify:large-repo-latency` / `verify:repo-latency` | Pre-edit hot-path latency budgets (p95 ≤ 50ms, max ≤ 150ms) |
-| `verify:whatsup` / `verify:why` / `verify:feedback` | Team briefing; memory search; conflict feedback telemetry |
+| `verify:whatsup` / `verify:why` / `verify:feedback` / `verify:insights` | Team briefing; memory search; conflict feedback telemetry; local aggregate coordination insights |
 | `verify:session-summary` / `verify:session-start` | Layer II session summaries and catch-up briefing |
 | `verify:hooks` | Claude Code `join` + `hook pre`/`hook post` as invoked by Claude Code, including check-before-edit then first post-edit delta reporting |
 | `verify:mcp-adapter` | Stdio MCP adapter forwarding to the daemon |
