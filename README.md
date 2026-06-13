@@ -101,6 +101,8 @@ SYNAPSE_AUTH_TOKEN=<token> synapse up
 
 `synapse doctor` diagnoses a setup without starting anything (resolved identity, server reachability, auth vs. unreachable, protocol version, live peers).
 
+By default, local Synapse daemons and servers bind only to loopback (`127.0.0.1`). Set `SYNAPSE_DAEMON_HOST` or `SYNAPSE_SERVER_HOST` explicitly when you intentionally need a LAN/public listener, for example `SYNAPSE_SERVER_HOST=0.0.0.0` in a container or VM.
+
 ---
 
 ## Try it: see a conflict (two-agent demo)
