@@ -19,7 +19,7 @@ import {
 import { WebSocket, WebSocketServer } from "ws";
 import { createEmbeddingProvider } from "./embeddings.js";
 import { gitHubPushToNotify, gitHubRepoEventToNotify } from "./github.js";
-import { applyMessage, pruneExpiredLocks, repoIdFor } from "./state.js";
+import { applyMessage, pruneExpiredLocks, pruneStaleSessions, repoIdFor } from "./state.js";
 import { createStateStore } from "./store.js";
 
 const port = Number(process.env.SYNAPSE_SERVER_PORT ?? 4010);
@@ -593,6 +593,7 @@ async function getState(repoId: string): Promise<TeamState> {
   }
 
   pruneExpiredLocks(state, store);
+  pruneStaleSessions(state, store);
   return state;
 }
 
