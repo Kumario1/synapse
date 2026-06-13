@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { after, test } from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   closeGoAnalyzer,
   diffGoContracts,
@@ -14,7 +17,19 @@ import {
 // The suite needs the built sidecar (scripts/setup-go.mjs, run by `npm test`).
 // Without a Go toolchain the setup script no-ops, the sidecar is unavailable,
 // and every behavior test skips — mirroring the daemon's file-level fallback.
+// With Go installed, setup/build failures must be visible.
+const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+const binaryPath = join(
+  packageRoot,
+  "bin",
+  process.platform === "win32" ? "synapse-analyzer-go.exe" : "synapse-analyzer-go"
+);
 const available = await goAnalyzerAvailable();
+const hasGoToolchain = spawnSync("go", ["version"], { stdio: "ignore" }).status === 0;
+assert.ok(
+  (!hasGoToolchain && !existsSync(binaryPath)) || available,
+  "Go analyzer sidecar must be available when Go is installed or the binary exists"
+);
 
 after(() => {
   closeGoAnalyzer();
