@@ -35,6 +35,7 @@ export interface StateStoreOps {
   deleteEditLocksForSession(repoId: string, sessionId: string): void;
   upsertDelta(repoId: string, delta: ContractDelta): void;
   deleteDelta(repoId: string, deltaId: string): void;
+  deleteSession(repoId: string, sessionId: string): void;
   appendPush(repoId: string, push: RecentPush, cap: number): void;
   appendRepoEvent(repoId: string, event: RecentRepoEvent, cap: number): void;
   /** Replaces any prior resolution for the symbol (at most one per symbol). */
@@ -65,6 +66,7 @@ export const noopStateStore: StateStoreOps = {
   deleteEditLocksForSession: () => {},
   upsertDelta: () => {},
   deleteDelta: () => {},
+  deleteSession: () => {},
   appendPush: () => {},
   appendRepoEvent: () => {},
   upsertResolution: () => {},
@@ -154,6 +156,10 @@ export class SqliteStateStore implements StateStore {
 
   deleteDelta(repoId: string, deltaId: string): void {
     this.db.prepare("DELETE FROM deltas WHERE repo_id = ? AND id = ?").run(repoId, deltaId);
+  }
+
+  deleteSession(repoId: string, sessionId: string): void {
+    this.db.prepare("DELETE FROM sessions WHERE repo_id = ? AND id = ?").run(repoId, sessionId);
   }
 
   appendPush(repoId: string, push: RecentPush, cap: number): void {
