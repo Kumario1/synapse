@@ -301,6 +301,25 @@ test("session.heartbeat without a branch preserves the known branch", () => {
   assert.equal(state.sessions[0].branch, "main");
 });
 
+test("session.heartbeat with a task sets lastTask", () => {
+  const state = createEmptyTeamState("local");
+  applyMessage(state, "local", sessionStartMessage("alice", "main"));
+
+  applyMessage(state, "local", heartbeatMessage("alice", undefined, "add JWT refresh"));
+
+  assert.equal(state.sessions[0].lastTask, "add JWT refresh");
+});
+
+test("session.heartbeat without a task preserves the known lastTask", () => {
+  const state = createEmptyTeamState("local");
+  applyMessage(state, "local", sessionStartMessage("alice", "main"));
+  applyMessage(state, "local", heartbeatMessage("alice", undefined, "add JWT refresh"));
+
+  applyMessage(state, "local", heartbeatMessage("alice"));
+
+  assert.equal(state.sessions[0].lastTask, "add JWT refresh");
+});
+
 function sessionStartMessage(sessionId: string, branch?: string): ClientMessage {
   return {
     v: PROTOCOL_VERSION,
@@ -326,13 +345,18 @@ function sessionStartMessage(sessionId: string, branch?: string): ClientMessage 
   };
 }
 
-function heartbeatMessage(sessionId: string, branch?: string): ClientMessage {
+function heartbeatMessage(sessionId: string, branch?: string, task?: string): ClientMessage {
   return {
     v: PROTOCOL_VERSION,
     type: "session.heartbeat",
-    id: `hb-${sessionId}-${branch ?? "none"}`,
+    id: `hb-${sessionId}-${branch ?? "none"}-${task ?? "none"}`,
     ts: now,
-    payload: { repoId: "local", sessionId, ...(branch ? { branch } : {}) }
+    payload: {
+      repoId: "local",
+      sessionId,
+      ...(branch ? { branch } : {}),
+      ...(task ? { task } : {})
+    }
   };
 }
 

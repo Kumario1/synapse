@@ -222,7 +222,8 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
     payload: z.looseObject({
       repoId: z.string().min(1),
       sessionId: z.string().min(1),
-      branch: z.string().min(1).optional()
+      branch: z.string().min(1).optional(),
+      task: z.string().min(1).optional()
     })
   }),
   z.looseObject({

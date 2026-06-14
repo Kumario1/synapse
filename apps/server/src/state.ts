@@ -55,7 +55,15 @@ export function applyMessage(
       });
       break;
     case "session.heartbeat":
-      touchSession(state, repoId, store, message.payload.sessionId, now, message.payload.branch);
+      touchSession(
+        state,
+        repoId,
+        store,
+        message.payload.sessionId,
+        now,
+        message.payload.branch,
+        message.payload.task
+      );
       break;
     case "session.end":
       endSession(state, repoId, store, message.payload.sessionId, now);
@@ -234,7 +242,8 @@ function touchSession(
   store: StateStoreOps,
   sessionId: string,
   now: string,
-  branch?: string
+  branch?: string,
+  task?: string
 ): void {
   const session = state.sessions.find((candidate) => candidate.id === sessionId);
   if (session) {
@@ -246,6 +255,12 @@ function touchSession(
     // and keep the last known value (never clear on absence).
     if (branch) {
       session.branch = branch;
+    }
+    // Same preserve-on-omit rule as branch: a heartbeat with a task records
+    // the developer's current intent (plan 033); one without leaves the
+    // session's last known task untouched.
+    if (task) {
+      session.lastTask = task;
     }
     store.upsertSession(repoId, session);
   }
