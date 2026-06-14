@@ -715,7 +715,10 @@ export interface WireEnvelope<TType extends string = string, TPayload = unknown>
 
 export type ClientMessage =
   | WireEnvelope<"session.start", { session: Session }>
-  | WireEnvelope<"session.heartbeat", { repoId: string; sessionId: string; branch?: string }>
+  | WireEnvelope<
+      "session.heartbeat",
+      { repoId: string; sessionId: string; branch?: string; task?: string }
+    >
   | WireEnvelope<"session.end", { repoId: string; sessionId: string }>
   | WireEnvelope<
       "edit.intent",

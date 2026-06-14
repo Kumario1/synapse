@@ -54,8 +54,13 @@ try {
   const settings = JSON.parse(await readFile(join(joinRoot, ".claude/settings.json"), "utf8"));
   const preCmd = settings.hooks.PreToolUse.flatMap((g) => g.hooks).map((h) => h.command);
   const postCmd = settings.hooks.PostToolUse.flatMap((g) => g.hooks).map((h) => h.command);
+  const promptCmd = settings.hooks.UserPromptSubmit.flatMap((g) => g.hooks).map((h) => h.command);
   assert.ok(preCmd.some((c) => c.includes("hook pre")), "join installed a PreToolUse hook");
   assert.ok(postCmd.some((c) => c.includes("hook post")), "join installed a PostToolUse hook");
+  assert.ok(
+    promptCmd.some((c) => c.includes("hook user-prompt")),
+    "join installed a UserPromptSubmit hook"
+  );
   assert.ok(
     settings.hooks.PreToolUse.some((g) => g.matcher === "Edit|Write|MultiEdit"),
     "hook matches Edit|Write|MultiEdit"
@@ -139,10 +144,23 @@ try {
     8000
   );
 
+  // --- Phase 4: `hook user-prompt` records the developer's prompt as lastTask. ---
+  const prompt = "add JWT refresh to auth";
+  const promptOut = await runUserPromptHookStage(bobRoot, prompt);
+  assert.equal(promptOut, null, "hook user-prompt never writes to stdout");
+  await waitForState(serverPort, (s) =>
+    s.sessions.some((session) => session.id === "bob" && session.lastTask === prompt)
+  );
+
   console.log("Hook verification passed:");
   console.log(
     JSON.stringify(
-      { join: "ok", pre: preOut, post: "reported extra.ts and preseed.ts deltas" },
+      {
+        join: "ok",
+        pre: preOut,
+        post: "reported extra.ts and preseed.ts deltas",
+        userPrompt: `lastTask set to "${prompt}"`
+      },
       null,
       2
     )
@@ -225,6 +243,37 @@ function runHookStage(stage, worktreeRoot, absFilePath) {
         tool_name: "Edit",
         cwd: worktreeRoot,
         tool_input: { file_path: absFilePath }
+      })
+    );
+  });
+}
+
+/** Invoke `synapse hook user-prompt` exactly as Claude Code does: hook JSON on stdin. */
+function runUserPromptHookStage(worktreeRoot, prompt) {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(process.execPath, [cli, "hook", "user-prompt"], {
+      cwd: worktreeRoot,
+      env: { ...process.env, INIT_CWD: worktreeRoot },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (c) => (stdout += c));
+    child.stderr.on("data", (c) => (stderr += c));
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code !== 0) {
+        reject(new Error(`hook user-prompt exited ${code}: ${stderr}`));
+        return;
+      }
+      const trimmed = stdout.trim();
+      resolvePromise(trimmed ? JSON.parse(trimmed) : null);
+    });
+    child.stdin.end(
+      JSON.stringify({
+        hook_event_name: "UserPromptSubmit",
+        cwd: worktreeRoot,
+        prompt
       })
     );
   });
