@@ -41,12 +41,26 @@ try {
   assert.equal(current.headers["x-synapse-protocol-min"], String(health.minProtocolVersion));
   const currentSnapshot = await current.firstMessage;
   assert.equal(currentSnapshot.type, "state.snapshot", "current client gets the snapshot");
+  assert.equal(currentSnapshot.v, 2, "current client gets v2 envelopes");
   current.socket.close();
 
   // 2. A legacy client (no announcement at all) still connects as v1.
   const legacy = await openSocket(`ws://localhost:${serverPort}?repoId=local`);
   const legacySnapshot = await legacy.firstMessage;
   assert.equal(legacySnapshot.type, "state.snapshot", "legacy client still connects (assumed v1)");
+  assert.equal(legacySnapshot.v, 1, "legacy client gets v1 snapshots");
+  legacy.socket.send(
+    JSON.stringify({
+      v: 1,
+      type: "query.briefing",
+      id: "legacy-query-1",
+      ts: new Date().toISOString(),
+      payload: { repoId: "local" }
+    })
+  );
+  const legacyAck = await readMessage(legacy.socket);
+  assert.equal(legacyAck.type, "ack", "legacy client gets an ack");
+  assert.equal(legacyAck.v, 1, "legacy client gets v1 acks");
   legacy.socket.close();
 
   // 3. A newer client downgrades gracefully: accepted, served the server's
@@ -79,6 +93,12 @@ try {
   );
 } finally {
   await stopChildren();
+}
+
+function readMessage(socket) {
+  return new Promise((resolve) => {
+    socket.once("message", (data) => resolve(JSON.parse(data.toString())));
+  });
 }
 
 function openSocket(url) {

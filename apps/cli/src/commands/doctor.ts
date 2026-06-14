@@ -113,17 +113,52 @@ function httpFromWs(serverUrl: string): string {
 }
 
 async function probeHealth(url: string): Promise<{ check: DoctorCheck; body: unknown | null }> {
+  let lastFetchFailure: unknown = null;
+  const deadline = Date.now() + 5000;
+
+  while (Date.now() < deadline) {
+    const result = await probeHealthOnce(url, Math.min(1000, Math.max(100, deadline - Date.now())));
+    if (result.check.status === "pass" || result.responseFailed) {
+      return { check: result.check, body: result.body };
+    }
+    lastFetchFailure = result.error;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  return {
+    check: {
+      name: "server",
+      status: "fail",
+      detail: lastFetchFailure ? describeFetchError(url, lastFetchFailure) : `${url} timed out — server unreachable (NAT/tunnel down?).`
+    },
+    body: null
+  };
+}
+
+async function probeHealthOnce(
+  url: string,
+  timeoutMs: number
+): Promise<{ check: DoctorCheck; body: unknown | null; responseFailed: boolean; error?: unknown }> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, { signal: controller.signal });
     if (!response.ok) {
-      return { check: { name: "server", status: "fail", detail: `GET ${url} → HTTP ${response.status}` }, body: null };
+      return {
+        check: { name: "server", status: "fail", detail: `GET ${url} → HTTP ${response.status}` },
+        body: null,
+        responseFailed: true
+      };
     }
     const body = await response.json().catch(() => null);
-    return { check: { name: "server", status: "pass", detail: `reachable at ${url}` }, body };
+    return { check: { name: "server", status: "pass", detail: `reachable at ${url}` }, body, responseFailed: false };
   } catch (error) {
-    return { check: { name: "server", status: "fail", detail: describeFetchError(url, error) }, body: null };
+    return {
+      check: { name: "server", status: "fail", detail: describeFetchError(url, error) },
+      body: null,
+      responseFailed: false,
+      error
+    };
   } finally {
     clearTimeout(timer);
   }
@@ -240,4 +275,3 @@ function describeWsError(error: unknown): string {
   }
   return `WS handshake failed: ${message}`;
 }
-

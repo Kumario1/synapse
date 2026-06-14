@@ -3,9 +3,10 @@
 // setup-venv.mjs. Idempotent: a stamp file records the hash of the Go sources,
 // so repeat runs are a no-op until they change.
 //
-// Exits 0 and prints a warning — never throws — when no Go toolchain is
-// available, so the daemon can still start and degrade to file-level
-// detection for .go files.
+// Exits 0 and prints a warning when no Go toolchain is available, so the
+// daemon can still start and degrade to file-level detection for .go files.
+// When Go is available, build failures are real failures unless explicitly
+// opted out for local development with SYNAPSE_ANALYZER_GO_OPTIONAL=1.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -63,8 +64,16 @@ const build = spawnSync("go", ["build", "-o", binaryPath, "."], {
 });
 
 if (build.status !== 0) {
-  log("go build failed; .go files will use file-level detection until it succeeds.");
-  process.exit(0);
+  if (process.env.SYNAPSE_ANALYZER_GO_OPTIONAL === "1") {
+    log(
+      "go build failed; continuing because SYNAPSE_ANALYZER_GO_OPTIONAL=1. .go files will use file-level detection until it succeeds."
+    );
+    process.exit(0);
+  }
+  log(
+    "go build failed; failing because Go is installed. Set SYNAPSE_ANALYZER_GO_OPTIONAL=1 to keep local fallback behavior."
+  );
+  process.exit(build.status ?? 1);
 }
 
 writeFileSync(stampPath, `${hash}\n`);

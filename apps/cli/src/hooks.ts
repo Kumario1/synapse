@@ -14,7 +14,7 @@ import {
 import { postJson } from "./http.js";
 
 /** The shell command Claude Code runs for a given hook stage. */
-function hookCommand(stage: "pre" | "post" | "session-start"): string {
+function hookCommand(stage: "pre" | "post" | "session-start" | "user-prompt"): string {
   return `node "${cliEntrypoint()}" hook ${stage}`;
 }
 
@@ -51,6 +51,11 @@ export async function installClaudeCodeHooks(repoDir: string): Promise<void> {
       startMatcher,
       hookCommand("session-start"),
       "session-start"
+    ),
+    UserPromptSubmit: withSynapseHookNoMatcher(
+      hooks.UserPromptSubmit,
+      hookCommand("user-prompt"),
+      "user-prompt"
     )
   };
 
@@ -97,6 +102,46 @@ function cloneEntry(entry: HookEntry): HookEntry {
   return { ...entry, hooks: entry.hooks ? entry.hooks.map((hook) => ({ ...hook })) : undefined };
 }
 
+interface NoMatcherHookEntry {
+  hooks?: { type: string; command: string }[];
+}
+
+/**
+ * Like {@link withSynapseHook}, but for events that take no `matcher`
+ * (`UserPromptSubmit`): a single group of `{ hooks: [...] }`. Idempotent —
+ * identifies our command for this stage, drops prior copies (handles a moved
+ * CLI path), and preserves any other non-Synapse hooks for the event.
+ */
+function withSynapseHookNoMatcher(
+  existing: unknown,
+  command: string,
+  stage: "user-prompt"
+): NoMatcherHookEntry[] {
+  const groups: NoMatcherHookEntry[] = Array.isArray(existing)
+    ? (existing as NoMatcherHookEntry[]).map((entry) => ({
+        ...entry,
+        hooks: entry.hooks ? entry.hooks.map((hook) => ({ ...hook })) : undefined
+      }))
+    : [];
+
+  // Identify our command for this stage regardless of the embedded absolute path.
+  const isOurStage = (value: string): boolean => new RegExp(`\\bhook ${stage}\\b`, "u").test(value);
+
+  let group = groups[0];
+  if (!group) {
+    group = { hooks: [] };
+    groups.push(group);
+  }
+  group.hooks ??= [];
+
+  // Drop any prior Synapse command for this stage, then add the current one.
+  // Non-Synapse hooks are untouched.
+  group.hooks = group.hooks.filter((hook) => !isOurStage(hook.command));
+  group.hooks.push({ type: "command", command });
+
+  return groups;
+}
+
 /**
  * Claude Code hook entrypoint. Invoked by `.claude/settings.json` before
  * (`pre`) and after (`post`) Edit/Write/MultiEdit. Reads the hook JSON on
@@ -113,6 +158,11 @@ export async function runHook(rawArgs: string[]): Promise<void> {
 
     if (stage === "session-start") {
       await runSessionStartHook(baseUrl, defaults);
+      return;
+    }
+
+    if (stage === "user-prompt") {
+      await runUserPromptHook(baseUrl, defaults, input);
       return;
     }
 
@@ -144,12 +194,15 @@ export async function runHook(rawArgs: string[]): Promise<void> {
   }
 }
 
-function hookStage(value: string | undefined): "pre" | "post" | "session-start" {
+function hookStage(value: string | undefined): "pre" | "post" | "session-start" | "user-prompt" {
   if (value === "post") {
     return "post";
   }
   if (value === "session-start") {
     return "session-start";
+  }
+  if (value === "user-prompt") {
+    return "user-prompt";
   }
   return "pre";
 }
@@ -182,6 +235,32 @@ async function runSessionStartHook(
       hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: context }
     })}\n`
   );
+}
+
+/**
+ * UserPromptSubmit hook: record the developer's prompt as this session's task so
+ * teammates' briefings describe intent, not just file churn. Best-effort and
+ * silent — never writes to stdout (the prompt proceeds unchanged) and never
+ * throws. SYNAPSE_TASK_CAPTURE=0 disables it.
+ */
+async function runUserPromptHook(
+  baseUrl: string,
+  defaults: { repoId: string; sessionId: string },
+  input: HookInput
+): Promise<void> {
+  if (process.env.SYNAPSE_TASK_CAPTURE === "0") {
+    return;
+  }
+  const task = (input.prompt ?? "").replace(/\s+/gu, " ").trim().slice(0, 200);
+  if (!task) {
+    return;
+  }
+  await postJson(`${baseUrl}/tools/synapse_session`, {
+    repoId: defaults.repoId,
+    sessionId: defaults.sessionId,
+    action: "heartbeat",
+    task
+  }).catch(() => undefined);
 }
 
 /**
@@ -277,6 +356,7 @@ interface HookInput {
   toolName?: string;
   cwd?: string;
   toolInput?: { file_path?: unknown };
+  prompt?: string;
 }
 
 function parseHookInput(raw: string): HookInput {
@@ -288,7 +368,8 @@ function parseHookInput(raw: string): HookInput {
   return {
     toolName: typeof parsed.tool_name === "string" ? parsed.tool_name : undefined,
     cwd: typeof parsed.cwd === "string" ? parsed.cwd : undefined,
-    toolInput: toolInput as HookInput["toolInput"]
+    toolInput: toolInput as HookInput["toolInput"],
+    prompt: typeof parsed.prompt === "string" ? parsed.prompt : undefined
   };
 }
 

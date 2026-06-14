@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHmac } from "node:crypto";
 import { once } from "node:events";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -8,19 +8,27 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Hermetic: pin the coordination room so git-remote derivation does not pick up the host repo.
 process.env.SYNAPSE_REPO_ID ??= "local";
+process.env.SYNAPSE_FILE_WATCHER ??= "0";
+
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const cli = join(rootDir, "apps/cli/dist/index.js");
 const children = [];
 
 const serverPort = await freePort();
+const alicePort = await freePort();
 const bobPort = await freePort();
-const bobRoot = await mkdtemp(join(tmpdir(), "synapse-gh-brief-bob-"));
-const webhookSecret = "synapse-github-briefing-secret";
+const aliceRoot = await mkdtemp(join(tmpdir(), "synapse-pr-brief-alice-"));
+const bobRoot = await mkdtemp(join(tmpdir(), "synapse-pr-brief-bob-"));
+const webhookSecret = "synapse-pr-brief-secret";
+const branch = "feature/pr-brief";
+const filePath = "src/billing/ledger.ts";
+const symbol = "ts:src/billing/ledger.ts#LedgerWriter.commit";
 
 try {
-  await writeLocalConfig(bobRoot, bobPort, "bob");
+  initGitBranch(aliceRoot, branch);
+  initGitBranch(bobRoot, branch);
+  await writeLocalConfig(bobRoot, bobPort, "bob", bobRoot);
 
   startProcess("server", ["apps/server/dist/index.js"], rootDir, {
     SYNAPSE_SERVER_PORT: String(serverPort),
@@ -28,29 +36,35 @@ try {
   });
   await waitForHttp(`http://localhost:${serverPort}/health`);
 
-  startProcess(
-    "bob",
-    [
-      "apps/cli/dist/index.js",
-      "daemon",
-      "--member",
-      "bob",
-      "--session",
-      "bob",
-      "--port",
-      String(bobPort),
-      "--server",
-      `ws://localhost:${serverPort}`,
-      "--worktree-root",
-      bobRoot
-    ],
-    rootDir,
-    {}
-  );
-  await waitForHttp(`http://localhost:${bobPort}/health`);
-  await waitForState(serverPort, (state) => state.sessions.length === 1);
+  startDaemon("alice", alicePort, aliceRoot);
+  startDaemon("bob", bobPort, bobRoot);
+  await Promise.all([
+    waitForHttp(`http://localhost:${alicePort}/health`),
+    waitForHttp(`http://localhost:${bobPort}/health`)
+  ]);
+  await waitForState(serverPort, (state) => state.sessions.length === 2);
 
-  const pr = await postGitHub("pull_request", {
+  await postJson(`http://localhost:${alicePort}/tools/synapse_report`, {
+    repoId: "local",
+    sessionId: "alice",
+    filePath,
+    symbolId: { raw: symbol },
+    changeKind: "signature_changed",
+    summary: "LedgerWriter.commit now returns a durable receipt id",
+    baseSha: "base-pr-brief"
+  });
+  await waitForState(serverPort, (state) => state.unpushedDeltas.length === 1);
+
+  await postJson(`http://localhost:${alicePort}/tools/synapse_push`, {
+    repoId: "local",
+    sessionId: "alice",
+    sha: "push-pr-brief",
+    summary: "Pushed docs for billing ledger rollout",
+    files: ["docs/billing-ledger.md"],
+    symbols: [{ raw: "ts:src/billing/docs.ts#BillingDocs" }]
+  });
+
+  await postGitHub("pull_request", {
     action: "opened",
     repository: { full_name: "local" },
     sender: { login: "alice" },
@@ -61,15 +75,7 @@ try {
       merged: false
     }
   });
-  assert.deepEqual(pr, {
-    ok: true,
-    repoId: "local",
-    event: "pull_request",
-    kind: "pull_request",
-    action: "opened"
-  });
-
-  const review = await postGitHub("pull_request_review", {
+  await postGitHub("pull_request_review", {
     action: "submitted",
     repository: { full_name: "local" },
     sender: { login: "carol" },
@@ -79,14 +85,12 @@ try {
       html_url: "https://github.com/acme/widgets/pull/42"
     },
     review: {
-      state: "approved",
+      state: "changes_requested",
+      body: "Please keep ledger receipts stable for retry handling.",
       html_url: "https://github.com/acme/widgets/pull/42#pullrequestreview-1"
     }
   });
-  assert.equal(review.kind, "pull_request_review");
-  assert.equal(review.action, "approved");
-
-  const comment = await postGitHub("issue_comment", {
+  await postGitHub("issue_comment", {
     action: "created",
     repository: { full_name: "local" },
     sender: { login: "dana" },
@@ -97,49 +101,60 @@ try {
       pull_request: {}
     },
     comment: {
+      body: "Coordinate rollout with billing migrations.",
       html_url: "https://github.com/acme/widgets/pull/42#issuecomment-1"
     }
   });
-  assert.equal(comment.kind, "issue_comment");
-  assert.equal(comment.action, "created");
 
-  const ignored = await postGitHub("ping", { repository: { full_name: "local" } });
-  assert.deepEqual(ignored, { ok: true, ignored: true, event: "ping" });
+  await waitForDaemonState(
+    bobPort,
+    (state) =>
+      state.unpushedDeltas.length === 1 &&
+      state.recentPushes.length === 1 &&
+      state.recentRepoEvents.length === 3
+  );
 
-  const state = await waitForState(serverPort, (candidate) => candidate.recentRepoEvents.length === 3);
-  assertSummaries(state.recentRepoEvents);
+  const markdown = runCli([
+    "pr-brief",
+    "--port",
+    String(bobPort),
+    "--base",
+    "main",
+    "--head",
+    branch
+  ]);
+  assert.ok(markdown.includes("# Synapse PR brief"));
+  assert.ok(markdown.includes(`Head: ${branch}`));
+  assert.ok(markdown.includes("LedgerWriter.commit now returns a durable receipt id"));
+  assert.ok(markdown.includes("GitHub PR #42 opened: Add billing ledger"));
+  assert.ok(markdown.includes("GitHub review changes_requested on PR #42: Add billing ledger"));
+  assert.ok(markdown.includes("GitHub comment created on PR #42: Add billing ledger"));
+  assert.ok(markdown.includes("Pushed docs for billing ledger rollout"));
+  assert.ok(markdown.includes("## Cited context"));
+  assert.ok(markdown.includes("[#42]") || markdown.includes(symbol));
 
-  await waitForDaemonState(bobPort, (candidate) => candidate.recentRepoEvents.length === 3);
+  const json = JSON.parse(runCli(["pr-brief", "--port", String(bobPort), "--head", branch, "--json"]));
+  assert.equal(json.base, "main");
+  assert.equal(json.head, branch);
+  assert.equal(json.sections.unpushedDeltas[0].symbolId.raw, symbol);
+  assert.equal(json.sections.recentRepoEvents.length, 3);
 
-  const briefing = await postJson(`http://localhost:${bobPort}/tools/synapse_whatsup`, {
-    repoId: "local",
-    sessionId: "bob"
-  });
-  assert.equal(briefing.recentRepoEvents.length, 3);
-  assert.ok(briefing.summary.some((line) => line.includes("3 GitHub repo events")));
-  assertSummaries(briefing.recentRepoEvents);
-
-  const out = await runSessionStartHook(bobRoot);
-  assert.ok(out, "session-start hook emitted a briefing");
-  const context = out.hookSpecificOutput.additionalContext;
-  assert.equal(out.hookSpecificOutput.hookEventName, "SessionStart");
-  assert.ok(context.includes("Recent GitHub activity"));
-  assert.ok(context.includes("GitHub PR #42 opened: Add billing ledger"));
-  assert.ok(context.includes("GitHub review approved on PR #42: Add billing ledger"));
-  assert.ok(context.includes("GitHub comment created on PR #42: Add billing ledger"));
-
-  console.log("GitHub briefing verification passed:");
-  console.log(JSON.stringify({ state: state.recentRepoEvents, briefing, sessionStart: context }, null, 2));
+  console.log("PR brief verification passed:");
+  console.log(markdown);
 } finally {
   await stopChildren();
+  await rm(aliceRoot, { recursive: true, force: true });
   await rm(bobRoot, { recursive: true, force: true });
 }
 
-function assertSummaries(events) {
-  const summaries = events.map((event) => event.summary);
-  assert.ok(summaries.includes("GitHub PR #42 opened: Add billing ledger"));
-  assert.ok(summaries.includes("GitHub review approved on PR #42: Add billing ledger"));
-  assert.ok(summaries.includes("GitHub comment created on PR #42: Add billing ledger"));
+function initGitBranch(worktreeRoot, branchName) {
+  runGit(["init"], worktreeRoot);
+  runGit(["checkout", "-b", branchName], worktreeRoot);
+}
+
+function runGit(args, cwd) {
+  const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
 }
 
 async function writeLocalConfig(worktreeRoot, port, sessionId) {
@@ -151,6 +166,28 @@ async function writeLocalConfig(worktreeRoot, port, sessionId) {
       null,
       2
     )
+  );
+}
+
+function startDaemon(member, port, worktreeRoot) {
+  return startProcess(
+    member,
+    [
+      "apps/cli/dist/index.js",
+      "daemon",
+      "--member",
+      member,
+      "--session",
+      member,
+      "--port",
+      String(port),
+      "--server",
+      `ws://localhost:${serverPort}`,
+      "--worktree-root",
+      worktreeRoot
+    ],
+    rootDir,
+    {}
   );
 }
 
@@ -167,31 +204,15 @@ function signedGitHubHeaders(body) {
   return { "x-hub-signature-256": `sha256=${signature}` };
 }
 
-function runSessionStartHook(worktreeRoot) {
-  return new Promise((resolvePromise, reject) => {
-    const child = spawn(process.execPath, [cli, "hook", "session-start"], {
-      cwd: worktreeRoot,
-      env: { ...process.env, INIT_CWD: worktreeRoot },
-      stdio: ["pipe", "pipe", "pipe"]
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => (stdout += chunk));
-    child.stderr.on("data", (chunk) => (stderr += chunk));
-    child.once("error", reject);
-    child.once("exit", (code) => {
-      if (code !== 0) {
-        reject(new Error(`hook session-start exited ${code}: ${stderr}`));
-        return;
-      }
-
-      const trimmed = stdout.trim();
-      resolvePromise(trimmed ? JSON.parse(trimmed) : null);
-    });
-    child.stdin.end(
-      JSON.stringify({ hook_event_name: "SessionStart", source: "startup", cwd: worktreeRoot })
-    );
+function runCli(args) {
+  const result = spawnSync(process.execPath, [cli, ...args], {
+    cwd: bobRoot,
+    env: { ...process.env, INIT_CWD: bobRoot },
+    encoding: "utf8"
   });
+
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.trim();
 }
 
 function startProcess(label, args, cwd, env) {
@@ -263,12 +284,15 @@ async function waitForDaemonState(port, predicate, timeoutMs = 8000) {
 
 async function waitFor(predicate, timeoutMs) {
   const start = Date.now();
+
   while (Date.now() - start < timeoutMs) {
     if (await predicate()) {
       return;
     }
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 50));
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
   }
+
   throw new Error(`Timed out after ${timeoutMs}ms`);
 }
 
@@ -288,18 +312,13 @@ async function stopChildren() {
   await Promise.all(
     children.map(
       (child) =>
-        new Promise((resolvePromise) => {
+        new Promise((resolve) => {
           if (child.exitCode !== null || child.signalCode !== null) {
-            resolvePromise();
+            resolve();
             return;
           }
-          child.once("exit", resolvePromise);
+          child.once("exit", resolve);
           child.kill("SIGTERM");
-          setTimeout(() => {
-            if (child.exitCode === null && child.signalCode === null) {
-              child.kill("SIGKILL");
-            }
-          }, 1000).unref();
         })
     )
   );

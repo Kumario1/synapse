@@ -1,11 +1,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createEmptyTeamState, PROTOCOL_VERSION } from "./index.js";
+import {
+  applyStateOp,
+  createEmptyTeamState,
+  PROTOCOL_VERSION,
+  type ContractDelta,
+  type StateOp
+} from "./index.js";
 import { parseClientMessage, parseServerMessage } from "./wire-schema.js";
 
 const base = { v: PROTOCOL_VERSION, id: "msg-1", ts: new Date().toISOString() };
 
-const validDelta = {
+const validDelta: ContractDelta = {
   id: "delta-1",
   repoId: "local",
   sessionId: "alice",
@@ -22,9 +28,9 @@ const validDelta = {
 };
 
 test("wire schema literal stays in lockstep with PROTOCOL_VERSION", () => {
-  // wire-schema.ts pins the version literally to avoid a runtime import cycle;
-  // this test fails the moment PROTOCOL_VERSION moves without it.
-  assert.equal(PROTOCOL_VERSION, 1);
+  // wire-schema.ts pins the supported version range literally to avoid a
+  // runtime import cycle; this fails if the protocol moves without the schema.
+  assert.equal(PROTOCOL_VERSION, 2);
 });
 
 test("accepts every well-formed message type the daemon sends", () => {
@@ -52,6 +58,11 @@ test("accepts every well-formed message type the daemon sends", () => {
       ...base,
       type: "session.heartbeat",
       payload: { repoId: "local", sessionId: "alice", branch: "feature-x" }
+    },
+    {
+      ...base,
+      type: "session.heartbeat",
+      payload: { repoId: "local", sessionId: "alice", task: "add JWT refresh" }
     },
     { ...base, type: "session.end", payload: { repoId: "local", sessionId: "alice" } },
     {
@@ -167,9 +178,102 @@ test("accepts valid server snapshots", () => {
   const result = parseServerMessage({
     ...base,
     type: "state.snapshot",
+    payload: { teamState: createEmptyTeamState("local"), seq: 1 }
+  });
+  assert.equal(result.ok, true, result.ok ? "" : result.error);
+});
+
+test("accepts valid server deltas", () => {
+  const result = parseServerMessage({
+    ...base,
+    type: "state.delta",
+    payload: {
+      repoId: "local",
+      seq: 2,
+      ops: [
+        {
+          op: "upsertDelta",
+          delta: validDelta
+        }
+      ]
+    }
+  });
+  assert.equal(result.ok, true, result.ok ? "" : result.error);
+});
+
+test("accepts downgraded v1 envelopes for compatibility", () => {
+  const result = parseServerMessage({
+    ...base,
+    v: 1,
+    type: "state.snapshot",
     payload: { teamState: createEmptyTeamState("local") }
   });
   assert.equal(result.ok, true, result.ok ? "" : result.error);
+});
+
+test("applies state ops to converge with an equivalent snapshot", () => {
+  const state = createEmptyTeamState("local");
+  const session = {
+    id: "alice",
+    repoId: "local",
+    memberId: "alice",
+    agentType: "claude-code" as const,
+    filesOpen: [],
+    filesEditing: [],
+    lastTask: null,
+    startedAt: base.ts,
+    lastSeen: base.ts,
+    status: "active" as const
+  };
+  const ops: StateOp[] = [
+    { op: "upsertSession", session },
+    {
+      op: "upsertEditLock",
+      lock: {
+        symbolId: { raw: "ts:a.ts#f" },
+        filePath: "a.ts",
+        sessionId: "alice",
+        acquiredAt: base.ts,
+        ttlSec: 90
+      }
+    },
+    { op: "upsertDelta", delta: validDelta },
+    {
+      op: "appendPush",
+      push: {
+        id: "push-1",
+        repoId: "local",
+        memberId: "alice",
+        summary: "pushed",
+        filesAffected: ["a.ts"],
+        sha: "abc",
+        pushedAt: base.ts
+      },
+      cap: 50
+    },
+    { op: "deleteEditLock", sessionId: "alice", symbolRaw: "ts:a.ts#f" }
+  ];
+
+  for (const op of ops) {
+    applyStateOp(state, op);
+  }
+
+  assert.deepEqual(state, {
+    ...createEmptyTeamState("local"),
+    sessions: [session],
+    unpushedDeltas: [validDelta],
+    recentPushes: [
+      {
+        id: "push-1",
+        repoId: "local",
+        memberId: "alice",
+        summary: "pushed",
+        filesAffected: ["a.ts"],
+        sha: "abc",
+        pushedAt: base.ts
+      }
+    ]
+  });
 });
 
 test("accepts valid server acks", () => {
@@ -184,7 +288,15 @@ test("accepts valid server acks", () => {
 test("rejects malformed server messages with a path-bearing error", () => {
   const cases = [
     { value: { ...base, type: "no.such.type", payload: {} }, label: "unknown type" },
-    { value: { ...base, type: "state.snapshot", payload: {} }, label: "missing teamState" }
+    { value: { ...base, type: "state.snapshot", payload: {} }, label: "missing teamState" },
+    {
+      value: { ...base, type: "state.delta", payload: { repoId: "local", seq: 1, ops: [{}] } },
+      label: "invalid state op"
+    },
+    {
+      value: { ...base, type: "state.delta", payload: { repoId: "local", seq: 1 } },
+      label: "missing state ops"
+    }
   ];
 
   for (const { value, label } of cases) {

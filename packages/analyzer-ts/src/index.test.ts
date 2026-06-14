@@ -320,6 +320,36 @@ test("aliased re-exports resolve through the export-name map (M11)", () => {
   );
 });
 
+test("barrel re-exports keep symbols and edges tied to defining files", () => {
+  const graph = extractTypeScriptDependencyGraph({
+    files: [
+      {
+        filePath: "src/token.ts",
+        source: `export function validate(input: string): boolean { return input.length > 0; }`
+      },
+      {
+        filePath: "src/index.ts",
+        source: `export { validate } from "./token";`
+      },
+      {
+        filePath: "src/caller.ts",
+        source: `
+          import { validate } from "./index";
+          export function callIt(input: string): boolean { return validate(input); }
+        `
+      }
+    ]
+  });
+
+  const validate = graph.symbols.find((symbol) => symbol.id.raw === "ts:src/token.ts#validate");
+  assert.equal(validate?.span.path, "src/token.ts");
+  assert.ok(!graph.symbols.some((symbol) => symbol.id.raw === "ts:src/index.ts#validate"));
+  assert.deepEqual(
+    graph.edges.map((edge) => [edge.from.raw, edge.to.raw]),
+    [["ts:src/caller.ts#callIt", "ts:src/token.ts#validate"]]
+  );
+});
+
 test("an unambiguous same-shape rename emits one renamed change keyed by the old id", () => {
   const before = extractTypeScriptContracts({
     filePath: "src/geo.ts",

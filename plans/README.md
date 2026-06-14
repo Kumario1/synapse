@@ -24,6 +24,21 @@ This plan set came from a deep advisory audit. Source files were not modified wh
 | [014](014-synapse-demo-command.md) | Build `synapse demo` — one-command sandboxed conflict demo | P2 | M | 010 pairs well | DONE |
 | [015](015-detection-quality-benchmark.md) | Detection-quality benchmark — per-rule precision/recall ratchet | P3 | M | 012 bonus, not required | DONE (25 scenarios; `dependency_changed` baselined at 0.833 precision — a real, documented FP on compatible 1-hop dependency changes) |
 | [016](016-command-grounded-llm-actions.md) | Ground the LLM layer in Synapse's command catalog (suggested actions) | P2 | M | - | DONE |
+| 017 | Catalog-grounded agent guidance for `synapse connect` | P2 | M | 016 | DONE |
+| 018 | Bind local services to loopback by default | P1 | S | - | DONE |
+| 019 | Constrain daemon file reads to the worktree | P1 | M | 018 | DONE |
+| 020 | Pin GitHub webhook repo ids to the signed payload | P1 | S | - | DONE |
+| 021 | Clear failed state-load retry cache entries | P1 | S | - | DONE |
+| 022 | Honor `synapse session --action` regardless of argument order | P2 | S | - | DONE |
+| 023 | Preserve TypeScript barrel re-export symbol identity | P1 | S | 003 | DONE |
+| 024 | Make Go analyzer failures visible in CI and package checks | P1 | S | - | DONE |
+| 025 | Time out and recover stuck analyzer sidecar requests | P1 | M | 024 | DONE |
+| 026 | Align documented and packaged Node runtime floor | P1 | S | 010 | DONE |
+| 027 | Consolidate package verification on the release tarball path | P2 | S | 026 | DONE |
+| 028 | Implement protocol v2 `state.delta` broadcast | P2 | M | 009, protocol negotiation | DONE |
+| 029 | Expose Synapse context through MCP resources | P2 | S | 017 | DONE |
+| 030 | Add local aggregate `synapse insights` / `synapse_insights` | P2 | S | 017 | DONE |
+| 031 | Add local PR handoff briefing | P2 | M | 020, 029 | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
 
@@ -38,6 +53,8 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
 - Plans 013 and 014 both touch nothing in `apps/cli/src/daemon.ts`, so the in-flight plan-004 drift noted in 009/011/012 does not affect them (013's wire-schema overlap is noted in its own drift section).
 - Plan 016 (owner-requested via `improve plan`, commit `8c46a61`) grounds the LLM analysis prompts in a catalog of Synapse's MCP tools — suggestions only, never execution, deterministic floor included, LLM stays optional. Independent of all others; if 011 lands first, add its `synapse_onboard` tool to 016's catalog (016's maintenance note covers this). 016's appendix scopes a deferred Phase-2 (agentic tool-calling) — that needs its own plan and owner sign-off before anyone builds it.
 - **Review pass (2026-06-11, post PR #52):** all TODO plans (005–016) were re-reviewed — 009–016 cold-read by a fresh-context agent, 005–008 re-vetted against the live tree. Fixed: stale "in-flight plan 004" drift notes (004 merged as PR #52, `776a717`); plan 012's wrong symbol name (`buildSymbol`, not `toCodeSymbol`) and test count; plan 014's scope/done-criteria contradiction (up.ts export) and fictional env var (`SYNAPSE_DB_PATH` is the real knob); plan 016's gating ambiguity (validation is NEVER env-gated); plan 015's corpus/baseline schemas and scoring edge cases now fully specified; plan 005 narrowed (README:54 already fixed); plans 006/007 re-anchored to post-merge line numbers. Recommended execution order across all TODO plans: 010 → 006 → 007 → 009 → 011 → 012 → 013 → 014 → 016 → 015 → 005 → 008 (005 late because every plan edits README; 008 last because new verify scripts keep landing).
+- **Execution pass (2026-06-12 to 2026-06-13):** plans 017–031 landed on `main`. The sequence hardened local boundaries first (loopback binds, worktree path safety, signed webhook repo binding, state-load retry recovery), then closed CLI/analyzer/release gaps (session action parsing, TS barrel identity, Go verification, sidecar timeouts, Node/package verification), then shipped the agent-facing surfaces (protocol v2 deltas, MCP resources, local insights, PR handoff briefing).
+- **Follow-up after plan 031:** commit `d9c82b4` failed CI in `verify:pr-brief` because the verifier used a local repo override while the signed webhook payload still named `acme/widgets`. Commit `7e9409c` fixed the fixture by making the payload `repository.full_name` match the local repo binding; production behavior remains strict payload-bound repository validation.
 
 ## Verification Baseline
 

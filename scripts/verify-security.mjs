@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -25,15 +27,18 @@ const WS_LIMIT = 20;
 const WEBHOOK_LIMIT = 5;
 const token = "security-verify-token";
 const webhookSecret = "security-verify-webhook-secret";
+const tempDirs = [];
 
 try {
+  await assertLoopbackBindings();
+
   // --- Server A: open mode, tight limits, no webhook secret. ---
   const openPort = await freePort();
   startServer("open", openPort, {
     SYNAPSE_RATE_LIMIT_PER_MIN: String(WS_LIMIT),
     SYNAPSE_WEBHOOK_RATE_LIMIT_PER_MIN: String(WEBHOOK_LIMIT)
   });
-  await waitForHttp(`http://localhost:${openPort}/health`);
+  await waitForHttp(`http://127.0.0.1:${openPort}/health`);
 
   // Open mode still accepts unsigned webhooks (local/dev unchanged).
   const unsignedOpen = await pushWebhook(openPort, { sha: "open-1" });
@@ -41,7 +46,7 @@ try {
 
   // WS flood: the first WS_LIMIT messages in the window apply; the rest are
   // acked as rate_limited and never reach state.
-  const socket = await openSocket(`ws://localhost:${openPort}?repoId=local&v=1`);
+  const socket = await openSocket(`ws://127.0.0.1:${openPort}?repoId=local&v=1`);
   const total = WS_LIMIT + 10;
   const acks = [];
   socket.on("message", (data) => {
@@ -68,26 +73,28 @@ try {
   // daemon boundary without taking the process down.
   const daemonPort = await freePort();
   startDaemon("daemon", openPort, daemonPort);
-  await waitForHttp(`http://localhost:${daemonPort}/health`);
+  await waitForHttp(`http://127.0.0.1:${daemonPort}/health`);
 
   const tooLarge = await postRaw(
-    `http://localhost:${daemonPort}/tools/synapse_whatsup`,
+    `http://127.0.0.1:${daemonPort}/tools/synapse_whatsup`,
     "x".repeat(1_048_577)
   );
   assert.equal(tooLarge.status, 413, "oversized local JSON is rejected");
   assert.equal(tooLarge.body.error, "payload_too_large");
 
   const malformed = await postRaw(
-    `http://localhost:${daemonPort}/tools/synapse_whatsup`,
+    `http://127.0.0.1:${daemonPort}/tools/synapse_whatsup`,
     "{\"repoId\":"
   );
   assert.equal(malformed.status, 400, "malformed local JSON is rejected");
   assert.equal(malformed.body.error, "invalid_json");
   assert.equal(
-    (await fetch(`http://localhost:${daemonPort}/health`)).ok,
+    (await fetch(`http://127.0.0.1:${daemonPort}/health`)).ok,
     true,
     "daemon remains healthy after bad local input"
   );
+
+  const pathSafety = await assertDaemonPathSafety(openPort);
 
   // Webhook flood: budget already partly spent; pushing past it answers 429.
   let saw429 = false;
@@ -103,7 +110,7 @@ try {
   // --- Server B: auth enabled (production posture), no webhook secret. ---
   const authPort = await freePort();
   startServer("auth", authPort, { SYNAPSE_AUTH_TOKEN: token });
-  await waitForHttp(`http://localhost:${authPort}/health`);
+  await waitForHttp(`http://127.0.0.1:${authPort}/health`);
 
   const refused = await pushWebhook(authPort, { sha: "auth-1" });
   assert.equal(refused.status, 403, "auth mode without a webhook secret refuses webhooks");
@@ -115,7 +122,7 @@ try {
     SYNAPSE_AUTH_TOKEN: token,
     SYNAPSE_GITHUB_WEBHOOK_SECRET: webhookSecret
   });
-  await waitForHttp(`http://localhost:${signedPort}/health`);
+  await waitForHttp(`http://127.0.0.1:${signedPort}/health`);
 
   const unsigned = await pushWebhook(signedPort, { sha: "signed-1" });
   assert.equal(unsigned.status, 401, "unsigned webhook rejected when a secret is set");
@@ -131,9 +138,11 @@ try {
         stateBounded: state.conflictFeedback.length,
         daemon413: tooLarge.status,
         daemon400: malformed.status,
+        daemonPathSafety: pathSafety,
         webhook429: saw429,
         authWithoutSecret: refused.status,
-        signedAccepted: signed.status
+        signedAccepted: signed.status,
+        loopbackBindings: true
       },
       null,
       2
@@ -141,11 +150,13 @@ try {
   );
 } finally {
   await stopChildren();
+  await removeTempDirs();
 }
 
 function startServer(label, port, env) {
   startProcess(label, ["apps/server/dist/index.js"], {
     SYNAPSE_SERVER_PORT: String(port),
+    SYNAPSE_SERVER_HOST: "127.0.0.1",
     ...env
   });
 }
@@ -157,7 +168,7 @@ function startDaemon(label, serverPort, daemonPort) {
       "apps/cli/dist/index.js",
       "daemon",
       "--server",
-      `ws://localhost:${serverPort}`,
+      `ws://127.0.0.1:${serverPort}`,
       "--port",
       String(daemonPort),
       "--repo-id",
@@ -168,9 +179,90 @@ function startDaemon(label, serverPort, daemonPort) {
       "security-daemon"
     ],
     {
+      SYNAPSE_DAEMON_HOST: "127.0.0.1",
       SYNAPSE_FILE_WATCHER: "0"
     }
   );
+}
+
+function startDaemonForWorktree(label, serverPort, daemonPort, worktreeRoot) {
+  startProcess(
+    label,
+    [
+      "apps/cli/dist/index.js",
+      "daemon",
+      "--server",
+      `ws://127.0.0.1:${serverPort}`,
+      "--port",
+      String(daemonPort),
+      "--repo-id",
+      "local",
+      "--member",
+      label,
+      "--session-id",
+      label,
+      "--worktree-root",
+      worktreeRoot
+    ],
+    {
+      SYNAPSE_DAEMON_HOST: "127.0.0.1",
+      SYNAPSE_FILE_WATCHER: "0"
+    }
+  );
+}
+
+async function assertDaemonPathSafety(serverPort) {
+  const temp = await mkdtemp(join(tmpdir(), "synapse-security-paths-"));
+  tempDirs.push(temp);
+  const worktreeRoot = join(temp, "repo");
+  await mkdir(join(worktreeRoot, "src"), { recursive: true });
+  await writeFile(
+    join(worktreeRoot, "src/inside.ts"),
+    "export function inside(): string { return 'inside'; }\n"
+  );
+  const outsidePath = join(temp, "outside.ts");
+  await writeFile(outsidePath, "export function outside(): string { return 'outside'; }\n");
+
+  const daemonPort = await freePort();
+  startDaemonForWorktree("daemon-paths", serverPort, daemonPort, worktreeRoot);
+  await waitForHttp(`http://127.0.0.1:${daemonPort}/health`);
+
+  const normal = await postJson(`http://127.0.0.1:${daemonPort}/tools/synapse_report`, {
+    filePath: "src/inside.ts"
+  });
+  assert.equal(normal.status, 200, "normal in-worktree report path still works");
+
+  const traversal = await postJson(`http://127.0.0.1:${daemonPort}/tools/synapse_report`, {
+    filePath: "../outside.ts"
+  });
+  assert.notEqual(traversal.status, 200, "parent traversal report path is rejected");
+  assert.match(
+    traversal.body.error,
+    /inside the worktree/u,
+    "parent traversal rejection does not read outside the worktree"
+  );
+
+  const absolute = await postJson(`http://127.0.0.1:${daemonPort}/tools/synapse_report`, {
+    filePath: resolve(outsidePath)
+  });
+  assert.notEqual(absolute.status, 200, "absolute report path is rejected");
+  assert.match(
+    absolute.body.error,
+    /inside the worktree/u,
+    "absolute path rejection does not read outside the worktree"
+  );
+
+  assert.equal(
+    (await fetch(`http://127.0.0.1:${daemonPort}/health`)).ok,
+    true,
+    "daemon remains healthy after unsafe file paths"
+  );
+
+  return {
+    normal: normal.status,
+    traversal: traversal.status,
+    absolute: absolute.status
+  };
 }
 
 function feedbackMessage(id) {
@@ -205,7 +297,7 @@ async function pushWebhook(port, { sha, secret }) {
   if (secret) {
     headers["x-hub-signature-256"] = `sha256=${createHmac("sha256", secret).update(payload).digest("hex")}`;
   }
-  const response = await fetch(`http://localhost:${port}/webhooks/github?repoId=local`, {
+  const response = await fetch(`http://127.0.0.1:${port}/webhooks/github?repoId=local`, {
     method: "POST",
     headers,
     body: payload
@@ -222,10 +314,58 @@ async function postRaw(url, body) {
   return { status: response.status, body: await response.json() };
 }
 
+async function postJson(url, body) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  return { status: response.status, body: await response.json() };
+}
+
 async function getState(port) {
-  const response = await fetch(`http://localhost:${port}/state?repoId=local`);
+  const response = await fetch(`http://127.0.0.1:${port}/state?repoId=local`);
   assert.equal(response.ok, true);
   return response.json();
+}
+
+async function assertLoopbackBindings() {
+  const [daemonSource, serverSource] = await Promise.all([
+    readFile(join(rootDir, "apps/cli/src/daemon.ts"), "utf8"),
+    readFile(join(rootDir, "apps/server/src/index.ts"), "utf8")
+  ]);
+
+  assert.match(
+    daemonSource,
+    /const daemonHost = process\.env\.SYNAPSE_DAEMON_HOST \?\? "127\.0\.0\.1";/,
+    "daemon defaults to a loopback bind host"
+  );
+  assert.match(
+    daemonSource,
+    /localServer\.listen\(config\.daemonPort, daemonHost,/,
+    "daemon listener passes an explicit host"
+  );
+  assert.doesNotMatch(
+    daemonSource,
+    /localServer\.listen\(config\.daemonPort,\s*\(\)/,
+    "daemon listener must not use bare listen(port)"
+  );
+
+  assert.match(
+    serverSource,
+    /const host = process\.env\.SYNAPSE_SERVER_HOST \?\? "127\.0\.0\.1";/,
+    "server defaults to a loopback bind host"
+  );
+  assert.match(
+    serverSource,
+    /httpServer\.listen\(port, host,/,
+    "server listener passes an explicit host"
+  );
+  assert.doesNotMatch(
+    serverSource,
+    /httpServer\.listen\(port,\s*\(\)/,
+    "server listener must not use bare listen(port)"
+  );
 }
 
 function openSocket(url) {
@@ -298,4 +438,8 @@ async function stopChildren() {
         })
     )
   );
+}
+
+async function removeTempDirs() {
+  await Promise.all(tempDirs.map((dir) => rm(dir, { force: true, recursive: true })));
 }

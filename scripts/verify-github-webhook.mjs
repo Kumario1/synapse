@@ -45,6 +45,23 @@ try {
 
   await waitForState(serverPort, (state) => state.unpushedDeltas.length === 1);
 
+  const mismatchedPayload = {
+    after: "mismatch123",
+    repository: { full_name: "owner/repo-a" },
+    sender: { login: "mallory" },
+    head_commit: { message: "Attempt cross-repo routing" },
+    commits: [{ modified: [filePath] }]
+  };
+  const mismatchedWebhook = await postJsonResponse(
+    `http://localhost:${serverPort}/webhooks/github?repoId=owner/repo-b`,
+    mismatchedPayload,
+    signedGitHubHeaders(mismatchedPayload)
+  );
+  assert.equal(mismatchedWebhook.status, 400, "mismatched repo id is rejected");
+  assert.match(mismatchedWebhook.body.error, /repository\.full_name does not match repoId/);
+  const repoBState = await getState(serverPort, "owner/repo-b");
+  assert.equal(repoBState.recentPushes.length, 0, "mismatched webhook does not mutate query repo");
+
   const unpushedCheck = await checkSymbol(bobPort);
   assert.equal(unpushedCheck.verdict, "warn");
   assert.deepEqual(
@@ -54,7 +71,7 @@ try {
 
   const webhookPayload = {
     after: "abc123",
-    repository: { full_name: "Kumario1/synapse" },
+    repository: { full_name: "local" },
     sender: { login: "alice" },
     head_commit: { message: "Pushed auth token changes" },
     commits: [{ modified: [filePath] }]
@@ -87,7 +104,7 @@ try {
   // blocks never do.
   const commentPayload = {
     action: "created",
-    repository: { full_name: "Kumario1/synapse" },
+    repository: { full_name: "local" },
     sender: { login: "bob" },
     issue: { number: 5, title: "Auth design", pull_request: {} },
     comment: {
@@ -178,19 +195,25 @@ function startProcess(label, args, env) {
 }
 
 async function postJson(url, body, headers = {}) {
+  const { status, body: responseBody } = await postJsonResponse(url, body, headers);
+
+  if (status < 200 || status >= 300) {
+    throw new Error(`${url} failed: ${JSON.stringify(responseBody)}`);
+  }
+
+  return responseBody;
+}
+
+async function postJsonResponse(url, body, headers = {}) {
   const raw = JSON.stringify(body);
   const response = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
     body: raw
   });
-  const payload = await response.json();
+  const responseBody = await response.json();
 
-  if (!response.ok) {
-    throw new Error(`${url} failed: ${JSON.stringify(payload)}`);
-  }
-
-  return payload;
+  return { status: response.status, body: responseBody };
 }
 
 function signedGitHubHeaders(body, event = "push") {
@@ -223,6 +246,12 @@ async function waitForState(port, predicate, timeoutMs = 5000) {
   }, timeoutMs);
 
   return lastState;
+}
+
+async function getState(port, repoId) {
+  const response = await fetch(`http://localhost:${port}/state?repoId=${encodeURIComponent(repoId)}`);
+  assert.equal(response.ok, true);
+  return response.json();
 }
 
 async function waitFor(predicate, timeoutMs) {

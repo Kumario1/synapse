@@ -5,9 +5,11 @@ import { runConnect } from "./commands/connect.js";
 import { runDemo } from "./commands/demo.js";
 import { runDoctor } from "./commands/doctor.js";
 import { runFeedback } from "./commands/feedback.js";
+import { runInsights } from "./commands/insights.js";
 import { runJoin } from "./commands/join.js";
 import { runKeygen } from "./commands/keygen.js";
 import { runOnboard } from "./commands/onboard.js";
+import { runPrBrief } from "./commands/pr-brief.js";
 import { runPush } from "./commands/push.js";
 import { runReport } from "./commands/report.js";
 import { runSession } from "./commands/session.js";
@@ -38,6 +40,9 @@ switch (command) {
   case "feedback":
     await runFeedback(args.slice(1));
     break;
+  case "insights":
+    await runInsights(args.slice(1));
+    break;
   case "session":
     await runSession(args.slice(1));
     break;
@@ -49,6 +54,9 @@ switch (command) {
     break;
   case "onboard":
     await runOnboard(args.slice(1));
+    break;
+  case "pr-brief":
+    await runPrBrief(args.slice(1));
     break;
   case "mcp":
     await runMcp(args.slice(1));
@@ -93,10 +101,12 @@ Commands:
   report   Call the local synapse_report endpoint
   push     Notify Synapse that files were pushed
   feedback Record explicit acted/dismissed feedback for a conflict warning
+  insights Show local aggregate coordination insights
   session  Start, heartbeat, or end a local session
   whatsup  Show the daemon's current team-state briefing
   why      Search Synapse memory with source citations
   onboard  First-session deep briefing: team digest + cited decision history
+  pr-brief Local PR handoff briefing for a base/head branch pair
   mcp      Run a stdio MCP server that forwards tools to the local daemon
   join     Write .synapse/config.json, install Claude Code hooks, and connect other agents
   connect  Wire other agents (Cursor, VS Code, Gemini, Windsurf, any MCP client) to the MCP server
@@ -118,10 +128,12 @@ Examples:
   synapse connect --agent cursor,vscode        # only specific agents
   synapse daemon
   synapse mcp --port 4011
+  synapse pr-brief --base main --head my-branch
   synapse report --port 4011 --file src/auth/token.ts --symbol ts:src/auth/token.ts#TokenValidator.validate
   synapse push --port 4011 --file src/auth/token.ts --sha abc123 --summary "Pushed auth token changes"
   synapse check --port 4012 --file src/auth/token.ts --symbol ts:src/auth/token.ts#TokenValidator.validate
   synapse feedback --port 4012 --conflict-id conflict:abc123 --outcome acted --note "Adjusted caller"
+  synapse insights --port 4012
   synapse whatsup --port 4012
   synapse why --port 4012 --question "why did auth validation change?"
   synapse analyze --file packages/analyzer-ts/src/index.ts

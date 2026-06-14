@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -16,6 +18,12 @@ const { extractTypeScriptContracts, extractTypeScriptDependencyGraph } = await i
 );
 const py = await import(join(rootDir, "packages/analyzer-py/dist/index.js"));
 const go = await import(join(rootDir, "packages/analyzer-go/dist/index.js"));
+const goBinaryPath = join(
+  rootDir,
+  "packages/analyzer-go/bin",
+  process.platform === "win32" ? "synapse-analyzer-go.exe" : "synapse-analyzer-go"
+);
+const hasGoToolchain = spawnSync("go", ["version"], { stdio: "ignore" }).status === 0;
 
 function mulberry32(seed) {
   let state = seed;
@@ -131,7 +139,21 @@ py.closePythonAnalyzer();
 
 summary.go = await fuzzSidecar(
   "go",
-  go.goAnalyzerAvailable,
+  async () => {
+    if (!existsSync(goBinaryPath) && hasGoToolchain) {
+      throw new Error(
+        "Go analyzer binary was not built even though Go is available; run `npm run setup:analyzer-go` and fix build failures"
+      );
+    }
+    if (!existsSync(goBinaryPath) && !hasGoToolchain) {
+      return false;
+    }
+    const available = await go.goAnalyzerAvailable();
+    if (!available) {
+      throw new Error("Go analyzer binary exists but the sidecar is unavailable");
+    }
+    return true;
+  },
   go.extractGoContracts,
   go.goAnalyzerAvailable,
   "go"

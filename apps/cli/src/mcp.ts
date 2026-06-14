@@ -5,7 +5,9 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type {
   SynapseCheckRequest,
   SynapseFeedbackRequest,
+  SynapseInsightsRequest,
   SynapseOnboardRequest,
+  SynapsePrBriefRequest,
   SynapsePushRequest,
   SynapseReportRequest,
   SynapseSessionRequest,
@@ -47,6 +49,91 @@ export async function runMcp(rawArgs: string[]): Promise<void> {
   // hooks: compliant clients surface it to the model, so any connecting agent is
   // told to check before edits and report after — no rules file required.
   const server = new McpServer(serverInfo, { instructions: SYNAPSE_AGENT_GUIDANCE });
+  const daemonContext = (tool: string, body: unknown) => daemonPost(defaultPort, tool, body);
+
+  server.registerResource(
+    "synapse-briefing",
+    "synapse://briefing",
+    {
+      title: "Synapse Briefing",
+      description:
+        "Read-only team briefing for passive context: active sessions, recent activity, and cited decisions.",
+      mimeType: "application/json"
+    },
+    async (uri) =>
+      jsonResource(uri.href, {
+        kind: "synapse_briefing",
+        tool: "synapse_onboard",
+        context: await daemonContext("synapse_onboard", {
+          repoId: defaultRepoId,
+          sessionId: defaultSessionId,
+          limit: 20
+        } satisfies SynapseOnboardRequest)
+      })
+  );
+
+  server.registerResource(
+    "synapse-team-state",
+    "synapse://team-state",
+    {
+      title: "Synapse Team State",
+      description:
+        "Read-only current team state: active sessions, unpushed deltas, edit locks, recent pushes, and resolutions.",
+      mimeType: "application/json"
+    },
+    async (uri) =>
+      jsonResource(uri.href, {
+        kind: "synapse_team_state",
+        tool: "synapse_whatsup",
+        context: await daemonContext("synapse_whatsup", {
+          repoId: defaultRepoId,
+          sessionId: defaultSessionId,
+          limit: 50
+        } satisfies SynapseWhatsupRequest)
+      })
+  );
+
+  server.registerResource(
+    "synapse-decisions",
+    "synapse://decisions",
+    {
+      title: "Synapse Decisions",
+      description: "Read-only cited decisions and team memory relevant to the current repository.",
+      mimeType: "application/json"
+    },
+    async (uri) =>
+      jsonResource(uri.href, {
+        kind: "synapse_decisions",
+        tool: "synapse_onboard",
+        context: await daemonContext("synapse_onboard", {
+          repoId: defaultRepoId,
+          sessionId: defaultSessionId,
+          limit: 20
+        } satisfies SynapseOnboardRequest)
+      })
+  );
+
+  server.registerResource(
+    "synapse-pr-brief",
+    "synapse://pr-brief",
+    {
+      title: "Synapse PR Brief",
+      description:
+        "Read-only local PR handoff briefing for the current branch: unresolved deltas, GitHub activity, pushes, and cited context.",
+      mimeType: "application/json"
+    },
+    async (uri) =>
+      jsonResource(uri.href, {
+        kind: "synapse_pr_brief",
+        tool: "synapse_pr_brief",
+        context: await daemonContext("synapse_pr_brief", {
+          repoId: defaultRepoId,
+          sessionId: defaultSessionId,
+          base: "main",
+          limit: 20
+        } satisfies SynapsePrBriefRequest)
+      })
+  );
 
   server.registerTool(
     "synapse_check",
@@ -179,6 +266,33 @@ export async function runMcp(rawArgs: string[]): Promise<void> {
   );
 
   server.registerTool(
+    "synapse_insights",
+    {
+      title: "Show Synapse Coordination Insights",
+      description:
+        "Return local aggregate coordination insights from the daemon: feedback outcomes, noisy rules, active sessions, unpushed deltas, and edit locks. Does not expose raw code.",
+      inputSchema: {
+        ...commonShape,
+        limit: z.number().int().positive().max(20).optional()
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true
+      }
+    },
+    async (args) => {
+      const request: SynapseInsightsRequest = {
+        repoId: args.repoId ?? defaultRepoId,
+        sessionId: args.sessionId ?? defaultSessionId,
+        limit: args.limit
+      };
+
+      return jsonResult(await daemonPost(args.port ?? defaultPort, "synapse_insights", request));
+    }
+  );
+
+  server.registerTool(
     "synapse_push",
     {
       title: "Notify Synapse Push",
@@ -301,6 +415,37 @@ export async function runMcp(rawArgs: string[]): Promise<void> {
   );
 
   server.registerTool(
+    "synapse_pr_brief",
+    {
+      title: "Synapse PR Brief",
+      description:
+        "Return a local PR handoff briefing for a base/head branch pair: unresolved deltas, active sessions, recent pushes, GitHub PR/review/comment activity, and cited team context.",
+      inputSchema: {
+        ...commonShape,
+        base: z.string().min(1).optional(),
+        head: z.string().min(1).optional(),
+        limit: z.number().int().positive().max(50).optional()
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true
+      }
+    },
+    async (args) => {
+      const request: SynapsePrBriefRequest = {
+        repoId: args.repoId ?? defaultRepoId,
+        sessionId: args.sessionId ?? defaultSessionId,
+        base: args.base,
+        head: args.head,
+        limit: args.limit
+      };
+
+      return jsonResult(await daemonPost(args.port ?? defaultPort, "synapse_pr_brief", request));
+    }
+  );
+
+  server.registerTool(
     "synapse_why",
     {
       title: "Search Synapse Memory",
@@ -371,6 +516,18 @@ function jsonResult(value: unknown) {
     content: [
       {
         type: "text" as const,
+        text: JSON.stringify(value, null, 2)
+      }
+    ]
+  };
+}
+
+function jsonResource(uri: string, value: unknown) {
+  return {
+    contents: [
+      {
+        uri,
+        mimeType: "application/json",
         text: JSON.stringify(value, null, 2)
       }
     ]

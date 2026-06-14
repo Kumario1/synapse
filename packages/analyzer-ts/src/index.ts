@@ -287,7 +287,8 @@ function extractSymbolsFromSourceFile(sourceFile: SourceFile, filePath: string):
 
   for (const [exportName, declarations] of sourceFile.getExportedDeclarations().entries()) {
     for (const declaration of declarations) {
-      for (const symbol of symbolsForDeclaration(sourceFile, filePath, declaration, exportName)) {
+      const ownerPath = declarationFilePath(sourceFile, filePath, declaration);
+      for (const symbol of symbolsForDeclaration(sourceFile, ownerPath, declaration, exportName)) {
         symbols.set(symbol.id.raw, symbol);
       }
     }
@@ -307,7 +308,8 @@ function exportedNameMap(sourceFile: SourceFile, filePath: string): Map<string, 
 
   for (const [exportName, declarations] of sourceFile.getExportedDeclarations().entries()) {
     for (const declaration of declarations) {
-      const [symbol] = symbolsForDeclaration(sourceFile, filePath, declaration, exportName);
+      const ownerPath = declarationFilePath(sourceFile, filePath, declaration);
+      const [symbol] = symbolsForDeclaration(sourceFile, ownerPath, declaration, exportName);
       if (symbol) {
         exports.set(exportName, symbol.id);
         break;
@@ -490,6 +492,21 @@ function symbolsForDeclaration(
   }
 
   return [];
+}
+
+function declarationFilePath(sourceFile: SourceFile, filePath: string, declaration: Node): string {
+  const owner = declaration.getSourceFile() ?? sourceFile;
+  if (owner === sourceFile) {
+    return filePath;
+  }
+
+  const ownerPath = normalizePath(owner.getFilePath());
+  const normalizedFilePath = normalizePath(filePath);
+  if (!posix.isAbsolute(normalizedFilePath) && ownerPath.startsWith("/")) {
+    return ownerPath.slice(1);
+  }
+
+  return ownerPath;
 }
 
 function functionSymbol(

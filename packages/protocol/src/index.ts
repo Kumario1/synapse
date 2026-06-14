@@ -5,7 +5,10 @@ export * from "./log.js";
 export * from "./metrics.js";
 export * from "./wire-schema.js";
 
-export const PROTOCOL_VERSION = 1 as const;
+export const SUPPORTED_PROTOCOL_VERSIONS = [1, 2] as const;
+export type ProtocolVersion = (typeof SUPPORTED_PROTOCOL_VERSIONS)[number];
+
+export const PROTOCOL_VERSION = 2 as const;
 /**
  * Oldest wire protocol this build still speaks. The server accepts any client
  * announcing a version in `[MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION]`
@@ -47,6 +50,10 @@ export function negotiateProtocolVersion(
   }
 
   return { ok: true, agreed: Math.min(announced, range.max) };
+}
+
+export function isSupportedProtocolVersion(value: number): value is ProtocolVersion {
+  return (SUPPORTED_PROTOCOL_VERSIONS as readonly number[]).includes(value);
 }
 
 /**
@@ -501,6 +508,42 @@ export interface SynapseFeedbackResponse {
   feedback: ConflictFeedback;
 }
 
+export interface SynapseInsightsRequest {
+  repoId: string;
+  sessionId: string;
+  /** Max rows for ranked sections. Defaults to 5. */
+  limit?: number;
+}
+
+export interface SynapseInsightsBucket {
+  name: string;
+  count: number;
+}
+
+export interface SynapseInsightsResponse {
+  repoId: string;
+  generatedAt: string;
+  degraded: boolean;
+  summary: string[];
+  totals: {
+    feedback: number;
+    acted: number;
+    dismissed: number;
+    activeSessions: number;
+    unpushedDeltas: number;
+    activeEditLocks: number;
+  };
+  topRulesByFeedback: SynapseInsightsBucket[];
+  topConflictTargets: SynapseInsightsBucket[];
+  recentFeedback: Array<{
+    conflictId: string;
+    outcome: ConflictFeedbackOutcome;
+    rule?: Conflict["rule"];
+    targetSymbol?: SymbolId;
+    createdAt: string;
+  }>;
+}
+
 export interface SynapseWhatsupRequest {
   repoId: string;
   sessionId: string;
@@ -516,6 +559,7 @@ export interface WhatsupSessionSummary {
   lastTask: string | null;
   filesEditing: string[];
   lastSeen: string;
+  branch?: string;
 }
 
 export interface WhatsupDeltaSummary extends ContractDeltaSummary {
@@ -579,6 +623,36 @@ export interface SynapseWhyResponse {
   sources: SynapseWhySource[];
 }
 
+export interface SynapsePrBriefRequest {
+  repoId: string;
+  sessionId: string;
+  /** Target branch the PR will merge into. Defaults to main. */
+  base?: string;
+  /** Source branch for the PR. Defaults to the daemon worktree's current branch. */
+  head?: string;
+  /** Max rows per repeated section. Defaults to 10. */
+  limit?: number;
+}
+
+export interface SynapsePrBriefResponse {
+  repoId: string;
+  generatedAt: string;
+  degraded: boolean;
+  base: string;
+  head: string | null;
+  summary: string[];
+  /** Markdown handoff intended for local CLI/MCP consumption. */
+  briefing: string;
+  sections: {
+    activeSessions: WhatsupSessionSummary[];
+    unpushedDeltas: WhatsupDeltaSummary[];
+    editLocks: EditLock[];
+    recentPushes: RecentPush[];
+    recentRepoEvents: RecentRepoEvent[];
+    decisions: SynapseWhySource[];
+  };
+}
+
 export interface SynapseOnboardRequest {
   repoId: string;
   sessionId: string;
@@ -632,7 +706,7 @@ export interface RecallResponse {
 }
 
 export interface WireEnvelope<TType extends string = string, TPayload = unknown> {
-  v: typeof PROTOCOL_VERSION;
+  v: ProtocolVersion;
   type: TType;
   id: string;
   ts: string;
@@ -641,7 +715,10 @@ export interface WireEnvelope<TType extends string = string, TPayload = unknown>
 
 export type ClientMessage =
   | WireEnvelope<"session.start", { session: Session }>
-  | WireEnvelope<"session.heartbeat", { repoId: string; sessionId: string; branch?: string }>
+  | WireEnvelope<
+      "session.heartbeat",
+      { repoId: string; sessionId: string; branch?: string; task?: string }
+    >
   | WireEnvelope<"session.end", { repoId: string; sessionId: string }>
   | WireEnvelope<
       "edit.intent",
@@ -683,9 +760,114 @@ export type ClientMessage =
   | WireEnvelope<"query.briefing", { repoId: string; since?: string }>;
 
 export type ServerMessage =
-  | WireEnvelope<"state.snapshot", { teamState: TeamState }>
-  | WireEnvelope<"state.delta", { teamState: TeamState }>
+  | WireEnvelope<"state.snapshot", { teamState: TeamState; seq?: number }>
+  | WireEnvelope<"state.delta", { repoId: string; seq: number; ops: StateOp[] }>
   | WireEnvelope<"ack", { forId: string; ok: boolean; error?: string }>;
+
+export type StateOp =
+  | { op: "upsertSession"; session: Session }
+  | { op: "upsertEditLock"; lock: EditLock }
+  | { op: "deleteEditLock"; sessionId: string; symbolRaw: string }
+  | { op: "deleteEditLocksForSession"; sessionId: string }
+  | { op: "upsertDelta"; delta: ContractDelta }
+  | { op: "deleteDelta"; deltaId: string }
+  | { op: "appendPush"; push: RecentPush; cap: number }
+  | { op: "appendRepoEvent"; event: RecentRepoEvent; cap: number }
+  | { op: "upsertResolution"; resolution: ContractResolution }
+  | { op: "deleteResolution"; symbolRaw: string; inputsHash: string }
+  | { op: "appendSummary"; summary: SessionSummary; cap: number }
+  | { op: "appendFeedback"; feedback: ConflictFeedback; cap: number };
+
+export function applyStateOp(teamState: TeamState, op: StateOp): void {
+  switch (op.op) {
+    case "upsertSession":
+      upsertBy(teamState.sessions, op.session, (session) => session.id);
+      return;
+    case "upsertEditLock":
+      upsertBy(
+        teamState.editLocks,
+        op.lock,
+        (lock) => `${lock.sessionId}\0${lock.symbolId.raw}`
+      );
+      return;
+    case "deleteEditLock":
+      teamState.editLocks = teamState.editLocks.filter(
+        (lock) => lock.sessionId !== op.sessionId || lock.symbolId.raw !== op.symbolRaw
+      );
+      return;
+    case "deleteEditLocksForSession":
+      teamState.editLocks = teamState.editLocks.filter((lock) => lock.sessionId !== op.sessionId);
+      return;
+    case "upsertDelta":
+      upsertBy(teamState.unpushedDeltas, op.delta, (delta) => delta.id);
+      return;
+    case "deleteDelta":
+      teamState.unpushedDeltas = teamState.unpushedDeltas.filter((delta) => delta.id !== op.deltaId);
+      return;
+    case "appendPush":
+      teamState.recentPushes = prependCapped(
+        teamState.recentPushes.filter((push) => push.id !== op.push.id),
+        op.push,
+        op.cap
+      );
+      return;
+    case "appendRepoEvent":
+      teamState.recentRepoEvents = prependCapped(
+        teamState.recentRepoEvents.filter((event) => event.id !== op.event.id),
+        op.event,
+        op.cap
+      );
+      return;
+    case "upsertResolution":
+      teamState.resolutions = teamState.resolutions.filter(
+        (resolution) => resolution.symbol.raw !== op.resolution.symbol.raw
+      );
+      teamState.resolutions.push(op.resolution);
+      return;
+    case "deleteResolution":
+      teamState.resolutions = teamState.resolutions.filter(
+        (resolution) =>
+          resolution.symbol.raw !== op.symbolRaw || resolution.inputsHash !== op.inputsHash
+      );
+      return;
+    case "appendSummary":
+      teamState.sessionSummaries = prependCapped(
+        teamState.sessionSummaries.filter(
+          (summary) => summary.sessionId !== op.summary.sessionId
+        ),
+        op.summary,
+        op.cap
+      );
+      return;
+    case "appendFeedback":
+      teamState.conflictFeedback = prependCapped(
+        teamState.conflictFeedback.filter((feedback) => feedback.id !== op.feedback.id),
+        op.feedback,
+        op.cap
+      );
+      return;
+    default:
+      assertNever(op);
+  }
+}
+
+function upsertBy<T>(items: T[], value: T, keyOf: (item: T) => string): void {
+  const key = keyOf(value);
+  const index = items.findIndex((item) => keyOf(item) === key);
+  if (index === -1) {
+    items.push(value);
+  } else {
+    items[index] = value;
+  }
+}
+
+function prependCapped<T>(items: T[], value: T, cap: number): T[] {
+  return [value, ...items].slice(0, cap);
+}
+
+function assertNever(value: never): never {
+  throw new Error(`Unhandled state op: ${JSON.stringify(value)}`);
+}
 
 export function createEmptyTeamState(repoId: string): TeamState {
   return {
