@@ -18,6 +18,15 @@ const RECENT_REPO_EVENT_CAP = 50;
 const SESSION_SUMMARY_CAP = 50;
 const CONFLICT_FEEDBACK_CAP = 100;
 
+// Session liveness sweep (plan 032): a session that misses heartbeats for
+// SESSION_STALE_MS (e.g. a crashed daemon, closed laptop) is marked ended —
+// dropping it from whatsup/onboard and same_file_no_overlap conflicts — and a
+// session that has been ended for SESSION_PRUNE_MS is removed from state and
+// the store entirely, so `state.sessions` stays bounded. SYNAPSE_SESSION_SWEEP=0
+// disables the sweep for diagnostics.
+const SESSION_STALE_MS = Number(process.env.SYNAPSE_SESSION_TTL_MS ?? 300_000); // 5 min
+const SESSION_PRUNE_MS = Number(process.env.SYNAPSE_SESSION_PRUNE_MS ?? 86_400_000); // 24 h
+
 /**
  * Pure team-state mutations, kept free of any networking so they can be unit
  * tested directly. `apps/server/src/index.ts` owns the transport (HTTP +
@@ -159,6 +168,47 @@ export function pruneExpiredLocks(state: TeamState, store: StateStoreOps = noopS
     }
   }
   state.editLocks = surviving;
+}
+
+/**
+ * Liveness sweep for sessions (plan 032): a session that misses heartbeats for
+ * SESSION_STALE_MS is marked "ended" — same teardown as an explicit
+ * `session.end` (filesEditing cleared, its edit locks dropped) — so a daemon
+ * that crashed or lost its network stops showing as a live teammate and stops
+ * generating same_file_no_overlap conflicts. A session already "ended" for
+ * SESSION_PRUNE_MS is removed from `state.sessions` and the store, keeping the
+ * array (and the full snapshot broadcast / `synapse why` corpus) bounded.
+ *
+ * A returning daemon re-sends `session.start`, which revives a swept session to
+ * "active" (applyMessage's session.start case) — so this only affects sessions
+ * that truly stopped heartbeating.
+ */
+export function pruneStaleSessions(
+  state: TeamState,
+  store: StateStoreOps = noopStateStore,
+  now: number = Date.now()
+): void {
+  if (process.env.SYNAPSE_SESSION_SWEEP === "0") {
+    return;
+  }
+  const surviving: Session[] = [];
+  for (const session of state.sessions) {
+    const lastSeen = Date.parse(session.lastSeen);
+    const age = Number.isNaN(lastSeen) ? 0 : now - lastSeen;
+    if (session.status === "ended" && age > SESSION_PRUNE_MS) {
+      store.deleteSession(state.repoId, session.id);
+      continue;
+    }
+    if (session.status !== "ended" && age > SESSION_STALE_MS) {
+      session.status = "ended";
+      session.filesEditing = [];
+      state.editLocks = state.editLocks.filter((lock) => lock.sessionId !== session.id);
+      store.deleteEditLocksForSession(state.repoId, session.id);
+      store.upsertSession(state.repoId, session);
+    }
+    surviving.push(session);
+  }
+  state.sessions = surviving;
 }
 
 function upsertSession(state: TeamState, repoId: string, store: StateStoreOps, session: Session): void {
