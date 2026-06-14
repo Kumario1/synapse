@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { after, test } from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   closeGoAnalyzer,
   diffGoContracts,
@@ -11,14 +17,71 @@ import {
 // The suite needs the built sidecar (scripts/setup-go.mjs, run by `npm test`).
 // Without a Go toolchain the setup script no-ops, the sidecar is unavailable,
 // and every behavior test skips — mirroring the daemon's file-level fallback.
+// With Go installed, setup/build failures must be visible.
+const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+const binaryPath = join(
+  packageRoot,
+  "bin",
+  process.platform === "win32" ? "synapse-analyzer-go.exe" : "synapse-analyzer-go"
+);
 const available = await goAnalyzerAvailable();
+const hasGoToolchain = spawnSync("go", ["version"], { stdio: "ignore" }).status === 0;
+assert.ok(
+  (!hasGoToolchain && !existsSync(binaryPath)) || available,
+  "Go analyzer sidecar must be available when Go is installed or the binary exists"
+);
 
 after(() => {
   closeGoAnalyzer();
 });
 
+async function createHungSidecarExecutable(): Promise<{ path: string; cleanup: () => Promise<void> }> {
+  const dir = await mkdtemp(join(tmpdir(), "synapse-go-timeout-"));
+  const path = join(dir, "hung-sidecar");
+  await writeFile(path, "#!/usr/bin/env node\nprocess.stdin.resume();\nsetInterval(() => {}, 1000);\n");
+  await chmod(path, 0o755);
+  return {
+    path,
+    cleanup: () => rm(dir, { recursive: true, force: true })
+  };
+}
+
 test("the go sidecar responds to health (or the suite skips)", { skip: !available }, async () => {
   assert.equal(await goAnalyzerAvailable(), true);
+});
+
+test("times out a hung go sidecar request and restarts on the next request", async () => {
+  const originalBinary = process.env.SYNAPSE_GO_ANALYZER_BIN;
+  const originalTimeout = process.env.SYNAPSE_ANALYZER_REQUEST_TIMEOUT_MS;
+  const hungSidecar = await createHungSidecarExecutable();
+
+  closeGoAnalyzer();
+  process.env.SYNAPSE_GO_ANALYZER_BIN = hungSidecar.path;
+  process.env.SYNAPSE_ANALYZER_REQUEST_TIMEOUT_MS = "25";
+
+  try {
+    await assert.rejects(
+      () => extractGoContracts({ filePath: "hung.go", source: "package hung\n\nfunc F() {}\n" }),
+      /go analyzer request timed out \(method extractFile, id \d+, timeout 25ms\)/
+    );
+  } finally {
+    closeGoAnalyzer();
+    if (originalBinary === undefined) {
+      delete process.env.SYNAPSE_GO_ANALYZER_BIN;
+    } else {
+      process.env.SYNAPSE_GO_ANALYZER_BIN = originalBinary;
+    }
+    if (originalTimeout === undefined) {
+      delete process.env.SYNAPSE_ANALYZER_REQUEST_TIMEOUT_MS;
+    } else {
+      process.env.SYNAPSE_ANALYZER_REQUEST_TIMEOUT_MS = originalTimeout;
+    }
+    await hungSidecar.cleanup();
+  }
+
+  if (available) {
+    assert.equal(await goAnalyzerAvailable(), true);
+  }
 });
 
 test("extracts functions, structs, methods, fields, and consts", { skip: !available }, async () => {

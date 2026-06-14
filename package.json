@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "packageManager": "npm@11.4.1",
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -36,8 +39,10 @@
     "verify:resolution": "npm run build && node scripts/verify-resolution.mjs",
     "verify:mcp-adapter": "npm run build && node scripts/verify-mcp-adapter.mjs",
     "verify:feedback": "npm run build && node scripts/verify-feedback.mjs",
+    "verify:insights": "npm run build && node scripts/verify-insights.mjs",
     "verify:github-webhook": "npm run build && node scripts/verify-github-webhook.mjs",
     "verify:github-briefing": "npm run build && node scripts/verify-github-briefing.mjs",
+    "verify:pr-brief": "npm run build && node scripts/verify-pr-brief.mjs",
     "verify:persistence": "npm run build && node scripts/verify-persistence.mjs",
     "verify:persistence-pg": "npm run build && node scripts/verify-persistence-pg.mjs",
     "verify:multi-instance": "npm run build && node scripts/verify-multi-instance.mjs",
@@ -46,6 +51,7 @@
     "verify:rename-tracking": "npm run build && node scripts/verify-rename-tracking.mjs",
     "verify:go-check": "npm run build && npm run setup:analyzer-go && node scripts/verify-go-check.mjs",
     "verify:protocol-compat": "npm run build && node scripts/verify-protocol-compat.mjs",
+    "verify:delta-broadcast": "npm run build && node scripts/verify-delta-broadcast.mjs",
     "verify:security": "npm run build && node scripts/verify-security.mjs",
     "verify:why-rag": "npm run build && node scripts/verify-why-rag.mjs",
     "verify:onboard": "npm run build && node scripts/verify-onboard.mjs",
@@ -71,7 +77,7 @@
     "verify:metrics": "npm run build && node scripts/verify-metrics.mjs",
     "verify:adaptive-severity": "npm run build && node scripts/verify-adaptive-severity.mjs",
     "verify:branch-aware-severity": "npm run build && node scripts/verify-branch-aware-severity.mjs",
-    "verify:npm-pack": "npm run build && node scripts/verify-npm-pack.mjs",
+    "verify:npm-pack": "npm run verify:package",
     "verify:demo": "npm run build && node scripts/verify-demo.mjs",
     "verify:llm-actions": "npm run build && node scripts/verify-llm-actions.mjs",
     "eval:detection": "npm run build && node scripts/eval-detection.mjs",

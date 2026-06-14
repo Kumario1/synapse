@@ -7,6 +7,8 @@
  *  - the deterministic analysis floor's rule-appropriate command
  *    suggestions (no LLM key required);
  *  - the Claude Code hook output's "→ run: <cli>" rendering, via `usage`.
+ *  - the agent guidance in `apps/cli/src/connect.ts`, so rules files,
+ *    AGENTS.md, and MCP `instructions` carry the same command reference.
  *
  * Synapse only ever SUGGESTS these commands — nothing here executes them.
  * When a new MCP tool ships, add its entry here in the same PR.
@@ -60,6 +62,13 @@ export const SYNAPSE_COMMAND_CATALOG: SynapseCommandSpec[] = [
     usage: "synapse feedback --conflict-id <conflictId> --outcome <outcome>"
   },
   {
+    tool: "synapse_insights",
+    cli: "synapse insights",
+    when: "To review local aggregate coordination health: feedback outcomes, noisy rules, active sessions, unpushed deltas, and edit locks.",
+    args: [],
+    usage: "synapse insights"
+  },
+  {
     tool: "synapse_session",
     cli: "synapse session",
     when: "To start, heartbeat, or end your local coordination session.",
@@ -81,6 +90,16 @@ export const SYNAPSE_COMMAND_CATALOG: SynapseCommandSpec[] = [
     usage: "synapse onboard"
   },
   {
+    tool: "synapse_pr_brief",
+    cli: "synapse pr-brief",
+    when: "Before opening or reviewing a PR, to get a local handoff for a base/head branch pair.",
+    args: [
+      { name: "base", type: "string", required: false, hint: "target branch, usually main" },
+      { name: "head", type: "string", required: false, hint: "source branch; defaults to current branch" }
+    ],
+    usage: "synapse pr-brief --base <base> --head <head>"
+  },
+  {
     tool: "synapse_why",
     cli: "synapse why",
     when: "To search team memory for why something changed, with cited sources.",
@@ -99,5 +118,23 @@ export function renderCommandCatalogForPrompt(): string {
   return SYNAPSE_COMMAND_CATALOG.map((entry) => {
     const args = entry.args.map((arg) => arg.name).join(", ");
     return `${entry.tool}(${args}): ${entry.when}`;
+  }).join("\n");
+}
+
+/**
+ * Markdown command reference for agent-facing guidance (rules files, AGENTS.md,
+ * MCP `instructions`). One bullet per tool: MCP name, CLI form, when to reach
+ * for it, and argument hints. Deriving the on-disk guidance from the catalog
+ * keeps the two from drifting — a new catalog entry ships in every rules file
+ * automatically.
+ */
+export function renderCommandCatalogMarkdown(): string {
+  return SYNAPSE_COMMAND_CATALOG.map((entry) => {
+    const args = entry.args.length
+      ? ` Args: ${entry.args
+          .map((arg) => `${arg.name}${arg.required ? "" : " (optional)"} — ${arg.hint}`)
+          .join("; ")}.`
+      : "";
+    return `- \`${entry.tool}\` (CLI: \`${entry.usage}\`) — ${entry.when}${args}`;
   }).join("\n");
 }

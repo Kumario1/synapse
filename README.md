@@ -6,7 +6,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](LICENSE)
 [![Built by Prince Kumar](https://img.shields.io/badge/Built%20by-Prince%20Kumar-blue?style=for-the-badge)](#license)
-[![Node](https://img.shields.io/badge/Node-20%2B-339933?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org)
+[![Node](https://img.shields.io/badge/Node-20.19%2B-339933?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org)
 [![Status](https://img.shields.io/badge/Status-In%20development-orange?style=for-the-badge)](#roadmap)
 
 </div>
@@ -24,7 +24,7 @@
   </tr>
   <tr>
     <td><b>Polyglot analyzers</b></td>
-    <td>TypeScript contract extraction and dependency edges in-process, including relative named/default/namespace imports, with unambiguous same-file renames tracked as <code>renamed</code> deltas (opt out: <code>SYNAPSE_RENAME_TRACKING=0</code>); Python via a long-lived <b>tree-sitter + jedi</b> sidecar and Go via a warm <b>go/parser</b> sidecar, both over JSON-RPC/stdio. Same conflict engine for all three.</td>
+    <td>TypeScript contract extraction and dependency edges in-process, including relative named/default/namespace imports and barrel re-exports resolved back to the defining file, with unambiguous same-file renames tracked as <code>renamed</code> deltas (opt out: <code>SYNAPSE_RENAME_TRACKING=0</code>); Python via a long-lived <b>tree-sitter + jedi</b> sidecar and Go via a warm <b>go/parser</b> sidecar, both over JSON-RPC/stdio with request timeouts and recovery. Same conflict engine for all three.</td>
   </tr>
   <tr>
     <td><b>Deterministic first</b></td>
@@ -36,7 +36,7 @@
   </tr>
   <tr>
     <td><b>Any-agent onboarding</b></td>
-    <td><code>synapse connect</code> (run automatically by <code>join</code>) registers the stdio MCP server in Cursor, VS Code/Copilot, Gemini CLI, Windsurf, and any MCP client, and drops rules files that carry the <i>same</i> check-before-edit / report-after-edit guidance the Claude Code hooks encode — so non-Claude agents get hook-equivalent behavior with zero manual setup.</td>
+    <td><code>synapse connect</code> (run automatically by <code>join</code>) registers the stdio MCP server in Cursor, VS Code/Copilot, Gemini CLI, Windsurf, and any MCP client, and drops rules files that carry the <i>same</i> check-before-edit / report-after-edit guidance the Claude Code hooks encode — so non-Claude agents get hook-equivalent behavior with zero manual setup. Rules files include a generated command reference (from the same catalog that grounds LLM action suggestions), so agents know they can self-serve context — e.g. <code>synapse why</code> on a confusing conflict.</td>
   </tr>
   <tr>
     <td><b>MCP adapter</b></td>
@@ -44,7 +44,7 @@
   </tr>
   <tr>
     <td><b>Team briefings</b></td>
-    <td><code>synapse whatsup</code> gives a deterministic team-state briefing from the daemon's warm cache.</td>
+    <td><code>synapse whatsup</code> gives a deterministic team-state briefing from the daemon's warm cache; <code>synapse pr-brief</code> turns local state plus GitHub webhook history into a PR handoff.</td>
   </tr>
   <tr>
     <td><b>Memory search</b></td>
@@ -80,7 +80,7 @@
 
 ## Quick Start
 
-**Prerequisites:** Node.js 20+ and npm. Python 3.10+ and Go 1.22+ are optional — needed only to analyze `.py` / `.go` files; without them, those languages degrade gracefully to file-level detection.
+**Prerequisites:** Node.js 20.19.0+ and npm 11.4.1. The repo pins Node 20.19.2 in `.nvmrc` and CI. Python 3.10+ and Go 1.22+ are optional — needed only to analyze `.py` / `.go` files; without them, those languages degrade gracefully to file-level detection.
 
 ```bash
 npm install
@@ -100,6 +100,10 @@ SYNAPSE_AUTH_TOKEN=<token> synapse up
 ```
 
 `synapse doctor` diagnoses a setup without starting anything (resolved identity, server reachability, auth vs. unreachable, protocol version, live peers).
+
+By default, local Synapse daemons and servers bind only to loopback (`127.0.0.1`). Set `SYNAPSE_DAEMON_HOST` or `SYNAPSE_SERVER_HOST` explicitly when you intentionally need a LAN/public listener, for example `SYNAPSE_SERVER_HOST=0.0.0.0` in a container or VM.
+
+All local file arguments are resolved inside the configured `worktreeRoot`. Absolute paths, `..` traversal, and symlink escapes are rejected before the daemon reads a file or hands it to an analyzer.
 
 ---
 
@@ -163,10 +167,11 @@ synapse connect                        # wire up every supported agent
 synapse connect --agent cursor,vscode  # or just the ones you use
 ```
 
-This does two things so other agents connect seamlessly and then use Synapse the way it's intended:
+This does three things so other agents connect seamlessly and then use Synapse the way it's intended:
 
 1. **Registers the stdio MCP server** in each client's own config — `.cursor/mcp.json`, `.vscode/mcp.json`, `.gemini/settings.json`, and the cross-agent `.mcp.json` — pointing at `synapse mcp`. The adapter resolves its room (repoId, session, daemon port) from `.synapse/config.json`, so there is nothing else to configure.
-2. **Drops rules files that encode the hooks as instructions** — `AGENTS.md`, `.cursor/rules/synapse.mdc`, and `.windsurf/rules/synapse.md` — telling the agent to call `synapse_check` before editing, `synapse_report` after, and `synapse_whatsup` at the start. The MCP server also advertises the same guidance via the protocol-native `instructions` field, so even clients that ignore rules files still receive it.
+2. **Exposes MCP resources for passive context** — `synapse://briefing`, `synapse://team-state`, `synapse://decisions`, and `synapse://pr-brief` — so clients can list/read the current team digest, cited memories, and PR handoff context without making a tool call. Tools remain the action surface for checks, reports, pushes, feedback, aggregate insights, PR briefings, and argument-specific memory searches.
+3. **Drops rules files that encode the hooks as instructions** — `AGENTS.md`, `.cursor/rules/synapse.mdc`, and `.windsurf/rules/synapse.md` — telling the agent to read context resources when available, call `synapse_check` before editing, `synapse_report` after, and use `synapse_whatsup` as the fallback session-start catch-up. The MCP server also advertises the same guidance via the protocol-native `instructions` field, so even clients that ignore rules files still receive it. The generated command reference comes from `packages/protocol/src/command-catalog.ts`, the same catalog that grounds deterministic and optional-LLM action suggestions.
 
 Every write is idempotent and preserves your existing content (managed blocks for markdown, key-merge for JSON), so it is safe to re-run.
 
@@ -183,10 +188,12 @@ The CLI binary is `synapse` (`apps/cli/src/index.ts`). In a dev checkout, run an
 | `report` | Call the local `synapse_report` endpoint |
 | `push` | Notify Synapse that files were pushed |
 | `feedback` | Record acted/dismissed feedback for a conflict warning |
+| `insights` | Show local aggregate coordination insights |
 | `session` | Start, heartbeat, or end a local session |
 | `whatsup` | Show the daemon's current team-state briefing |
 | `why` | Search Synapse memory with source citations |
-| `mcp` | Run a stdio MCP server forwarding tools to the local daemon |
+| `pr-brief` | Local PR handoff briefing for a base/head branch pair |
+| `mcp` | Run a stdio MCP server exposing Synapse tools plus read-only context resources |
 | `connect` | Wire other agents (Cursor, VS Code/Copilot, Gemini CLI, Windsurf, any MCP client) to the MCP server |
 | `join` | Write `.synapse/config.json`, install Claude Code hooks, and `connect` other agents |
 | `up` | join + preflight + start daemon (`--serve` / `--tunnel` for the host) |
@@ -259,10 +266,11 @@ Credentials are sent via `Authorization: Bearer` (the server still accepts `?tok
 | **Ingress validation** | Every server-bound wire message is validated against shared zod schemas before any state mutation, and daemon-bound server frames are validated before they update the warm cache. WS/webhook bodies and local daemon JSON tool bodies are capped at 1MB; malformed local JSON returns 400 and oversized local JSON returns 413 |
 | **Rate limiting** | Per-connection WS budget (`SYNAPSE_RATE_LIMIT_PER_MIN`, default 600) and a webhook budget (`SYNAPSE_WEBHOOK_RATE_LIMIT_PER_MIN`, default 120): over-limit messages are acked `rate_limited` and dropped before any mutation; webhooks answer 429. `0` disables |
 | **Webhook posture** | A server running with auth (shared token or project keys) refuses unsigned webhooks with 403 until `SYNAPSE_GITHUB_WEBHOOK_SECRET` is set; open mode (local/dev) is unchanged |
-| **Protocol negotiation** | Versions are exchanged at the WS handshake: legacy clients (no announcement) connect as v1, newer clients downgrade to the server's dialect, out-of-range clients are refused with HTTP 426 + the supported range in headers. `/health` reports `protocolVersion` + `minProtocolVersion`; `synapse doctor` fails loudly on non-overlapping ranges |
+| **Protocol negotiation** | Versions are exchanged at the WS handshake: legacy clients (no announcement) connect as v1, newer clients downgrade to the server's dialect, out-of-range clients are refused with HTTP 426 + the supported range in headers. Protocol v2 sockets receive incremental `state.delta` frames after mutations; v1 sockets continue to receive snapshots. `/health` reports `protocolVersion` + `minProtocolVersion`; `synapse doctor` fails loudly on non-overlapping ranges |
 | **Adaptive severity** | `synapse_feedback` telemetry demotes a noisy rule (≥5 dismissals, ≥80% dismiss rate) from `warn` to `info`; detection never changes. Opt out with `SYNAPSE_ADAPTIVE_SEVERITY=0` |
 | **Branch-aware severity** | Cross-branch `dependency_changed`/`stale_base` conflicts demote `warn` → `info` (they bite at merge time, not on the next keystroke); merge-blocking rules (`same_symbol_*`, `contract_divergent`) never demote. Sessions/pushes carry their git branch (webhook pushes derive it from `ref`), refreshed on every heartbeat so a mid-session checkout propagates within ~30s; unknown branch → no change. Opt out with `SYNAPSE_BRANCH_AWARE_SEVERITY=0` |
 | **File watcher** | The daemon watches the worktree (same ignore set as the analyzer scan), so manual edits — no agent, no `synapse_report` — still emit contract deltas through the report path. Debounced per file (`SYNAPSE_WATCH_DEBOUNCE_MS`, default 400ms); only analyzable sources are reported. While the watcher is active, warm pre-edit checks reuse the cached dependency graph instead of re-scanning the source tree (any report or watched change invalidates it; `synapse_graph_cache_hits_total` counts reuse). Opt out with `SYNAPSE_FILE_WATCHER=0` |
+| **GitHub webhook binding** | Signed webhook events are bound to the payload's `repository.full_name`; local verifier overrides must use the same repo identity as the signed payload instead of remapping arbitrary repository names |
 
 **RAG memory** — with `SYNAPSE_DATABASE_URL` (Postgres + pgvector) and an OpenAI-compatible embeddings endpoint (`SYNAPSE_EMBED_BASE_URL`), the server indexes session summaries, contract resolutions, and repo events as vectors, and `synapse_why` answers **hybrid**: the deterministic lexical floor always stands, vector recall only adds semantically-related memories on top (`rag: true`, numbered citations preserved). pgvector extension/table initialization uses the same advisory-lock discipline as the state store and degrades cleanly if setup fails. Without embeddings, `/recall` reports `degraded: true` and the floor answers alone. Only prose is embedded — titles, summaries, rationales, and distilled PR/issue comment excerpts (code blocks stripped, capped at 500 chars; raw bodies are never persisted) — never raw code. `SYNAPSE_RAG=0` disables.
 
@@ -279,6 +287,7 @@ To build the same tarball from a checkout (release flow):
 ```bash
 node scripts/build-package.mjs    # stages + packs dist-release/<name>-<version>.tgz
 npm run verify:package            # installs from the tarball and smoke-tests it
+npm run verify:npm-pack           # compatibility alias for verify:package
 npm publish --access public dist-release/<tarball>   # maintainers only
 ```
 
@@ -303,16 +312,16 @@ Run with `npm run <script>`. See [`package.json`](package.json) for the complete
 | `verify:m0` | Runnable skeleton + realtime stub loop (milestone 0) |
 | `verify:analyzer-ts` / `verify:analyzer-py` | Per-language contract extraction, signature diffing, and TS import-edge coverage |
 | `verify:python-check` | Full realtime Python loop → `contract_divergent` + resolution |
-| `verify:analyzer-go` / `verify:go-check` | Go contract extraction/diff (warm `go/parser` sidecar); full realtime Go loop → `contract_divergent` + resolution. SKIPs without a Go toolchain |
+| `verify:analyzer-go` / `verify:go-check` | Go contract extraction/diff (warm `go/parser` sidecar); full realtime Go loop → `contract_divergent` + resolution. Skips only when no Go toolchain is available; fails if Go is installed but the sidecar cannot build |
 | `verify:daemon-ts-report` / `verify:file-only-ts-check` | Automatic TS report path; symbol-level conflicts from a file path |
 | `verify:dependency-ts-check` | Warns when a file depends on another's unpushed change through TS dependency edges |
 | `verify:tsx-check` | React-shaped repos: default-exported `.tsx` component props change → symbol delta + `dependency_changed` for the importing component; `.mjs` modules join the same graph |
 | `verify:contract-compat` / `verify:resolution` | Compatibility classification; merged-contract resolution |
 | `verify:hot-path-latency` / `verify:large-repo-latency` / `verify:repo-latency` | Pre-edit hot-path latency budgets (p95 ≤ 50ms, max ≤ 150ms) |
-| `verify:whatsup` / `verify:why` / `verify:feedback` | Team briefing; memory search; conflict feedback telemetry |
+| `verify:whatsup` / `verify:why` / `verify:feedback` / `verify:insights` | Team briefing; memory search; conflict feedback telemetry; local aggregate coordination insights |
 | `verify:session-summary` / `verify:session-start` | Layer II session summaries and catch-up briefing |
 | `verify:hooks` | Claude Code `join` + `hook pre`/`hook post` as invoked by Claude Code, including check-before-edit then first post-edit delta reporting |
-| `verify:mcp-adapter` | Stdio MCP adapter forwarding to the daemon |
+| `verify:mcp-adapter` | Stdio MCP adapter tools/resources forwarding to the daemon |
 | `verify:connect` | `synapse connect` wires up every agent (configs + rules), idempotently, and the MCP server advertises hook-equivalent `instructions` |
 | `verify:auth` / `verify:tenancy` | Shared-token and project-key auth paths |
 | `verify:up` / `verify:up-tunnel` / `verify:doctor` | Multi-machine setup, tunnels, and preflight diagnostics |
@@ -323,14 +332,15 @@ Run with `npm run <script>`. See [`package.json`](package.json) for the complete
 | `verify:reconnect` | A delta emitted while the server is down still reaches the team after restart |
 | `verify:metrics` | Structured logs and `/metrics` counters |
 | `verify:protocol-compat` | Handshake version negotiation: legacy accepted, newer downgraded, out-of-range refused with 426 + range headers |
+| `verify:delta-broadcast` | Protocol v2 clients receive `state.delta` after mutations while legacy clients keep receiving snapshots |
 | `verify:security` | WS flood → `rate_limited` acks, state bounded; local daemon JSON 413/400 regressions; webhook 429 past budget; auth-mode server refuses unsigned webhooks (403) until a secret is set, then signed-only |
 | `verify:fuzz` | Seeded malformed-source corpus against all three analyzers: the TS extractor never throws; the Python/Go sidecars answer or reject every request and stay healthy |
 | `verify:why-rag` | Hybrid recall: a question with zero lexical overlap finds the memory through vectors (stub embeddings, advisory-locked pgvector init); the lexical floor alone finds nothing; no provider → `degraded: true`. Needs pgvector (CI image), SKIPs offline |
 | `verify:adaptive-severity` | Feedback-tuned demotion of noisy warnings |
 | `verify:branch-aware-severity` | Cross-branch `stale_base`/`dependency_changed` demote to `info`; merge-blocking rules and same-branch conflicts still warn |
 | `verify:docker` | Builds the server image, boots it, drives one edit→report |
-| `verify:npm-pack` | Packs the CLI, installs into a fresh project, joins, drives a check |
-| `verify:github-webhook` / `verify:github-briefing` | GitHub push/PR/review/comment webhooks and catch-ups |
+| `verify:npm-pack` | Compatibility alias for `verify:package` so npm-pack and release smoke use the same public tarball |
+| `verify:github-webhook` / `verify:github-briefing` / `verify:pr-brief` | GitHub push/PR/review/comment webhooks, catch-ups, and local PR handoff briefing |
 | `verify:all` | One build, then every verify (the CI matrix) |
 | `eval:conflicts` | Recorded conflict eval suite (overlap, breaking, compatible, divergent, …) — hard pass/fail gate on 7 fixed scenarios |
 | `eval:detection` | Detection-quality benchmark — per-rule precision/recall over `evals/detection-corpus/` against a committed ratchet baseline (see "Detection quality" below) |

@@ -55,13 +55,25 @@ try {
     [
       "synapse_check",
       "synapse_feedback",
+      "synapse_insights",
       "synapse_onboard",
+      "synapse_pr_brief",
       "synapse_push",
       "synapse_report",
       "synapse_session",
       "synapse_whatsup",
       "synapse_why"
     ]
+  );
+
+  const resources = await client.listResources();
+  assert.deepEqual(
+    resources.resources.map((resource) => resource.uri).sort(),
+    ["synapse://briefing", "synapse://decisions", "synapse://pr-brief", "synapse://team-state"]
+  );
+  assert.ok(
+    resources.resources.every((resource) => resource.mimeType === "application/json"),
+    "Synapse context resources should be JSON"
   );
 
   const session = await callJson(client, "synapse_session", {
@@ -100,6 +112,53 @@ try {
   assert.ok(why.answer.includes("TokenValidator.validate"));
   assert.ok(why.sources.some((source) => source.kind === "unpushed_delta"));
 
+  const prBrief = await callJson(client, "synapse_pr_brief", {
+    port: bobPort,
+    sessionId: "bob",
+    base: "main",
+    head: "feature/auth"
+  });
+  assert.equal(prBrief.degraded, false);
+  assert.equal(prBrief.base, "main");
+  assert.equal(prBrief.head, "feature/auth");
+  assert.ok(prBrief.briefing.includes("TokenValidator.validate"));
+
+  const resourceReads = {
+    briefing: await readJsonResource(client, "synapse://briefing"),
+    teamState: await readJsonResource(client, "synapse://team-state"),
+    decisions: await readJsonResource(client, "synapse://decisions"),
+    prBrief: await readJsonResource(client, "synapse://pr-brief")
+  };
+  assert.equal(resourceReads.briefing.kind, "synapse_briefing");
+  assert.equal(resourceReads.briefing.tool, "synapse_onboard");
+  assert.equal(resourceReads.briefing.context.degraded, false);
+  assert.ok(resourceReads.briefing.context.briefing.includes("TokenValidator.validate"));
+  assert.ok(
+    resourceReads.briefing.context.sections.decisions.some(
+      (source) => source.kind === "unpushed_delta" && source.summary.includes("TokenValidator.validate")
+    )
+  );
+
+  assert.equal(resourceReads.teamState.kind, "synapse_team_state");
+  assert.equal(resourceReads.teamState.tool, "synapse_whatsup");
+  assert.equal(resourceReads.teamState.context.degraded, false);
+  assert.equal(resourceReads.teamState.context.unpushedDeltas.length, 1);
+  assert.equal(resourceReads.teamState.context.unpushedDeltas[0].symbolId.raw, symbol);
+
+  assert.equal(resourceReads.decisions.kind, "synapse_decisions");
+  assert.equal(resourceReads.decisions.tool, "synapse_onboard");
+  assert.equal(resourceReads.decisions.context.degraded, false);
+  assert.ok(
+    resourceReads.decisions.context.sections.decisions.some(
+      (source) => source.kind === "unpushed_delta" && source.summary.includes("TokenValidator.validate")
+    )
+  );
+
+  assert.equal(resourceReads.prBrief.kind, "synapse_pr_brief");
+  assert.equal(resourceReads.prBrief.tool, "synapse_pr_brief");
+  assert.equal(resourceReads.prBrief.context.degraded, false);
+  assert.ok(resourceReads.prBrief.context.briefing.includes("TokenValidator.validate"));
+
   const check = await callJson(client, "synapse_check", {
     port: bobPort,
     sessionId: "bob",
@@ -131,6 +190,16 @@ try {
       state.conflictFeedback[0].conflictId === check.conflicts[0].id
   );
 
+  const insights = await callJson(client, "synapse_insights", {
+    port: bobPort,
+    sessionId: "bob"
+  });
+  assert.equal(insights.degraded, false);
+  assert.equal(insights.totals.feedback, 1);
+  assert.equal(insights.totals.acted, 1);
+  assert.equal(insights.topRulesByFeedback[0].name, "same_symbol_unpushed");
+  assert.equal(insights.topRulesByFeedback[0].count, 1);
+
   const push = await callJson(client, "synapse_push", {
     port: alicePort,
     sessionId: "alice",
@@ -152,7 +221,17 @@ try {
   console.log("MCP adapter verification passed:");
   console.log(
     JSON.stringify(
-      { tools: tools.tools.map((tool) => tool.name), briefing, why, check, feedback, stateAfterPush },
+      {
+        tools: tools.tools.map((tool) => tool.name),
+        resources: resources.resources.map((resource) => resource.uri),
+        resourceReads,
+        briefing,
+        why,
+        check,
+        feedback,
+        insights,
+        stateAfterPush
+      },
       null,
       2
     )
@@ -195,6 +274,16 @@ async function callJson(mcpClient, name, args) {
   assert.equal(result.content.length, 1);
   assert.equal(result.content[0].type, "text");
   return JSON.parse(result.content[0].text);
+}
+
+async function readJsonResource(mcpClient, uri) {
+  const result = await mcpClient.readResource({ uri });
+  assert.equal(result.contents.length, 1);
+  assert.equal(result.contents[0].uri, uri);
+  assert.equal(result.contents[0].mimeType, "application/json");
+  assert.equal(typeof result.contents[0].text, "string");
+  assert.ok(result.contents[0].text.trim().length > 0);
+  return JSON.parse(result.contents[0].text);
 }
 
 function startProcess(label, args, env) {

@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import { resolve } from "node:path";
 import { closeGoAnalyzer, diffGoContracts } from "@synapse/analyzer-go";
 import { closePythonAnalyzer, diffPythonContracts } from "@synapse/analyzer-py";
 import { diffTypeScriptContracts, extractTypeScriptContracts } from "@synapse/analyzer-ts";
@@ -19,6 +18,7 @@ import {
   type ResolutionSide
 } from "@synapse/conflict-engine";
 import {
+  applyStateOp,
   createEmptyTeamState,
   createLogger,
   MetricsRegistry,
@@ -39,7 +39,10 @@ import {
   type SynapseCheckRequest,
   type SynapseFeedbackRequest,
   type SynapseFeedbackResponse,
+  type SynapseInsightsRequest,
+  type SynapseInsightsResponse,
   type SynapseOnboardRequest,
+  type SynapsePrBriefRequest,
   type SynapsePushRequest,
   type SynapseReportRequest,
   type SynapseSessionRequest,
@@ -62,6 +65,7 @@ import {
 } from "./analysis.js";
 import {
   buildOnboardResponse,
+  buildPrBriefResponse,
   buildWhatsupResponse,
   buildWhyResponse,
   mergeRecallIntoOnboard,
@@ -76,11 +80,19 @@ import {
   type SummaryProvider
 } from "./explain-openrouter.js";
 import { JsonBodyError, readJson, writeJson } from "./http.js";
+import { resolveWorktreePath } from "./path-safety.js";
 import { startFileWatcher } from "./watcher.js";
 
 export async function startDaemon(config: RuntimeConfig): Promise<void> {
   let teamState = createEmptyTeamState(config.repoId);
+  let hasStateBaseline = false;
+  let lastStateSeq = 0;
   let socket: WebSocket | null = null;
+  // Last task set via /tools/synapse_session (action: "start"), remembered so
+  // a reconnect's session.start re-asserts it instead of wiping it back to
+  // null (plan 032) — upsertSession spreads the incoming session over the
+  // existing row, so lastTask: null on reconnect previously clobbered it.
+  let currentTask: string | null = null;
   const log = createLogger("synapse-daemon");
   const metrics = new MetricsRegistry();
   const contractSnapshots = new Map<string, CodeSymbol[]>();
@@ -187,7 +199,7 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
     socket.on("open", () => {
       connectionWarned = false;
       reconnectAttempt = 0;
-      sendToServer("session.start", { session: makeSession(config) });
+      sendToServer("session.start", { session: makeSession(config, currentTask) });
       flushOutbox();
     });
 
@@ -207,8 +219,33 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
       }
 
       const message = parsed.message;
-      if (message.type === "state.snapshot" || message.type === "state.delta") {
+      if (message.type === "state.snapshot") {
         teamState = message.payload.teamState;
+        hasStateBaseline = true;
+        lastStateSeq = message.payload.seq ?? 0;
+      } else if (message.type === "state.delta") {
+        if (!hasStateBaseline || message.payload.repoId !== config.repoId) {
+          metrics.count("synapse_delta_ignored_total");
+          return;
+        }
+        if (message.payload.seq <= lastStateSeq) {
+          metrics.count("synapse_delta_ignored_total");
+          return;
+        }
+        if (message.payload.seq !== lastStateSeq + 1) {
+          metrics.count("synapse_delta_resyncs_total");
+          log.warn("state.delta_gap", {
+            expected: lastStateSeq + 1,
+            actual: message.payload.seq
+          });
+          socket?.close();
+          return;
+        }
+        for (const op of message.payload.ops) {
+          applyStateOp(teamState, op);
+        }
+        lastStateSeq = message.payload.seq;
+        metrics.count("synapse_delta_applied_total");
       }
     });
 
@@ -232,6 +269,8 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
     });
 
     socket.on("close", () => {
+      hasStateBaseline = false;
+      lastStateSeq = 0;
       const ceiling = Math.min(reconnectMaxMs, reconnectBaseMs * 2 ** reconnectAttempt);
       const delayMs = Math.max(50, Math.floor(Math.random() * ceiling));
       reconnectAttempt = Math.min(reconnectAttempt + 1, 16);
@@ -296,7 +335,8 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
       sessionId: config.sessionId,
       // Refresh the branch every beat so branch-aware severity tracks a
       // mid-session checkout; undefined (detached HEAD) keeps the field out.
-      branch: currentGitBranch(config.worktreeRoot)
+      branch: currentGitBranch(config.worktreeRoot),
+      ...(currentTask ? { task: currentTask } : {})
     });
   }, 30_000).unref();
 
@@ -326,6 +366,21 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
           200,
           buildWhatsupResponse(teamState, {
             degraded: socket?.readyState !== WebSocket.OPEN,
+            limit: body.limit
+          })
+        );
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/tools/synapse_pr_brief") {
+        const body = (await readJson(request)) as Partial<SynapsePrBriefRequest>;
+        writeJson(
+          response,
+          200,
+          buildPrBriefResponse(teamState, {
+            degraded: socket?.readyState !== WebSocket.OPEN,
+            base: body.base,
+            head: body.head ?? currentGitBranch(config.worktreeRoot),
             limit: body.limit
           })
         );
@@ -566,6 +621,19 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
         return;
       }
 
+      if (request.method === "POST" && url.pathname === "/tools/synapse_insights") {
+        const body = (await readJson(request)) as Partial<SynapseInsightsRequest>;
+        writeJson(
+          response,
+          200,
+          buildInsightsResponse(teamState, {
+            degraded: socket?.readyState !== WebSocket.OPEN,
+            limit: body.limit
+          })
+        );
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/tools/synapse_session") {
         const body = (await readJson(request)) as Partial<SynapseSessionRequest>;
         const action = body.action ?? "heartbeat";
@@ -580,12 +648,15 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
             sessionId: config.sessionId
           });
         } else if (action === "start") {
-          sendToServer("session.start", { session: makeSession(config, body.task) });
+          currentTask = body.task ?? currentTask;
+          sendToServer("session.start", { session: makeSession(config, currentTask) });
         } else {
+          currentTask = body.task ?? currentTask;
           sendToServer("session.heartbeat", {
             repoId: config.repoId,
             sessionId: config.sessionId,
-            branch: currentGitBranch(config.worktreeRoot)
+            branch: currentGitBranch(config.worktreeRoot),
+            ...(currentTask ? { task: currentTask } : {})
           });
         }
 
@@ -607,9 +678,10 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
     }
   });
 
-  localServer.listen(config.daemonPort, () => {
+  const daemonHost = process.env.SYNAPSE_DAEMON_HOST ?? "127.0.0.1";
+  localServer.listen(config.daemonPort, daemonHost, () => {
     console.log(
-      `synapse daemon ${config.sessionId} listening on http://localhost:${config.daemonPort}`
+      `synapse daemon ${config.sessionId} listening on http://${daemonHost}:${config.daemonPort}`
     );
   });
 
@@ -877,7 +949,7 @@ function toProposed(resolution: ContractResolution): ProposedResolution {
 
 async function readFileContext(config: RuntimeConfig, filePath: string): Promise<string | undefined> {
   try {
-    return await readFile(resolve(config.worktreeRoot, filePath), "utf8");
+    return await readFile(await resolveWorktreePath(config.worktreeRoot, filePath), "utf8");
   } catch {
     return undefined;
   }
@@ -1043,6 +1115,80 @@ function createConflictFeedback(
     targetSymbol: input.targetSymbol,
     createdAt: new Date().toISOString()
   };
+}
+
+function buildInsightsResponse(
+  state: TeamState,
+  options: { degraded: boolean; limit?: number }
+): SynapseInsightsResponse {
+  const limit = clampLimit(options.limit, 5, 20);
+  const feedback = state.conflictFeedback;
+  const acted = feedback.filter((item) => item.outcome === "acted").length;
+  const dismissed = feedback.filter((item) => item.outcome === "dismissed").length;
+  const activeSessions = state.sessions.filter((session) => session.status !== "ended").length;
+  const activeEditLocks = state.editLocks.length;
+  const unpushedDeltas = state.unpushedDeltas.filter((delta) => delta.pushedAt === null).length;
+
+  const topRulesByFeedback = bucketTop(
+    feedback.map((item) => item.rule ?? "unknown_rule"),
+    limit
+  );
+  const topConflictTargets = bucketTop(
+    feedback.map((item) => item.targetSymbol?.raw ?? "unknown_target"),
+    limit
+  );
+  const recentFeedback = feedback.slice(0, limit).map((item) => ({
+    conflictId: item.conflictId,
+    outcome: item.outcome,
+    rule: item.rule,
+    targetSymbol: item.targetSymbol,
+    createdAt: item.createdAt
+  }));
+
+  const summary = [
+    `${feedback.length} feedback event${feedback.length === 1 ? "" : "s"} recorded (${acted} acted, ${dismissed} dismissed).`,
+    `${activeSessions} active session${activeSessions === 1 ? "" : "s"}, ${unpushedDeltas} unpushed delta${unpushedDeltas === 1 ? "" : "s"}, ${activeEditLocks} active edit lock${activeEditLocks === 1 ? "" : "s"}.`
+  ];
+  if (topRulesByFeedback[0]) {
+    summary.push(`Noisiest feedback rule: ${topRulesByFeedback[0].name} (${topRulesByFeedback[0].count}).`);
+  }
+
+  return {
+    repoId: state.repoId,
+    generatedAt: new Date().toISOString(),
+    degraded: options.degraded,
+    summary,
+    totals: {
+      feedback: feedback.length,
+      acted,
+      dismissed,
+      activeSessions,
+      unpushedDeltas,
+      activeEditLocks
+    },
+    topRulesByFeedback,
+    topConflictTargets,
+    recentFeedback
+  };
+}
+
+function bucketTop(values: string[], limit: number): { name: string; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const value of values) {
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+
+  return [...counts.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name))
+    .slice(0, limit);
+}
+
+function clampLimit(value: number | undefined, fallback: number, max: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.min(max, Math.max(1, Math.trunc(value)));
 }
 
 function summarizeDelta(delta: ContractDelta): ContractDeltaSummary {
