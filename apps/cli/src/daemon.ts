@@ -335,7 +335,8 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
       sessionId: config.sessionId,
       // Refresh the branch every beat so branch-aware severity tracks a
       // mid-session checkout; undefined (detached HEAD) keeps the field out.
-      branch: currentGitBranch(config.worktreeRoot)
+      branch: currentGitBranch(config.worktreeRoot),
+      ...(currentTask ? { task: currentTask } : {})
     });
   }, 30_000).unref();
 
@@ -650,10 +651,12 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
           currentTask = body.task ?? currentTask;
           sendToServer("session.start", { session: makeSession(config, currentTask) });
         } else {
+          currentTask = body.task ?? currentTask;
           sendToServer("session.heartbeat", {
             repoId: config.repoId,
             sessionId: config.sessionId,
-            branch: currentGitBranch(config.worktreeRoot)
+            branch: currentGitBranch(config.worktreeRoot),
+            ...(currentTask ? { task: currentTask } : {})
           });
         }
 
