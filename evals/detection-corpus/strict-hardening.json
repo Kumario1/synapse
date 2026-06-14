@@ -1,0 +1,320 @@
+[
+  {
+    "name": "same_session_multiple_deltas_never_warn_self",
+    "description": "Bob has his own unpushed changes to validate and TOKEN_ISSUER; checking validate never warns Bob about Bob.",
+    "type": "state",
+    "selfSessionId": "bob",
+    "sessions": ["alice", "bob"],
+    "targets": [
+      { "filePath": "src/auth/token.ts", "symbol": "ts:src/auth/token.ts#validate" }
+    ],
+    "deltas": [
+      {
+        "sessionId": "bob",
+        "symbol": "ts:src/auth/token.ts#validate",
+        "filePath": "src/auth/token.ts",
+        "summary": "validate returns Token or null",
+        "before": {
+          "raw": "function validate(input: string): boolean",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "boolean"
+        },
+        "after": {
+          "raw": "function validate(input: string): Token | null",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "Token | null"
+        }
+      },
+      {
+        "sessionId": "bob",
+        "symbol": "ts:src/auth/token.ts#TOKEN_ISSUER",
+        "filePath": "src/auth/token.ts",
+        "summary": "issuer constant renamed internally",
+        "before": { "raw": "const TOKEN_ISSUER: string", "params": [], "returns": "string" },
+        "after": { "raw": "const TOKEN_ISSUER: string", "params": [], "returns": "string" }
+      }
+    ],
+    "expected": { "rules": [] }
+  },
+  {
+    "name": "different_repo_delta_filtered_from_current_room",
+    "description": "Alice's same-symbol delta belongs to another repoId, so it is outside Bob's current coordination room.",
+    "type": "state",
+    "repoId": "local",
+    "selfSessionId": "bob",
+    "sessions": ["alice", "bob"],
+    "targets": [
+      { "filePath": "src/auth/token.ts", "symbol": "ts:src/auth/token.ts#validate" }
+    ],
+    "deltas": [
+      {
+        "repoId": "other-repo",
+        "sessionId": "alice",
+        "symbol": "ts:src/auth/token.ts#validate",
+        "filePath": "src/auth/token.ts",
+        "summary": "validate changed in a different repo",
+        "before": {
+          "raw": "function validate(input: string): boolean",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "boolean"
+        },
+        "after": {
+          "raw": "function validate(input: string): Token | null",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "Token | null"
+        }
+      }
+    ],
+    "expected": { "rules": [] }
+  },
+  {
+    "name": "synapse_push_cleared_delta_no_longer_warns",
+    "description": "A delta that has already been pushed is no longer considered an unpushed same-symbol conflict.",
+    "type": "state",
+    "selfSessionId": "bob",
+    "sessions": ["alice", "bob"],
+    "targets": [
+      { "filePath": "src/auth/token.ts", "symbol": "ts:src/auth/token.ts#validate" }
+    ],
+    "deltas": [
+      {
+        "sessionId": "alice",
+        "symbol": "ts:src/auth/token.ts#validate",
+        "filePath": "src/auth/token.ts",
+        "summary": "validate return type was pushed",
+        "before": {
+          "raw": "function validate(input: string): boolean",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "boolean"
+        },
+        "after": {
+          "raw": "function validate(input: string): Token | null",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "Token | null"
+        },
+        "pushedAt": "2026-06-08T00:00:02.000Z"
+      }
+    ],
+    "expected": { "rules": [] }
+  },
+  {
+    "name": "same_file_info_does_not_suppress_same_symbol_warning",
+    "description": "Alice has the same-symbol delta while Carol is only editing the same file; both signals remain visible.",
+    "type": "state",
+    "selfSessionId": "bob",
+    "sessions": [
+      "alice",
+      { "id": "carol", "filesEditing": ["src/auth/token.ts"] },
+      "bob"
+    ],
+    "targets": [
+      { "filePath": "src/auth/token.ts", "symbol": "ts:src/auth/token.ts#validate" }
+    ],
+    "deltas": [
+      {
+        "sessionId": "alice",
+        "symbol": "ts:src/auth/token.ts#validate",
+        "filePath": "src/auth/token.ts",
+        "summary": "validate returns Token or null",
+        "before": {
+          "raw": "function validate(input: string): boolean",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "boolean"
+        },
+        "after": {
+          "raw": "function validate(input: string): Token | null",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "Token | null"
+        }
+      }
+    ],
+    "expected": { "rules": ["same_symbol_unpushed", "same_file_no_overlap"] }
+  },
+  {
+    "name": "compatible_dependency_change_known_false_positive_non_warning_expected",
+    "description": "Adding an optional options parameter to a direct dependency is backward-compatible; current detection still flags dependency_changed, so the false positive is ratcheted explicitly.",
+    "type": "state",
+    "selfSessionId": "bob",
+    "sessions": ["alice", "bob"],
+    "targets": [
+      { "filePath": "src/auth/login.ts", "symbol": "ts:src/auth/login.ts#login" }
+    ],
+    "dependencies": {
+      "ts:src/auth/login.ts#login": [
+        { "symbol": "ts:src/auth/token.ts#validate", "hops": 1 }
+      ]
+    },
+    "deltas": [
+      {
+        "sessionId": "alice",
+        "symbol": "ts:src/auth/token.ts#validate",
+        "filePath": "src/auth/token.ts",
+        "summary": "validate accepts optional options",
+        "before": {
+          "raw": "function validate(input: string): Token | null",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "Token | null"
+        },
+        "after": {
+          "raw": "function validate(input: string, opts?: ValidateOptions): Token | null",
+          "params": [
+            { "name": "input", "type": "string", "optional": false },
+            { "name": "opts", "type": "ValidateOptions", "optional": true }
+          ],
+          "returns": "Token | null"
+        }
+      }
+    ],
+    "expected": { "rules": [] }
+  },
+  {
+    "name": "direct_dependency_required_parameter_warns",
+    "description": "A direct dependency adds a required options parameter, so Bob's caller should warn.",
+    "type": "state",
+    "selfSessionId": "bob",
+    "sessions": ["alice", "bob"],
+    "targets": [
+      { "filePath": "src/auth/login.ts", "symbol": "ts:src/auth/login.ts#login" }
+    ],
+    "dependencies": {
+      "ts:src/auth/login.ts#login": [
+        { "symbol": "ts:src/auth/token.ts#validate", "hops": 1 }
+      ]
+    },
+    "deltas": [
+      {
+        "sessionId": "alice",
+        "symbol": "ts:src/auth/token.ts#validate",
+        "filePath": "src/auth/token.ts",
+        "summary": "validate now requires options",
+        "before": {
+          "raw": "function validate(input: string): Token | null",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "Token | null"
+        },
+        "after": {
+          "raw": "function validate(input: string, opts: ValidateOptions): Token | null",
+          "params": [
+            { "name": "input", "type": "string", "optional": false },
+            { "name": "opts", "type": "ValidateOptions", "optional": false }
+          ],
+          "returns": "Token | null"
+        }
+      }
+    ],
+    "expected": { "rules": ["dependency_changed"] }
+  },
+  {
+    "name": "transitive_dependency_return_type_change_warns",
+    "description": "A two-hop dependency changes return type, so Bob receives a transitive dependency warning.",
+    "type": "state",
+    "selfSessionId": "bob",
+    "sessions": ["alice", "bob"],
+    "targets": [
+      { "filePath": "src/http/handler.ts", "symbol": "ts:src/http/handler.ts#handleRequest" }
+    ],
+    "dependencies": {
+      "ts:src/http/handler.ts#handleRequest": [
+        { "symbol": "ts:src/auth/token.ts#validate", "hops": 2 }
+      ]
+    },
+    "deltas": [
+      {
+        "sessionId": "alice",
+        "symbol": "ts:src/auth/token.ts#validate",
+        "filePath": "src/auth/token.ts",
+        "summary": "validate now returns Token or null",
+        "before": {
+          "raw": "function validate(input: string): boolean",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "boolean"
+        },
+        "after": {
+          "raw": "function validate(input: string): Token | null",
+          "params": [{ "name": "input", "type": "string", "optional": false }],
+          "returns": "Token | null"
+        }
+      }
+    ],
+    "expected": { "rules": ["transitive_dependency"] }
+  },
+  {
+    "name": "stale_base_recent_push_same_symbol_warns",
+    "description": "Alice recently pushed the same symbol Bob is editing, so Bob's base may be stale.",
+    "type": "state",
+    "selfSessionId": "bob",
+    "sessions": ["alice", "bob"],
+    "targets": [
+      { "filePath": "src/auth/token.ts", "symbol": "ts:src/auth/token.ts#validate" }
+    ],
+    "recentPushes": [
+      {
+        "memberId": "alice",
+        "summary": "Pushed validate return type change",
+        "filesAffected": ["src/auth/token.ts"],
+        "symbols": ["ts:src/auth/token.ts#validate"],
+        "sha": "push-validate"
+      }
+    ],
+    "expected": { "rules": ["stale_base"] }
+  },
+  {
+    "name": "active_edit_lock_different_session_warns",
+    "description": "Alice holds the active lock for validate while Bob checks the same symbol.",
+    "type": "state",
+    "selfSessionId": "bob",
+    "sessions": ["alice", "bob"],
+    "targets": [
+      { "filePath": "src/auth/token.ts", "symbol": "ts:src/auth/token.ts#validate" }
+    ],
+    "editLocks": [
+      {
+        "sessionId": "alice",
+        "symbol": "ts:src/auth/token.ts#validate",
+        "filePath": "src/auth/token.ts",
+        "ttlSec": 120
+      }
+    ],
+    "expected": { "rules": ["same_symbol_active"] }
+  },
+  {
+    "name": "ended_session_file_activity_stays_silent",
+    "description": "Alice's ended session still lists the target file as editing data, but inactive session data is ignored.",
+    "type": "state",
+    "selfSessionId": "bob",
+    "sessions": [
+      { "id": "alice", "filesEditing": ["src/auth/token.ts"], "status": "ended" },
+      "bob"
+    ],
+    "targets": [
+      { "filePath": "src/auth/token.ts", "symbol": "ts:src/auth/token.ts#validate" }
+    ],
+    "expected": { "rules": [] }
+  },
+  {
+    "name": "source_exported_interface_field_removal_warns",
+    "description": "Real TS source: removing a field from an exported interface is surfaced as a same-symbol unpushed change.",
+    "type": "source",
+    "files": {
+      "src/auth/token.ts": {
+        "before": "export interface Token {\n  value: string;\n  expiresAt: Date;\n}\n",
+        "after": "export interface Token {\n  value: string;\n}\n"
+      }
+    },
+    "checkTarget": { "filePath": "src/auth/token.ts", "symbol": "ts:src/auth/token.ts#Token" },
+    "expected": { "rules": ["same_symbol_unpushed"] }
+  },
+  {
+    "name": "source_optional_parameter_addition_is_compatible",
+    "description": "Real TS source: adding an optional parameter to validate is a compatible same-symbol change.",
+    "type": "source",
+    "files": {
+      "src/auth/token.ts": {
+        "before": "export interface Token { value: string; }\nexport function validate(input: string): Token | null {\n  return input ? { value: input } : null;\n}\n",
+        "after": "export interface Token { value: string; }\nexport interface ValidateOptions { issuer?: string; }\nexport function validate(input: string, opts?: ValidateOptions): Token | null {\n  return input ? { value: opts?.issuer ?? input } : null;\n}\n"
+      }
+    },
+    "checkTarget": { "filePath": "src/auth/token.ts", "symbol": "ts:src/auth/token.ts#validate" },
+    "expected": { "rules": ["same_symbol_unpushed"] }
+  }
+]
