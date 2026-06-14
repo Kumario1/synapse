@@ -99,6 +99,10 @@ export class PostgresStateStore implements StateStore {
     this.enqueue("DELETE FROM synapse_deltas WHERE repo_id = $1 AND id = $2", [repoId, deltaId]);
   }
 
+  deleteSession(repoId: string, sessionId: string): void {
+    this.enqueue("DELETE FROM synapse_sessions WHERE repo_id = $1 AND id = $2", [repoId, sessionId]);
+  }
+
   appendPush(repoId: string, push: RecentPush, cap: number): void {
     this.appendRow("pushes", repoId, [push.id], push, cap);
   }

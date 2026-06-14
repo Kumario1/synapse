@@ -22,7 +22,7 @@ import {
 import { WebSocket, WebSocketServer } from "ws";
 import { createEmbeddingProvider } from "./embeddings.js";
 import { gitHubPushToNotify, gitHubRepoEventToNotify } from "./github.js";
-import { applyMessage, pruneExpiredLocks, repoIdFor } from "./state.js";
+import { applyMessage, pruneExpiredLocks, pruneStaleSessions, repoIdFor } from "./state.js";
 import { getCachedState } from "./state-cache.js";
 import { createStateStore, type StateStoreOps } from "./store.js";
 
@@ -605,6 +605,7 @@ async function getState(repoId: string): Promise<TeamState> {
   });
 
   pruneExpiredLocks(state, store);
+  pruneStaleSessions(state, store);
   return state;
 }
 
@@ -691,6 +692,13 @@ function teeStateStoreOps(ops: StateOp[]): StateStoreOps {
     deleteDelta: (repoId, deltaId) => {
       store.deleteDelta(repoId, deltaId);
       ops.push({ op: "deleteDelta", deltaId });
+    },
+    deleteSession: (repoId, sessionId) => {
+      // Sessions are only ever deleted by pruneStaleSessions in getState, which
+      // uses the raw store (like pruneExpiredLocks) — never this tee. Present
+      // solely to satisfy StateStoreOps; there is no applyMessage-path op to
+      // mirror into the delta stream.
+      store.deleteSession(repoId, sessionId);
     },
     appendPush: (repoId, push, cap) => {
       store.appendPush(repoId, push, cap);

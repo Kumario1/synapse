@@ -6,11 +6,13 @@ import {
   type ClientMessage,
   type ContractDelta,
   type ContractResolution,
+  type EditLock,
+  type Session,
   type Signature,
   type TeamState
 } from "@synapse/protocol";
 import { resolutionInputsHash, resolutionSidesForSymbol } from "@synapse/conflict-engine";
-import { applyMessage } from "./state.js";
+import { applyMessage, pruneStaleSessions } from "./state.js";
 
 const symbol = "ts:src/auth/token.ts#validate";
 
@@ -333,3 +335,104 @@ function heartbeatMessage(sessionId: string, branch?: string): ClientMessage {
     payload: { repoId: "local", sessionId, ...(branch ? { branch } : {}) }
   };
 }
+
+const sweepNow = Date.parse(now);
+const FIVE_MIN_MS = 5 * 60_000;
+const ONE_DAY_MS = 24 * 60 * 60_000;
+
+function staleSession(overrides: Partial<Session> = {}): Session {
+  return {
+    id: "alice",
+    repoId: "local",
+    memberId: "alice",
+    memberLogin: "alice",
+    agentType: "other",
+    filesOpen: ["src/auth/token.ts"],
+    filesEditing: ["src/auth/token.ts"],
+    lastTask: "refactor auth",
+    startedAt: now,
+    lastSeen: now,
+    status: "active",
+    ...overrides
+  };
+}
+
+function lockFor(sessionId: string): EditLock {
+  return {
+    sessionId,
+    symbolId: { raw: symbol },
+    filePath: "src/auth/token.ts",
+    acquiredAt: now,
+    ttlSec: 90
+  };
+}
+
+test("pruneStaleSessions ends a session that missed heartbeats past the TTL", () => {
+  const state = createEmptyTeamState("local");
+  state.sessions.push(staleSession({ lastSeen: new Date(sweepNow - FIVE_MIN_MS - 1).toISOString() }));
+  state.editLocks.push(lockFor("alice"));
+
+  pruneStaleSessions(state, undefined, sweepNow);
+
+  assert.equal(state.sessions.length, 1);
+  assert.equal(state.sessions[0].status, "ended");
+  assert.deepEqual(state.sessions[0].filesEditing, []);
+  assert.equal(state.editLocks.length, 0);
+});
+
+test("pruneStaleSessions leaves a recently-seen active session unchanged", () => {
+  const state = createEmptyTeamState("local");
+  state.sessions.push(staleSession({ lastSeen: new Date(sweepNow - 60_000).toISOString() }));
+  state.editLocks.push(lockFor("alice"));
+
+  pruneStaleSessions(state, undefined, sweepNow);
+
+  assert.equal(state.sessions.length, 1);
+  assert.equal(state.sessions[0].status, "active");
+  assert.deepEqual(state.sessions[0].filesEditing, ["src/auth/token.ts"]);
+  assert.equal(state.editLocks.length, 1);
+});
+
+test("pruneStaleSessions removes a long-ended session from state", () => {
+  const state = createEmptyTeamState("local");
+  state.sessions.push(
+    staleSession({ status: "ended", lastSeen: new Date(sweepNow - ONE_DAY_MS - 1).toISOString() })
+  );
+
+  pruneStaleSessions(state, undefined, sweepNow);
+
+  assert.equal(state.sessions.length, 0);
+});
+
+test("SYNAPSE_SESSION_SWEEP=0 disables the sweep", () => {
+  const state = createEmptyTeamState("local");
+  state.sessions.push(staleSession({ lastSeen: new Date(sweepNow - FIVE_MIN_MS - 1).toISOString() }));
+
+  const previous = process.env.SYNAPSE_SESSION_SWEEP;
+  process.env.SYNAPSE_SESSION_SWEEP = "0";
+  try {
+    pruneStaleSessions(state, undefined, sweepNow);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.SYNAPSE_SESSION_SWEEP;
+    } else {
+      process.env.SYNAPSE_SESSION_SWEEP = previous;
+    }
+  }
+
+  assert.equal(state.sessions.length, 1);
+  assert.equal(state.sessions[0].status, "active");
+});
+
+test("a returning daemon's session.start revives a session the sweep ended", () => {
+  const state = createEmptyTeamState("local");
+  state.sessions.push(staleSession({ lastSeen: new Date(sweepNow - FIVE_MIN_MS - 1).toISOString() }));
+
+  pruneStaleSessions(state, undefined, sweepNow);
+  assert.equal(state.sessions[0].status, "ended");
+
+  applyMessage(state, "local", sessionStartMessage("alice"));
+
+  assert.equal(state.sessions.length, 1);
+  assert.equal(state.sessions[0].status, "active");
+});
