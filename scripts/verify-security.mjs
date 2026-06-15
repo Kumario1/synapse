@@ -32,6 +32,8 @@ const tempDirs = [];
 try {
   await assertLoopbackBindings();
 
+  const httpRead429 = await assertHttpReadRateLimit();
+
   // --- Server A: open mode, tight limits, no webhook secret. ---
   const openPort = await freePort();
   startServer("open", openPort, {
@@ -139,6 +141,7 @@ try {
         daemon413: tooLarge.status,
         daemon400: malformed.status,
         daemonPathSafety: pathSafety,
+        httpRead429,
         webhook429: saw429,
         authWithoutSecret: refused.status,
         signedAccepted: signed.status,
@@ -263,6 +266,26 @@ async function assertDaemonPathSafety(serverPort) {
     traversal: traversal.status,
     absolute: absolute.status
   };
+}
+
+async function assertHttpReadRateLimit() {
+  const port = await freePort();
+  startServer("http-read-limit", port, { SYNAPSE_HTTP_RATE_LIMIT_PER_MIN: "2" });
+  await waitForHttp(`http://127.0.0.1:${port}/health`);
+
+  let limited;
+  for (let i = 0; i < 4; i += 1) {
+    const response = await fetch(`http://127.0.0.1:${port}/state?repoId=local`);
+    const body = await response.json();
+    if (response.status === 429) {
+      limited = { status: response.status, body };
+      break;
+    }
+  }
+
+  assert.equal(limited?.status, 429, "HTTP read routes rate-limit past their budget");
+  assert.equal(limited.body.error, "rate_limited", "HTTP read 429 uses the rate_limited error");
+  return limited.status;
 }
 
 function feedbackMessage(id) {
