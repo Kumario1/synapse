@@ -1,5 +1,5 @@
 import { commandDefaults, parseFlags } from "../config.js";
-import { postJson } from "../http.js";
+import { finiteNumber, postToolWith, printJson } from "./tool.js";
 
 export async function runWhy(rawArgs: string[]): Promise<void> {
   const flags = parseFlags(rawArgs);
@@ -9,13 +9,12 @@ export async function runWhy(rawArgs: string[]): Promise<void> {
     throw new Error("--question is required");
   }
 
-  const limit = flags.limit ? Number(flags.limit) : undefined;
-  const response = await postJson(`http://localhost:${defaults.daemonPort}/tools/synapse_why`, {
-    repoId: defaults.repoId,
-    sessionId: defaults.sessionId,
-    question,
-    limit: Number.isFinite(limit) ? limit : undefined
-  });
-  console.log(JSON.stringify(response, null, 2));
+  printJson(
+    await postToolWith(defaults, "synapse_why", {
+      repoId: defaults.repoId,
+      sessionId: defaults.sessionId,
+      question,
+      limit: finiteNumber(flags.limit)
+    })
+  );
 }
-
