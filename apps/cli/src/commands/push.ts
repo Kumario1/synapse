@@ -1,5 +1,5 @@
 import { commandDefaults, filesFromFlags, parseFlags } from "../config.js";
-import { postJson } from "../http.js";
+import { postToolWith, printJson } from "./tool.js";
 
 export async function runPush(rawArgs: string[]): Promise<void> {
   const flags = parseFlags(rawArgs);
@@ -15,14 +15,14 @@ export async function runPush(rawArgs: string[]): Promise<void> {
       ? [{ raw: flags.symbol }]
       : undefined;
 
-  const response = await postJson(`http://localhost:${defaults.daemonPort}/tools/synapse_push`, {
-    repoId: defaults.repoId,
-    sessionId: defaults.sessionId,
-    sha: flags.sha ?? "local",
-    summary: flags.summary ?? `Pushed ${files.join(", ")}`,
-    files,
-    symbols
-  });
-  console.log(JSON.stringify(response, null, 2));
+  printJson(
+    await postToolWith(defaults, "synapse_push", {
+      repoId: defaults.repoId,
+      sessionId: defaults.sessionId,
+      sha: flags.sha ?? "local",
+      summary: flags.summary ?? `Pushed ${files.join(", ")}`,
+      files,
+      symbols
+    })
+  );
 }
-

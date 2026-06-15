@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type {
@@ -15,6 +13,7 @@ import type {
   SynapseWhyRequest
 } from "@synapse/protocol";
 import { z } from "zod/v4";
+import { parseFlags, readLocalConfig } from "./config.js";
 import { SYNAPSE_AGENT_GUIDANCE } from "./connect.js";
 
 const serverInfo = {
@@ -37,7 +36,7 @@ export async function runMcp(rawArgs: string[]): Promise<void> {
   // flag, then env, then `.synapse/config.json` (written by `synapse join`/`up`),
   // then a local fallback. This is what lets an MCP-launched agent land in the
   // exact room the daemon joined with zero per-agent configuration.
-  const localConfig = readLocalConfig();
+  const localConfig = readMcpLocalConfig();
   const defaultPort = Number(
     flags.port ?? process.env.SYNAPSE_DAEMON_PORT ?? localConfig.daemonPort ?? 4011
   );
@@ -547,42 +546,10 @@ function toolError(message: string) {
  * so the config written by `synapse join`/`up` is found relative to it. Any
  * problem (missing/malformed file) degrades silently to the built-in defaults.
  */
-function readLocalConfig(): { repoId?: string; sessionId?: string; daemonPort?: number } {
-  const cwd = process.env.INIT_CWD ?? process.cwd();
+function readMcpLocalConfig(): { repoId?: string; sessionId?: string; daemonPort?: number } {
   try {
-    const parsed = JSON.parse(readFileSync(join(cwd, ".synapse", "config.json"), "utf8")) as Record<
-      string,
-      unknown
-    >;
-    return {
-      repoId: typeof parsed.repoId === "string" ? parsed.repoId : undefined,
-      sessionId: typeof parsed.sessionId === "string" ? parsed.sessionId : undefined,
-      daemonPort: typeof parsed.daemonPort === "number" ? parsed.daemonPort : undefined
-    };
+    return readLocalConfig();
   } catch {
     return {};
   }
-}
-
-function parseFlags(rawArgs: string[]): Record<string, string> {
-  const flags: Record<string, string> = {};
-
-  for (let index = 0; index < rawArgs.length; index += 1) {
-    const arg = rawArgs[index];
-    if (!arg?.startsWith("--")) {
-      continue;
-    }
-
-    const name = arg.slice(2);
-    const next = rawArgs[index + 1];
-    if (!next || next.startsWith("--")) {
-      flags[name] = "true";
-      continue;
-    }
-
-    flags[name] = next;
-    index += 1;
-  }
-
-  return flags;
 }
