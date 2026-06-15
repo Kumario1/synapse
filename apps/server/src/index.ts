@@ -22,7 +22,13 @@ import {
 import { WebSocket, WebSocketServer } from "ws";
 import { createEmbeddingProvider } from "./embeddings.js";
 import { gitHubPushToNotify, gitHubRepoEventToNotify } from "./github.js";
-import { applyMessage, pruneExpiredLocks, pruneStaleSessions, repoIdFor } from "./state.js";
+import {
+  applyMessage,
+  peerLocksForIntent,
+  pruneExpiredLocks,
+  pruneStaleSessions,
+  repoIdFor
+} from "./state.js";
 import { getCachedState } from "./state-cache.js";
 import { createStateStore, type StateStoreOps } from "./store.js";
 
@@ -428,7 +434,19 @@ async function handleMessage(socket: WebSocket, fallbackRepoId: string, raw: str
     metrics.observe("synapse_message_apply_ms", performance.now() - startedAt);
     indexMemory(repoId, message);
     log.debug("message.applied", { type: message.type, repoId, sessions: state.sessions.length });
-    sendAck(socket, { forId: message.id, ok: true });
+    // For edit.intent, read the post-apply peer locks (state from withRepo already
+    // includes this session's just-applied lock — the linearization point) and ship
+    // them on the ack so the requester's check evaluates against authoritative state.
+    const ackLocks =
+      message.type === "edit.intent"
+        ? peerLocksForIntent(
+            state,
+            message.payload.sessionId,
+            message.payload.symbolId.raw,
+            Date.now()
+          )
+        : undefined;
+    sendAck(socket, { forId: message.id, ok: true, ...(ackLocks ? { locks: ackLocks } : {}) });
     if (ops.length > 0) {
       broadcastStateChange(repoId, state, ops);
       fanout?.publish(repoId);
