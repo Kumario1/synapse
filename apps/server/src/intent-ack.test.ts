@@ -1,16 +1,7 @@
 import assert from "node:assert/strict";
-import test, { after } from "node:test";
+import test from "node:test";
 import { createEmptyTeamState, type EditLock } from "@synapse/protocol";
-
-// Importing the server module starts an HTTP listener as a side effect, so bind
-// it to an ephemeral port and tear it down after the suite to keep the test
-// runner from hanging on the open handle.
-process.env.SYNAPSE_SERVER_PORT = "0";
-const { peerLocksForIntent, stopServerForTests } = await import("./index.js");
-
-after(() => {
-  stopServerForTests();
-});
+import { peerLocksForIntent } from "./state.js";
 
 const symbolRaw = "ts:src/widget.ts#area";
 const now = Date.parse("2026-06-14T00:00:00.000Z");

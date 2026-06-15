@@ -85,25 +85,6 @@ import { JsonBodyError, readJson, writeJson } from "./http.js";
 import { resolveWorktreePath } from "./path-safety.js";
 import { startFileWatcher } from "./watcher.js";
 
-// Merge authoritative peer locks into the local mirror's lock list without
-// duplicating by (session, symbol). Returns `base` unchanged when there is
-// nothing to add, so the caller can skip cloning teamState in the common case.
-function unionLocks(base: EditLock[], extra: EditLock[]): EditLock[] {
-  if (extra.length === 0) {
-    return base;
-  }
-  const seen = new Set(base.map((lock) => `${lock.sessionId} ${lock.symbolId.raw}`));
-  const merged = [...base];
-  for (const lock of extra) {
-    const key = `${lock.sessionId} ${lock.symbolId.raw}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      merged.push(lock);
-    }
-  }
-  return merged;
-}
-
 export async function startDaemon(config: RuntimeConfig): Promise<void> {
   let teamState = createEmptyTeamState(config.repoId);
   let hasStateBaseline = false;
@@ -553,14 +534,16 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
         metrics.observe("synapse_intent_sync_ms", performance.now() - intentSyncStartedAt);
         checkStartedAt += performance.now() - intentSyncStartedAt;
 
-        // Union the authoritative peer locks (null = timeout/offline → keep the
-        // local mirror's view for that target) into a per-check state copy.
+        // Fold the authoritative peer locks (null = timeout/offline → keep the
+        // local mirror's view for that target) into a per-check state copy. A
+        // lock already in the mirror just yields a duplicate same_symbol_active
+        // that the engine collapses by (rule, symbol, counterpart), so no dedup
+        // is needed here.
         const authoritativeLocks = lockResults.flatMap((locks) => locks ?? []);
-        const mergedLocks = unionLocks(teamState.editLocks, authoritativeLocks);
         const checkState =
-          mergedLocks === teamState.editLocks
+          authoritativeLocks.length === 0
             ? teamState
-            : { ...teamState, editLocks: mergedLocks };
+            : { ...teamState, editLocks: [...teamState.editLocks, ...authoritativeLocks] };
 
         const { graph, neighborsOf } = await buildDependencyGraph(config, analysisCache);
         const rawConflicts = evaluateConflicts({
