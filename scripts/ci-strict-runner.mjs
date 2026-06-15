@@ -25,6 +25,7 @@ export const groups = {
   static: [
     command("npm", "run", "build"),
     command("npm", "run", "typecheck"),
+    command("npm", "run", "lint"),
     command("node", "scripts/ci-test-inventory.mjs"),
     command("node", "scripts/ci-strict-coverage.mjs")
   ],

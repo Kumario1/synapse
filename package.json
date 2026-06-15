@@ -15,6 +15,9 @@
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
     "check": "npm run typecheck && npm test",
+    "lint": "eslint \"{apps,packages}/**/src/**/*.ts\"",
+    "format": "prettier --write \"{apps,packages}/**/src/**/*.ts\"",
+    "format:check": "prettier --check eslint.config.js .prettierrc.json package.json",
     "ci:strict:static": "node scripts/ci-strict-runner.mjs static",
     "ci:strict:unit": "node scripts/ci-strict-runner.mjs unit",
     "ci:strict:detection": "node scripts/ci-strict-runner.mjs detection",
@@ -88,8 +91,12 @@
   },
   "devDependencies": {
     "@types/node": "^20.19.2",
+    "eslint": "^9.39.4",
+    "eslint-config-prettier": "^9.1.2",
+    "prettier": "^3.8.4",
     "tsx": "^4.19.4",
     "turbo": "^2.5.4",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.61.1"
   }
 }
