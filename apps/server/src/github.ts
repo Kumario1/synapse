@@ -142,6 +142,15 @@ export function gitHubRepoEventToNotify(
 }
 
 /**
+ * The signed payload's `repository.full_name`, or null when absent/blank. Used
+ * to enforce that tenancy-mode webhooks bind to the repo the signature covers,
+ * never to an attacker-supplied `?repoId=` override (plan 043).
+ */
+export function webhookRepoFullName(payload: unknown): string | null {
+  return isRecord(payload) ? stringAt(payload.repository, "full_name") : null;
+}
+
+/**
  * Distill body prose for storage and embedding (plan C3 slice): strip code
  * (the privacy boundary — code never leaves as prose), strip markdown
  * link/image URLs, collapse whitespace, cap at a word boundary, and drop
