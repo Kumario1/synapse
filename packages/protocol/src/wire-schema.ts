@@ -320,7 +320,8 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
     payload: z.looseObject({
       forId: z.string().min(1),
       ok: z.boolean(),
-      error: z.string().optional()
+      error: z.string().optional(),
+      locks: z.array(editLock).optional()
     })
   })
 ]);

@@ -285,6 +285,37 @@ test("accepts valid server acks", () => {
   assert.equal(result.ok, true, result.ok ? "" : result.error);
 });
 
+test("round-trips an ack carrying peer edit locks", () => {
+  const lock = {
+    symbolId: { raw: "ts:src/widget.ts#area" },
+    filePath: "src/widget.ts",
+    sessionId: "alice",
+    acquiredAt: base.ts,
+    ttlSec: 90
+  };
+  const result = parseServerMessage({
+    ...base,
+    type: "ack",
+    payload: { forId: "msg-1", ok: true, locks: [lock] }
+  });
+  assert.equal(result.ok, true, result.ok ? "" : result.error);
+  if (result.ok && result.message.type === "ack") {
+    assert.deepEqual(result.message.payload.locks, [lock]);
+  }
+});
+
+test("accepts an ack without locks", () => {
+  const result = parseServerMessage({
+    ...base,
+    type: "ack",
+    payload: { forId: "msg-1", ok: true }
+  });
+  assert.equal(result.ok, true, result.ok ? "" : result.error);
+  if (result.ok && result.message.type === "ack") {
+    assert.equal(result.message.payload.locks, undefined);
+  }
+});
+
 test("rejects malformed server messages with a path-bearing error", () => {
   const cases = [
     { value: { ...base, type: "no.such.type", payload: {} }, label: "unknown type" },
