@@ -31,11 +31,13 @@ import {
   type ContractDelta,
   type ContractDeltaSummary,
   type ContractResolution,
+  type EditLock,
   type ProposedResolution,
   type RecallMatch,
   type RecallResponse,
   type Session,
   type SessionSummary,
+  type SymbolId,
   type SynapseCheckRequest,
   type SynapseFeedbackRequest,
   type SynapseFeedbackResponse,
@@ -83,6 +85,25 @@ import { JsonBodyError, readJson, writeJson } from "./http.js";
 import { resolveWorktreePath } from "./path-safety.js";
 import { startFileWatcher } from "./watcher.js";
 
+// Merge authoritative peer locks into the local mirror's lock list without
+// duplicating by (session, symbol). Returns `base` unchanged when there is
+// nothing to add, so the caller can skip cloning teamState in the common case.
+function unionLocks(base: EditLock[], extra: EditLock[]): EditLock[] {
+  if (extra.length === 0) {
+    return base;
+  }
+  const seen = new Set(base.map((lock) => `${lock.sessionId} ${lock.symbolId.raw}`));
+  const merged = [...base];
+  for (const lock of extra) {
+    const key = `${lock.sessionId} ${lock.symbolId.raw}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      merged.push(lock);
+    }
+  }
+  return merged;
+}
+
 export async function startDaemon(config: RuntimeConfig): Promise<void> {
   let teamState = createEmptyTeamState(config.repoId);
   let hasStateBaseline = false;
@@ -122,24 +143,63 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
   // and the reconnect's `session.start` re-asserts liveness anyway.
   const outbox: ClientMessage[] = [];
   const OUTBOX_CAP = 500;
-  const sendToServer = (type: ClientMessage["type"], payload: unknown): void => {
-    const message = envelope(type, payload);
+  // Pending edit.intent round-trips, keyed by the envelope id we sent; resolved
+  // when the server's correlated ack arrives (see the receive loop). A check
+  // must never hang, so each waiter also has a timeout that resolves null →
+  // caller falls back to the local mirror.
+  const pendingAcks = new Map<string, { resolve: (locks: EditLock[] | null) => void; timer: NodeJS.Timeout }>();
+  const INTENT_SYNC_MS = Number(process.env.SYNAPSE_INTENT_SYNC_MS ?? 150);
+
+  const sendEnvelope = (message: ClientMessage): boolean => {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
-      if (type === "session.heartbeat") {
-        return;
+      if (message.type === "session.heartbeat") {
+        return false;
       }
       outbox.push(message);
-      metrics.count("synapse_outbox_enqueued_total", { type });
-      log.debug("outbox.enqueued", { type, queued: outbox.length });
+      metrics.count("synapse_outbox_enqueued_total", { type: message.type });
       if (outbox.length > OUTBOX_CAP) {
         outbox.shift();
         metrics.count("synapse_outbox_dropped_total");
         log.warn("outbox.dropped_oldest", { cap: OUTBOX_CAP });
       }
-      return;
+      return false;
     }
-
     socket.send(JSON.stringify(message));
+    return true;
+  };
+
+  const sendToServer = (type: ClientMessage["type"], payload: unknown): void => {
+    sendEnvelope(envelope(type, payload));
+  };
+
+  // Send an edit.intent and wait (briefly) for the server's correlated ack to
+  // come back with the authoritative peer locks for this symbol. Resolves null
+  // if the socket is down or the ack does not arrive within INTENT_SYNC_MS — the
+  // caller then evaluates against the local mirror, exactly as before. This is
+  // what linearizes two simultaneous checks: the server applies intents in
+  // order, so the later one's ack includes the earlier one's lock.
+  const requestIntent = (payload: {
+    repoId: string;
+    sessionId: string;
+    symbolId: SymbolId;
+    filePath: string;
+  }): Promise<EditLock[] | null> => {
+    const message = envelope("edit.intent", payload);
+    return new Promise<EditLock[] | null>((resolve) => {
+      const open = sendEnvelope(message);
+      if (!open) {
+        resolve(null); // offline → enqueued for the team, but no sync read now
+        return;
+      }
+      const timer = setTimeout(() => {
+        if (pendingAcks.delete(message.id)) {
+          metrics.count("synapse_intent_sync_timeouts_total");
+          resolve(null);
+        }
+      }, INTENT_SYNC_MS);
+      timer.unref?.();
+      pendingAcks.set(message.id, { resolve, timer });
+    });
   };
 
   const flushOutbox = (): void => {
@@ -219,6 +279,17 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
       }
 
       const message = parsed.message;
+      if (message.type === "ack") {
+        // Correlate the server's ack back to a waiting requestIntent (by the id
+        // we sent). Locks may be absent (non-intent ack) → treat as empty.
+        const pending = pendingAcks.get(message.payload.forId);
+        if (pending) {
+          clearTimeout(pending.timer);
+          pendingAcks.delete(message.payload.forId);
+          pending.resolve(message.payload.locks ?? []);
+        }
+        return;
+      }
       if (message.type === "state.snapshot") {
         teamState = message.payload.teamState;
         hasStateBaseline = true;
@@ -269,6 +340,13 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
     });
 
     socket.on("close", () => {
+      // The socket is gone: no ack will arrive. Resolve every waiter null so any
+      // in-flight check falls back to its local mirror instead of hanging.
+      for (const [, pending] of pendingAcks) {
+        clearTimeout(pending.timer);
+        pending.resolve(null);
+      }
+      pendingAcks.clear();
       hasStateBaseline = false;
       lastStateSeq = 0;
       const ceiling = Math.min(reconnectMaxMs, reconnectBaseMs * 2 ** reconnectAttempt);
@@ -452,24 +530,43 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
       }
 
       if (request.method === "POST" && url.pathname === "/tools/synapse_check") {
-        const checkStartedAt = performance.now();
+        let checkStartedAt = performance.now();
         const body = (await readJson(request)) as Partial<SynapseCheckRequest>;
         const targets = await resolveCheckTargets(config, body, analysisCache);
 
-        for (const target of targets) {
-          sendToServer("edit.intent", {
-            repoId: config.repoId,
-            sessionId: config.sessionId,
-            symbolId: target.symbolId,
-            filePath: target.filePath
-          });
-        }
+        // Register intent AND read back the server-authoritative peer locks in
+        // one round-trip, so a simultaneous peer check cannot slip past us. Off
+        // the deterministic latency budget: measure it separately and shift
+        // checkStartedAt forward so synapse_check_duration_ms stays "hot path
+        // only" (extract + graph + evaluate).
+        const intentSyncStartedAt = performance.now();
+        const lockResults = await Promise.all(
+          targets.map((target) =>
+            requestIntent({
+              repoId: config.repoId,
+              sessionId: config.sessionId,
+              symbolId: target.symbolId,
+              filePath: target.filePath
+            })
+          )
+        );
+        metrics.observe("synapse_intent_sync_ms", performance.now() - intentSyncStartedAt);
+        checkStartedAt += performance.now() - intentSyncStartedAt;
+
+        // Union the authoritative peer locks (null = timeout/offline → keep the
+        // local mirror's view for that target) into a per-check state copy.
+        const authoritativeLocks = lockResults.flatMap((locks) => locks ?? []);
+        const mergedLocks = unionLocks(teamState.editLocks, authoritativeLocks);
+        const checkState =
+          mergedLocks === teamState.editLocks
+            ? teamState
+            : { ...teamState, editLocks: mergedLocks };
 
         const { graph, neighborsOf } = await buildDependencyGraph(config, analysisCache);
         const rawConflicts = evaluateConflicts({
           selfSessionId: config.sessionId,
           targets,
-          state: teamState,
+          state: checkState,
           graph
         });
         // Branch awareness (M6.5): cross-branch dependency_changed/stale_base
