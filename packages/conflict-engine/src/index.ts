@@ -60,6 +60,11 @@ export function verdictFor(conflicts: Conflict[]): "none" | "info" | "warn" {
   return "none";
 }
 
+export function editLockIsActive(lock: EditLock, now = Date.now()): boolean {
+  const acquiredAt = Date.parse(lock.acquiredAt);
+  return Number.isNaN(acquiredAt) || now - acquiredAt <= lock.ttlSec * 1000;
+}
+
 export function evaluateConflicts(context: ConflictCheckContext): Conflict[] {
   const graph = context.graph ?? emptyDependencyGraph;
   const conflicts = new Map<string, Conflict>();
@@ -69,7 +74,7 @@ export function evaluateConflicts(context: ConflictCheckContext): Conflict[] {
     const targetSymbol = target.symbolId ?? fileSymbol(target.filePath);
     const dependencyHops = dependencyHopMap(graph.dependenciesOf(targetSymbol, 2));
 
-    for (const lock of context.state.editLocks) {
+    for (const lock of context.state.editLocks.filter((candidate) => editLockIsActive(candidate))) {
       if (lock.sessionId === context.selfSessionId) {
         continue;
       }

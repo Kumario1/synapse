@@ -12,9 +12,16 @@ import {
   type TeamState
 } from "@synapse/protocol";
 import { resolutionInputsHash, resolutionSidesForSymbol } from "@synapse/conflict-engine";
-import { applyMessage, pruneStaleSessions } from "./state.js";
+import { applyMessage, dueForSweep, pruneStaleSessions } from "./state.js";
 
 const symbol = "ts:src/auth/token.ts#validate";
+
+test("dueForSweep gates sweeps by elapsed interval", () => {
+  assert.equal(dueForSweep(0, 1000, 1000), true);
+  assert.equal(dueForSweep(1000, 1500, 1000), false);
+  assert.equal(dueForSweep(1000, 2000, 1000), true);
+  assert.equal(dueForSweep(1000, 1500, 0), true);
+});
 
 test("resolution.propose is first-writer-wins per (symbol, inputsHash)", () => {
   const state = createEmptyTeamState("local");

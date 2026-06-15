@@ -363,7 +363,7 @@ function stateFor(scenario) {
       repoId: lock.repoId ?? repoId,
       symbolId: symbol(lock.symbol),
       filePath: lock.filePath,
-      acquiredAt: lock.acquiredAt ?? timestamp(index),
+      acquiredAt: lock.acquiredAt ?? activeLockTimestamp(),
       ttlSec: lock.ttlSec ?? 90
     })).filter((lock) => lock.repoId === repoId),
     unpushedDeltas: (scenario.deltas ?? [])
@@ -438,4 +438,8 @@ function symbol(raw) {
 
 function timestamp(index) {
   return new Date(Date.UTC(2026, 5, 8, 0, 0, index)).toISOString();
+}
+
+function activeLockTimestamp() {
+  return new Date().toISOString();
 }
