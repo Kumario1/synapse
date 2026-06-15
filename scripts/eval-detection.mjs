@@ -12,8 +12,8 @@ import { diffTypeScriptContracts, extractTypeScriptContracts } from "@synapse/an
 process.env.SYNAPSE_REPO_ID ??= "local";
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const corpusDir = join(rootDir, "evals/detection-corpus");
-const baselinePath = join(rootDir, "evals/detection-baseline.json");
-const writeBaseline = process.argv.includes("--write-baseline");
+const defaultBaselinePath = join(rootDir, "evals/detection-baseline.json");
+const { baselinePath, writeBaseline } = parseArgs(process.argv.slice(2));
 
 runSelfTest();
 
@@ -25,6 +25,14 @@ for (const file of corpusFiles) {
     scenarios.push({ ...entry, _file: file });
   }
 }
+
+const scenarioNameCounts = new Map();
+for (const scenario of scenarios) {
+  scenarioNameCounts.set(scenario.name, (scenarioNameCounts.get(scenario.name) ?? 0) + 1);
+}
+const duplicateScenarioNames = [...scenarioNameCounts.entries()]
+  .filter(([, count]) => count > 1)
+  .map(([name]) => name);
 
 let skipped = 0;
 const results = [];
@@ -47,7 +55,22 @@ for (const scenario of scenarios) {
 const metrics = scoreResults(results);
 printTable(metrics, scenarios.length, skipped);
 
+const preflightFailures = [];
+if (skipped > 0) {
+  preflightFailures.push(`skipped scenarios are not allowed in detection evals (skipped=${skipped})`);
+}
+if (duplicateScenarioNames.length > 0) {
+  preflightFailures.push(`duplicate scenario names: ${duplicateScenarioNames.join(", ")}`);
+}
+
 if (writeBaseline) {
+  if (preflightFailures.length > 0) {
+    for (const failure of preflightFailures) {
+      console.error(failure);
+    }
+    process.exit(1);
+  }
+
   const baseline = {
     generatedAt: new Date().toISOString(),
     corpusSize: scenarios.length,
@@ -60,13 +83,22 @@ if (writeBaseline) {
 
 const baselineText = await readFile(baselinePath, "utf8").catch(() => null);
 if (baselineText === null) {
-  console.log(`\nNo baseline at ${baselinePath} yet; run with --write-baseline to create one.`);
-  process.exit(0);
+  console.error(`\nMissing detection baseline at ${baselinePath}; run with --write-baseline to update ${defaultBaselinePath}.`);
+  process.exit(1);
 }
 
 const baseline = JSON.parse(baselineText);
 const allRules = new Set([...Object.keys(metrics), ...Object.keys(baseline.rules)]);
-let failed = false;
+let failed = preflightFailures.length > 0;
+
+for (const failure of preflightFailures) {
+  console.error(failure);
+}
+
+if (scenarios.length !== baseline.corpusSize) {
+  console.error(`corpus size changed: baseline ${baseline.corpusSize}, current ${scenarios.length}; run --write-baseline deliberately`);
+  failed = true;
+}
 
 for (const rule of allRules) {
   if (!(rule in baseline.rules)) {
@@ -83,6 +115,21 @@ for (const rule of allRules) {
 
   const base = baseline.rules[rule];
   const current = metrics[rule];
+
+  if (current.tp < base.tp) {
+    console.error(`regression on ${rule}: tp ${base.tp} -> ${current.tp}`);
+    failed = true;
+  }
+
+  if (current.fp > base.fp) {
+    console.error(`regression on ${rule}: fp ${base.fp} -> ${current.fp}`);
+    failed = true;
+  }
+
+  if (current.fn > base.fn) {
+    console.error(`regression on ${rule}: fn ${base.fn} -> ${current.fn}`);
+    failed = true;
+  }
 
   if (current.precision < base.precision) {
     console.error(
@@ -104,6 +151,42 @@ if (failed) {
 }
 
 console.log(`\nDetection eval passed: ${scenarios.length} scenarios (${skipped} skipped), baseline holds.`);
+
+function parseArgs(args) {
+  let baselinePath = defaultBaselinePath;
+  let writeBaseline = false;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--strict") {
+      continue;
+    }
+    if (arg === "--write-baseline") {
+      writeBaseline = true;
+      continue;
+    }
+    if (arg === "--baseline") {
+      const value = args[index + 1];
+      if (!value || value.startsWith("--")) {
+        console.error("--baseline requires a path");
+        process.exit(1);
+      }
+      baselinePath = value;
+      index += 1;
+      continue;
+    }
+
+    console.error(`Unknown argument: ${arg}`);
+    process.exit(1);
+  }
+
+  if (writeBaseline && baselinePath !== defaultBaselinePath) {
+    console.error("--write-baseline always updates evals/detection-baseline.json; do not combine it with --baseline");
+    process.exit(1);
+  }
+
+  return { baselinePath, writeBaseline };
+}
 
 function evaluateStateScenario(scenario) {
   const state = stateFor(scenario);
@@ -269,27 +352,33 @@ function runSelfTest() {
 // --- helpers copied from scripts/eval-conflicts.mjs ---
 
 function stateFor(scenario) {
+  const repoId = scenario.repoId ?? "local";
   return {
-    repoId: "local",
-    sessions: (scenario.sessions ?? []).map(sessionFor),
+    repoId,
+    sessions: (scenario.sessions ?? [])
+      .map((session) => sessionFor(session, repoId))
+      .filter((session) => session.repoId === repoId),
     editLocks: (scenario.editLocks ?? []).map((lock, index) => ({
       sessionId: lock.sessionId,
+      repoId: lock.repoId ?? repoId,
       symbolId: symbol(lock.symbol),
       filePath: lock.filePath,
       acquiredAt: lock.acquiredAt ?? timestamp(index),
       ttlSec: lock.ttlSec ?? 90
-    })),
-    unpushedDeltas: (scenario.deltas ?? []).map(deltaFor),
+    })).filter((lock) => lock.repoId === repoId),
+    unpushedDeltas: (scenario.deltas ?? [])
+      .map((delta, index) => deltaFor(delta, index, repoId))
+      .filter((delta) => delta.repoId === repoId),
     recentPushes: (scenario.recentPushes ?? []).map((push, index) => ({
       id: push.id ?? `push-${index}`,
-      repoId: "local",
+      repoId: push.repoId ?? repoId,
       memberId: push.memberId,
       summary: push.summary,
       filesAffected: push.filesAffected,
       symbols: push.symbols?.map(symbol),
       sha: push.sha,
       pushedAt: push.pushedAt ?? timestamp(index)
-    })),
+    })).filter((push) => push.repoId === repoId),
     recentRepoEvents: [],
     resolutions: [],
     sessionSummaries: [],
@@ -297,11 +386,11 @@ function stateFor(scenario) {
   };
 }
 
-function sessionFor(input) {
+function sessionFor(input, repoId = "local") {
   const id = typeof input === "string" ? input : input.id;
   return {
     id,
-    repoId: "local",
+    repoId: typeof input === "string" ? repoId : input.repoId ?? repoId,
     memberId: id,
     memberLogin: typeof input === "string" ? id : input.memberLogin ?? id,
     agentType: typeof input === "string" ? "other" : input.agentType ?? "other",
@@ -314,10 +403,10 @@ function sessionFor(input) {
   };
 }
 
-function deltaFor(input, index) {
+function deltaFor(input, index, repoId = "local") {
   return {
     id: input.id ?? `${input.sessionId}-${index}`,
-    repoId: "local",
+    repoId: input.repoId ?? repoId,
     sessionId: input.sessionId,
     symbolId: symbol(input.symbol),
     changeKind: input.changeKind ?? "signature_changed",

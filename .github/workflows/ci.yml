@@ -1,10 +1,3 @@
-# CI gate (plan-future.md M1). Two jobs:
-#   check  — fast feedback: build + typecheck + unit tests.
-#   verify — the full hermetic verify matrix + eval via scripts/ci-verify-all.mjs
-#            (the same single command devs run locally). verify-docker runs for
-#            real on ubuntu runners (docker is preinstalled); it self-skips when
-#            docker is absent. Latency gates are the verify scripts' own exit
-#            codes — no separate budget mechanism here.
 name: CI
 
 on:
@@ -12,14 +5,37 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  check:
+  static:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
+    env:
+      OPENROUTER_API_KEY: ""
+      SYNAPSE_LLM_EXPLAIN: "0"
+      SYNAPSE_LLM_RESOLVE: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run ci:strict:static
+
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      OPENROUTER_API_KEY: ""
+      SYNAPSE_LLM_EXPLAIN: "0"
+      SYNAPSE_LLM_RESOLVE: "0"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -29,40 +45,49 @@ jobs:
       - run: corepack prepare npm@11.4.1 --activate
       - run: npm ci
       - run: npm run build
-      - run: npm run typecheck
-      - run: npm test
+      - run: npm run ci:strict:unit
 
-  verify:
+  detection-ratchet:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    services:
-      # Backs verify-persistence-pg + the Postgres variants of store.test.ts.
-      # Exposed as SYNAPSE_VERIFY_PG_URL (not SYNAPSE_DATABASE_URL) so the rest
-      # of the matrix keeps exercising the default SQLite backend.
-      postgres:
-        # postgres:16 + the pgvector extension (verify-why-rag); everything
-        # the plain image served (store/persistence/multi-instance) still runs.
-        image: pgvector/pgvector:pg16
-        env:
-          # Ephemeral job-local database: trust auth, no credential at all.
-          POSTGRES_HOST_AUTH_METHOD: trust
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-      # Backs verify-multi-instance (M9 fan-out channel).
-      redis:
-        image: redis:7
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
+    timeout-minutes: 12
+    env:
+      OPENROUTER_API_KEY: ""
+      SYNAPSE_LLM_EXPLAIN: "0"
+      SYNAPSE_LLM_RESOLVE: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run ci:strict:detection
+
+  agent-loop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      OPENROUTER_API_KEY: ""
+      SYNAPSE_LLM_EXPLAIN: "0"
+      SYNAPSE_LLM_RESOLVE: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run ci:strict:agent-loop
+
+  polyglot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    env:
+      OPENROUTER_API_KEY: ""
+      SYNAPSE_LLM_EXPLAIN: "0"
+      SYNAPSE_LLM_RESOLVE: "0"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -83,11 +108,91 @@ jobs:
           path: packages/analyzer-py/.venv
           key: analyzer-py-${{ runner.os }}-py3.12-${{ hashFiles('packages/analyzer-py/requirements.txt') }}
       - run: npm ci
-      - name: Build, test, and run the full verify matrix
-        run: node scripts/ci-verify-all.mjs
+      - run: npm run build
+      - run: npm run ci:strict:polyglot
+
+  services-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
         env:
-          # Hermetic: the runner also forces these, belt and suspenders.
-          OPENROUTER_API_KEY: ""
-          SYNAPSE_LLM_EXPLAIN: "0"
-          SYNAPSE_VERIFY_PG_URL: postgres://postgres@localhost:5432/postgres
-          SYNAPSE_VERIFY_REDIS_URL: redis://localhost:6379
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      OPENROUTER_API_KEY: ""
+      SYNAPSE_LLM_EXPLAIN: "0"
+      SYNAPSE_LLM_RESOLVE: "0"
+      SYNAPSE_VERIFY_PG_URL: postgres://postgres@localhost:5432/postgres
+      SYNAPSE_VERIFY_REDIS_URL: redis://localhost:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run ci:strict:services
+
+  package-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OPENROUTER_API_KEY: ""
+      SYNAPSE_LLM_EXPLAIN: "0"
+      SYNAPSE_LLM_RESOLVE: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: docker info
+      - run: npm ci
+      - run: npm run build
+      - run: npm run ci:strict:package
+
+  required:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    if: always()
+    needs:
+      - static
+      - unit
+      - detection-ratchet
+      - agent-loop
+      - polyglot
+      - services-security
+      - package-release
+    env:
+      OPENROUTER_API_KEY: ""
+      SYNAPSE_LLM_EXPLAIN: "0"
+      SYNAPSE_LLM_RESOLVE: "0"
+    steps:
+      - name: Check required strict gates
+        run: |
+          echo '${{ toJson(needs) }}'
+          test '${{ needs.static.result }}' = 'success'
+          test '${{ needs.unit.result }}' = 'success'
+          test '${{ needs['detection-ratchet'].result }}' = 'success'
+          test '${{ needs['agent-loop'].result }}' = 'success'
+          test '${{ needs.polyglot.result }}' = 'success'
+          test '${{ needs['services-security'].result }}' = 'success'
+          test '${{ needs['package-release'].result }}' = 'success'

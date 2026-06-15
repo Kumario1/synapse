@@ -1,30 +1,30 @@
 {
-  "generatedAt": "2026-06-12T18:18:20.378Z",
-  "corpusSize": 25,
+  "generatedAt": "2026-06-14T22:16:53.030Z",
+  "corpusSize": 37,
   "rules": {
     "dependency_changed": {
-      "tp": 5,
-      "fp": 1,
+      "tp": 6,
+      "fp": 2,
       "fn": 0,
-      "precision": 0.8333333333333334,
+      "precision": 0.75,
       "recall": 1
     },
     "transitive_dependency": {
-      "tp": 1,
+      "tp": 2,
       "fp": 0,
       "fn": 0,
       "precision": 1,
       "recall": 1
     },
     "stale_base": {
-      "tp": 1,
+      "tp": 2,
       "fp": 0,
       "fn": 0,
       "precision": 1,
       "recall": 1
     },
     "same_symbol_unpushed": {
-      "tp": 6,
+      "tp": 9,
       "fp": 0,
       "fn": 0,
       "precision": 1,
@@ -38,14 +38,14 @@
       "recall": 1
     },
     "same_symbol_active": {
-      "tp": 1,
+      "tp": 2,
       "fp": 0,
       "fn": 0,
       "precision": 1,
       "recall": 1
     },
     "same_file_no_overlap": {
-      "tp": 1,
+      "tp": 2,
       "fp": 0,
       "fn": 0,
       "precision": 1,
