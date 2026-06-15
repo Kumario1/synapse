@@ -24,6 +24,7 @@ import { createEmbeddingProvider } from "./embeddings.js";
 import { gitHubPushToNotify, gitHubRepoEventToNotify } from "./github.js";
 import {
   applyMessage,
+  dueForSweep,
   peerLocksForIntent,
   pruneExpiredLocks,
   pruneStaleSessions,
@@ -64,6 +65,12 @@ const repoSeq = new Map<string, number>();
 const log = createLogger("synapse-server");
 const metrics = new MetricsRegistry();
 const deltaBroadcastEnabled = process.env.SYNAPSE_DELTA_BROADCAST !== "0";
+// Prune-sweep throttle (plan 038): getState() is called on every inbound
+// message; sweeping the lock/session arrays every time is wasted work. Sweep at
+// most once per interval per repo. Expiry is still re-checked at use time, so
+// the only effect is a briefly-stale broadcast snapshot. Set 0 to sweep always.
+const SWEEP_INTERVAL_MS = Number(process.env.SYNAPSE_SWEEP_INTERVAL_MS ?? 1000);
+const lastSweptAt = new Map<string, number>();
 // Multi-instance fan-out (plan M9): with SYNAPSE_REDIS_URL set, a mutation on
 // any instance PUBLISHes the repo channel; the others re-read the repo from
 // the shared store and re-broadcast to their local rooms. Unset → null, and
@@ -622,8 +629,12 @@ async function getState(repoId: string): Promise<TeamState> {
     onLoaded: (id, fresh) => log.debug("state.loaded", { repoId: id, sessions: fresh.sessions.length })
   });
 
-  pruneExpiredLocks(state, store);
-  pruneStaleSessions(state, store);
+  const now = Date.now();
+  if (dueForSweep(lastSweptAt.get(repoId) ?? 0, now, SWEEP_INTERVAL_MS)) {
+    pruneExpiredLocks(state, store);
+    pruneStaleSessions(state, store);
+    lastSweptAt.set(repoId, now);
+  }
   return state;
 }
 

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ContractDelta, Session, SymbolId, TeamState } from "@synapse/protocol";
+import type { ContractDelta, EditLock, Session, SymbolId, TeamState } from "@synapse/protocol";
 import {
+  editLockIsActive,
   evaluateConflicts,
   type DependencyGraph,
   type DependencyHop,
@@ -146,6 +147,36 @@ test("stays silent when there is no overlap", () => {
   assert.deepEqual(conflicts, []);
 });
 
+test("ignores expired edit locks during conflict evaluation", () => {
+  const expiredLock = editLock({
+    sessionId: "alice",
+    acquiredAt: "2026-06-14T00:00:00.000Z",
+    ttlSec: 1
+  });
+  const liveLock = editLock({
+    sessionId: "alice",
+    acquiredAt: "2026-06-14T00:00:00.000Z",
+    ttlSec: 60_000
+  });
+
+  assert.equal(editLockIsActive(expiredLock, Date.parse("2026-06-14T00:00:02.000Z")), false);
+  assert.equal(editLockIsActive(liveLock, Date.parse("2026-06-14T00:00:02.000Z")), true);
+
+  const state = teamState({
+    sessions: [session("alice"), session("bob")],
+    editLocks: [expiredLock]
+  });
+
+  const conflicts = evaluateConflicts({
+    selfSessionId: "bob",
+    targets: [{ filePath: "src/auth/token.ts", symbolId: tokenValidator }],
+    state
+  });
+
+  assert.equal(verdictFor(conflicts), "none");
+  assert.equal(conflicts.some((conflict) => conflict.rule === "same_symbol_active"), false);
+});
+
 function id(raw: string): SymbolId {
   return { raw };
 }
@@ -185,6 +216,16 @@ function delta(input: {
     dependents: [],
     createdAt: "2026-06-06T00:00:00.000Z",
     pushedAt: null
+  };
+}
+
+function editLock(input: { sessionId: string; acquiredAt: string; ttlSec: number }): EditLock {
+  return {
+    sessionId: input.sessionId,
+    symbolId: tokenValidator,
+    filePath: "src/auth/token.ts",
+    acquiredAt: input.acquiredAt,
+    ttlSec: input.ttlSec
   };
 }
 

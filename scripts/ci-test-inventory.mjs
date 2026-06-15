@@ -23,6 +23,7 @@ for (const packageDir of workspaceDirs) {
   const packageJsonPath = join(packageDir, "package.json");
   const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8"));
   const packageName = packageJson.name ?? relative(rootDir, packageDir);
+  const runsTypeScriptSourceTests = testScriptRunsTypeScriptSource(packageJson.scripts?.test);
   const sourceTests = (await findTests(join(packageDir, "src"))).sort();
   const matchedDistTests = [];
 
@@ -40,7 +41,7 @@ for (const packageDir of workspaceDirs) {
     );
     if (await exists(distTest)) {
       matchedDistTests.push(distTest);
-    } else {
+    } else if (!runsTypeScriptSourceTests) {
       failures.push(`${packageName}: missing compiled test ${relative(rootDir, distTest)}`);
     }
   }
@@ -58,7 +59,7 @@ for (const packageDir of workspaceDirs) {
     package: packageName,
     sourceTestCount: sourceTests.length,
     matchedDistTestCount: matchedDistTests.length,
-    status: matchedDistTests.length === sourceTests.length ? "pass" : "fail"
+    status: runsTypeScriptSourceTests || matchedDistTests.length === sourceTests.length ? "pass" : "fail"
   });
 }
 
@@ -115,4 +116,8 @@ async function exists(path) {
   return access(path)
     .then(() => true)
     .catch(() => false);
+}
+
+function testScriptRunsTypeScriptSource(script) {
+  return Boolean(script?.includes("--import tsx") && script.includes("--test") && script.includes(".test.ts"));
 }

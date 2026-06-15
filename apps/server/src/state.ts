@@ -179,6 +179,18 @@ export function pruneExpiredLocks(state: TeamState, store: StateStoreOps = noopS
 }
 
 /**
+ * True when a repo's prune sweep is due: the previous sweep was at least
+ * `intervalMs` ago. Gating the per-read sweeps (plan 038) behind this removes
+ * the full-array rebuild from the hot per-message path; TTL correctness is
+ * unaffected because lock/session expiry is re-checked at the point of use
+ * (peerLocksForIntent, conflict evaluation), never trusted from the pruned
+ * array.
+ */
+export function dueForSweep(lastSweptAt: number, now: number, intervalMs: number): boolean {
+  return now - lastSweptAt >= intervalMs;
+}
+
+/**
  * Peer edit locks held on `symbolRaw` right now, excluding the requesting
  * session and expired leases. Returned on the edit.intent ack so a checking
  * session evaluates against server-authoritative state, not its async local
