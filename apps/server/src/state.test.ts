@@ -435,6 +435,39 @@ test("pruneStaleSessions removes a long-ended session from state", () => {
   assert.equal(state.sessions.length, 0);
 });
 
+test("session.heartbeat does not refresh an ended session before prune", () => {
+  const state = createEmptyTeamState("local");
+  const endedAt = "2026-01-01T00:00:00.000Z";
+  const heartbeatAt = new Date(Date.parse(endedAt) + 60_000).toISOString();
+
+  applyMessage(state, "local", sessionStartMessage("alice"), undefined, endedAt);
+  applyMessage(
+    state,
+    "local",
+    {
+      v: PROTOCOL_VERSION,
+      type: "session.end",
+      id: "end-alice",
+      ts: endedAt,
+      payload: {
+        repoId: "local",
+        sessionId: "alice"
+      }
+    },
+    undefined,
+    endedAt
+  );
+
+  applyMessage(state, "local", heartbeatMessage("alice", "feature-x", "still running"), undefined, heartbeatAt);
+
+  assert.equal(state.sessions[0].status, "ended");
+  assert.equal(state.sessions[0].lastSeen, endedAt);
+
+  pruneStaleSessions(state, undefined, Date.parse(endedAt) + ONE_DAY_MS + 1);
+
+  assert.equal(state.sessions.length, 0);
+});
+
 test("SYNAPSE_SESSION_SWEEP=0 disables the sweep", () => {
   const state = createEmptyTeamState("local");
   state.sessions.push(staleSession({ lastSeen: new Date(sweepNow - FIVE_MIN_MS - 1).toISOString() }));

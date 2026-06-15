@@ -283,22 +283,23 @@ function touchSession(
 ): void {
   const session = state.sessions.find((candidate) => candidate.id === sessionId);
   if (session) {
-    session.lastSeen = now;
     if (session.status !== "ended") {
+      session.lastSeen = now;
       session.status = "active";
+
+      // New clients refresh their branch every heartbeat; old clients omit it
+      // and keep the last known value (never clear on absence).
+      if (branch) {
+        session.branch = branch;
+      }
+      // Same preserve-on-omit rule as branch: a heartbeat with a task records
+      // the developer's current intent (plan 033); one without leaves the
+      // session's last known task untouched.
+      if (task) {
+        session.lastTask = task;
+      }
+      store.upsertSession(repoId, session);
     }
-    // New clients refresh their branch every heartbeat; old clients omit it
-    // and keep the last known value (never clear on absence).
-    if (branch) {
-      session.branch = branch;
-    }
-    // Same preserve-on-omit rule as branch: a heartbeat with a task records
-    // the developer's current intent (plan 033); one without leaves the
-    // session's last known task untouched.
-    if (task) {
-      session.lastTask = task;
-    }
-    store.upsertSession(repoId, session);
   }
 }
 
