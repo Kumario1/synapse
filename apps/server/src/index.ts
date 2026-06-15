@@ -13,6 +13,7 @@ import {
   parseClientMessage,
   PROTOCOL_VERSION,
   type ClientMessage,
+  type EditLock,
   type ProtocolVersion,
   type ServerMessage,
   type StateOp,
@@ -359,6 +360,14 @@ const shutdown = (): void => {
 process.once("SIGINT", shutdown);
 process.once("SIGTERM", shutdown);
 
+// Test-only teardown: importing this module starts the HTTP listener and a ping
+// timer as side effects. Unit tests that import exported pure helpers call this
+// to release those handles so the test runner can exit cleanly. Not used in prod.
+export function stopServerForTests(): void {
+  clearInterval(pingTimer);
+  httpServer.close();
+}
+
 async function handleMessage(socket: WebSocket, fallbackRepoId: string, raw: string): Promise<void> {
   let rate = socketRates.get(socket);
   if (!rate) {
@@ -428,7 +437,19 @@ async function handleMessage(socket: WebSocket, fallbackRepoId: string, raw: str
     metrics.observe("synapse_message_apply_ms", performance.now() - startedAt);
     indexMemory(repoId, message);
     log.debug("message.applied", { type: message.type, repoId, sessions: state.sessions.length });
-    sendAck(socket, { forId: message.id, ok: true });
+    // For edit.intent, read the post-apply peer locks (state from withRepo already
+    // includes this session's just-applied lock — the linearization point) and ship
+    // them on the ack so the requester's check evaluates against authoritative state.
+    const ackLocks =
+      message.type === "edit.intent"
+        ? peerLocksForIntent(
+            state,
+            message.payload.sessionId,
+            message.payload.symbolId.raw,
+            Date.now()
+          )
+        : undefined;
+    sendAck(socket, { forId: message.id, ok: true, ...(ackLocks ? { locks: ackLocks } : {}) });
     if (ops.length > 0) {
       broadcastStateChange(repoId, state, ops);
       fanout?.publish(repoId);
@@ -644,6 +665,27 @@ function broadcastStateChange(repoId: string, state: TeamState, ops: StateOp[]):
       metrics.count("synapse_state_snapshots_sent_total");
     }
   }
+}
+
+// Peer edit locks held on `symbol` right now (excludes the requesting session
+// and expired leases). Returned on the edit.intent ack so the requester's check
+// evaluates against server-authoritative state, not its async local mirror.
+export function peerLocksForIntent(
+  state: TeamState,
+  selfSessionId: string,
+  symbolRaw: string,
+  now: number
+): EditLock[] {
+  return state.editLocks.filter((lock) => {
+    if (lock.sessionId === selfSessionId) {
+      return false;
+    }
+    if (lock.symbolId.raw !== symbolRaw) {
+      return false;
+    }
+    const acquiredAt = Date.parse(lock.acquiredAt);
+    return Number.isNaN(acquiredAt) || now - acquiredAt <= lock.ttlSec * 1000;
+  });
 }
 
 function sendAck(
