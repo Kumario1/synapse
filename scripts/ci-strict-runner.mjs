@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const rootDir = join(import.meta.dirname, "..");
 const npmCacheDir = join(tmpdir(), "synapse-npm-cache");
@@ -9,6 +10,7 @@ const goCacheDir = join(tmpdir(), "synapse-go-cache");
 const pipCacheDir = join(tmpdir(), "synapse-pip-cache");
 const commandTimeoutMs = Number(process.env.SYNAPSE_STRICT_TIMEOUT_MS ?? 900_000);
 const groupNames = ["static", "unit", "detection", "agent-loop", "polyglot", "services", "package"];
+const isCliEntry = process.argv[1] === fileURLToPath(import.meta.url);
 const workspacePackages = [
   "@synapse/protocol",
   "@synapse/conflict-engine",
@@ -19,11 +21,12 @@ const workspacePackages = [
   "@synapse/cli"
 ];
 
-const groups = {
+export const groups = {
   static: [
     command("npm", "run", "build"),
     command("npm", "run", "typecheck"),
-    command("node", "scripts/ci-test-inventory.mjs")
+    command("node", "scripts/ci-test-inventory.mjs"),
+    command("node", "scripts/ci-strict-coverage.mjs")
   ],
   unit: [
     command("npm", "test"),
@@ -48,6 +51,10 @@ const groups = {
     command("node", "scripts/verify-session-summary.mjs"),
     command("node", "scripts/verify-whatsup.mjs"),
     command("node", "scripts/verify-why.mjs"),
+    command("node", "scripts/verify-atomic-intent.mjs"),
+    command("node", "scripts/verify-delta-broadcast.mjs"),
+    command("node", "scripts/verify-protocol-compat.mjs"),
+    command("node", "scripts/verify-pr-brief.mjs"),
     command("node", "scripts/verify-onboard.mjs")
   ],
   polyglot: [
@@ -79,47 +86,49 @@ const groups = {
   ]
 };
 
-const args = process.argv.slice(2);
-if (args.length !== 1) {
-  usage();
-  process.exit(1);
-}
+if (isCliEntry) {
+  const args = process.argv.slice(2);
+  if (args.length !== 1) {
+    usage();
+    process.exit(1);
+  }
 
-if (process.env.SYNAPSE_VERIFY_SKIP) {
-  console.error("SYNAPSE_VERIFY_SKIP is not allowed in strict CI gates.");
-  process.exit(1);
-}
+  if (process.env.SYNAPSE_VERIFY_SKIP) {
+    console.error("SYNAPSE_VERIFY_SKIP is not allowed in strict CI gates.");
+    process.exit(1);
+  }
 
-if (args[0] === "--list") {
-  console.log(groupNames.join("\n"));
-  process.exit(0);
-}
+  if (args[0] === "--list") {
+    console.log(groupNames.join("\n"));
+    process.exit(0);
+  }
 
-const selected = args[0];
-if (!Object.hasOwn(groups, selected)) {
-  usage();
-  process.exit(1);
-}
+  const selected = args[0];
+  if (!Object.hasOwn(groups, selected)) {
+    usage();
+    process.exit(1);
+  }
 
-const results = [];
-for (const entry of groups[selected]) {
-  console.log(`\n=== ${entry.label} ===`);
-  const startedAt = Date.now();
-  const code = await run(entry);
-  const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
-  const status = code === 0 ? "pass" : "fail";
-  console.log(`=== ${entry.label}: ${status.toUpperCase()} in ${seconds}s ===`);
-  results.push({ label: entry.label, status, seconds });
-}
+  const results = [];
+  for (const entry of groups[selected]) {
+    console.log(`\n=== ${entry.label} ===`);
+    const startedAt = Date.now();
+    const code = await run(entry);
+    const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+    const status = code === 0 ? "pass" : "fail";
+    console.log(`=== ${entry.label}: ${status.toUpperCase()} in ${seconds}s ===`);
+    results.push({ label: entry.label, status, seconds });
+  }
 
-const failed = results.filter((result) => result.status === "fail");
-console.log(`\n========== strict ${selected} summary ==========`);
-for (const { label, status, seconds } of results) {
-  console.log(`${status.toUpperCase().padEnd(5)} ${label} (${seconds}s)`);
-}
-console.log(`${results.length - failed.length}/${results.length} green`);
+  const failed = results.filter((result) => result.status === "fail");
+  console.log(`\n========== strict ${selected} summary ==========`);
+  for (const { label, status, seconds } of results) {
+    console.log(`${status.toUpperCase().padEnd(5)} ${label} (${seconds}s)`);
+  }
+  console.log(`${results.length - failed.length}/${results.length} green`);
 
-process.exit(failed.length === 0 ? 0 : 1);
+  process.exit(failed.length === 0 ? 0 : 1);
+}
 
 function command(bin, ...args) {
   return {
