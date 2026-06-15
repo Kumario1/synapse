@@ -39,6 +39,7 @@ This plan set came from a deep advisory audit. Source files were not modified wh
 | 029 | Expose Synapse context through MCP resources | P2 | S | 017 | DONE |
 | 030 | Add local aggregate `synapse insights` / `synapse_insights` | P2 | S | 017 | DONE |
 | 031 | Add local PR handoff briefing | P2 | M | 020, 029 | DONE |
+| [037](037-web-dashboard.md) | Add a web dashboard + landing page (`apps/web`) visualizing a live Synapse room | P2 | L | - | DONE (reviewed & APPROVED; `apps/web` Vite/React dashboard added with seeded demo + live WebSocket feed, type-only protocol imports, no server/package/turbo source changes; reviewer re-ran web/root typecheck, build, tests, no-fetch check, out-of-scope diff checks, and browser smoke on desktop/mobile) |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
 
@@ -75,7 +76,7 @@ Full build/test was not run during the advisory pass because it writes build art
 From the direction audit (2026-06-11):
 
 - E1 VS Code extension / E4 editor rules: skipped — PR #35's `synapse connect` already delivers MCP registration + rules files to VS Code/Cursor/Windsurf; a native extension serves human UI, not agents, and adds a marketplace maintenance surface. Revisit on user demand.
-- D4 / M13 web dashboard: not planned — `Synapse/` at the repo root contains only build output (`dist/` + `node_modules/`, no source), so "fold into apps/web" first requires recovering or rebuilding the landing-page source; the vision doc defers dashboards until revenue. Surface to the owner as a narrow decision (track the landing source) rather than a build plan.
+- D4 / M13 web dashboard: ~~not planned~~ → **now planned as [037](037-web-dashboard.md)** (owner reversed this on 2026-06-15). Original rationale: `Synapse/` at the repo root holds only build output (`dist/` + `node_modules/`, no source), so folding it into `apps/web` first needed the lost landing source, and the vision doc deferred dashboards until revenue. Plan 037 sidesteps the lost source by recreating a lean landing from README copy + the old page's fonts/tokens, and ships the dashboard as a zero-server-change read-only consumer.
 - M14 GitHub OAuth: stays decision-gated per D1 — its trigger is a hosted SaaS launch (a business event), not a code condition.
 
 From the second-tier direction audit (2026-06-11, later the same day):

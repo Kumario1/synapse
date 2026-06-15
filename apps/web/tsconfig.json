@@ -1,0 +1,31 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "rootDir": "src",
+    "outDir": "dist-types",
+    "tsBuildInfoFile": "dist-types/tsconfig.tsbuildinfo",
+    "types": [
+      "vite/client",
+      "node"
+    ],
+    "allowImportingTsExtensions": false,
+    "noEmit": true
+  },
+  "references": [
+    {
+      "path": "../../packages/protocol"
+    }
+  ],
+  "include": [
+    "src"
+  ]
+}
