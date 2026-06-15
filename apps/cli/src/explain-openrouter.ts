@@ -32,14 +32,11 @@ import { isKnownSynapseCommand, renderCommandCatalogForPrompt } from "@synapse/p
  * never break a `synapse_check`.
  */
 export function createOpenRouterAnalysisProvider(): AnalysisProvider | null {
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey || process.env.SYNAPSE_LLM_EXPLAIN === "0") {
+  const config = openRouterConfig("SYNAPSE_LLM_EXPLAIN");
+  if (!config) {
     return null;
   }
 
-  const baseUrl = (process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1").replace(/\/$/, "");
-  const model = process.env.SYNAPSE_LLM_MODEL ?? "anthropic/claude-haiku-4.5";
-  const timeoutMs = Number(process.env.SYNAPSE_LLM_TIMEOUT_MS ?? 8000);
   const cache = new Map<string, ConflictAnalysis>();
 
   return {
@@ -50,38 +47,11 @@ export function createOpenRouterAnalysisProvider(): AnalysisProvider | null {
         return cached;
       }
 
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-
       try {
-        const response = await fetch(`${baseUrl}/chat/completions`, {
-          method: "POST",
-          signal: controller.signal,
-          headers: {
-            "content-type": "application/json",
-            authorization: `Bearer ${apiKey}`,
-            "x-title": "Synapse"
-          },
-          body: JSON.stringify({
-            model,
-            max_tokens: 700,
-            temperature: 0.2,
-            messages: [
-              { role: "system", content: buildSystemPrompt() },
-              { role: "user", content: buildUserPrompt(input) }
-            ]
-          })
-        });
-
-        if (!response.ok) {
-          return null;
-        }
-
-        const data = (await response.json()) as {
-          choices?: { message?: { content?: string } }[];
-        };
-        const content = data.choices?.[0]?.message?.content;
-        const analysis = parseAnalysis(content, model);
+        const analysis = parseAnalysis(
+          await requestCompletion(config, 700, 0.2, buildSystemPrompt(), buildUserPrompt(input)),
+          config.model
+        );
         if (!analysis) {
           return null;
         }
@@ -90,8 +60,6 @@ export function createOpenRouterAnalysisProvider(): AnalysisProvider | null {
         return analysis;
       } catch {
         return null;
-      } finally {
-        clearTimeout(timer);
       }
     }
   };
@@ -272,14 +240,11 @@ function cacheKey(input: ConflictAnalysisInput): string {
  * to the deterministic resolution and never breaks a `synapse_check`.
  */
 export function createOpenRouterResolutionProvider(): ResolutionProvider | null {
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey || process.env.SYNAPSE_LLM_RESOLVE === "0") {
+  const config = openRouterConfig("SYNAPSE_LLM_RESOLVE");
+  if (!config) {
     return null;
   }
 
-  const baseUrl = (process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1").replace(/\/$/, "");
-  const model = process.env.SYNAPSE_LLM_MODEL ?? "anthropic/claude-haiku-4.5";
-  const timeoutMs = Number(process.env.SYNAPSE_LLM_TIMEOUT_MS ?? 8000);
   const cache = new Map<string, ProposedResolution>();
 
   return {
@@ -292,8 +257,10 @@ export function createOpenRouterResolutionProvider(): ResolutionProvider | null 
       // Retry once: a strict-JSON contract is brittle, and a single retry
       // recovers most malformed first responses without affecting the verdict.
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const content = await requestCompletion(baseUrl, apiKey, model, timeoutMs, req);
-        const resolution = parseResolution(content, model);
+        const resolution = parseResolution(
+          await requestCompletion(config, 700, 0, RESOLUTION_SYSTEM_PROMPT, buildResolutionPrompt(req)),
+          config.model
+        );
         if (resolution) {
           cache.set(req.inputsHash, resolution);
           return resolution;
@@ -305,32 +272,51 @@ export function createOpenRouterResolutionProvider(): ResolutionProvider | null 
   };
 }
 
+interface OpenRouterConfig {
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  timeoutMs: number;
+}
+
+function openRouterConfig(disableFlag: string): OpenRouterConfig | null {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  return !apiKey || process.env[disableFlag] === "0"
+    ? null
+    : {
+        apiKey,
+        baseUrl: (process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1").replace(/\/$/, ""),
+        model: process.env.SYNAPSE_LLM_MODEL ?? "anthropic/claude-haiku-4.5",
+        timeoutMs: Number(process.env.SYNAPSE_LLM_TIMEOUT_MS ?? 8000)
+      };
+}
+
 async function requestCompletion(
-  baseUrl: string,
-  apiKey: string,
-  model: string,
-  timeoutMs: number,
-  req: ResolutionRequest
+  config: OpenRouterConfig,
+  maxTokens: number,
+  temperature: number,
+  system: string,
+  user: string
 ): Promise<string | undefined> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => controller.abort(), config.timeoutMs);
 
   try {
-    const response = await fetch(`${baseUrl}/chat/completions`, {
+    const response = await fetch(`${config.baseUrl}/chat/completions`, {
       method: "POST",
       signal: controller.signal,
       headers: {
         "content-type": "application/json",
-        authorization: `Bearer ${apiKey}`,
+        authorization: `Bearer ${config.apiKey}`,
         "x-title": "Synapse"
       },
       body: JSON.stringify({
-        model,
-        max_tokens: 700,
-        temperature: 0,
+        model: config.model,
+        max_tokens: maxTokens,
+        temperature,
         messages: [
-          { role: "system", content: RESOLUTION_SYSTEM_PROMPT },
-          { role: "user", content: buildResolutionPrompt(req) }
+          { role: "system", content: system },
+          { role: "user", content: user }
         ]
       })
     });
@@ -461,52 +447,21 @@ export interface SummaryProvider {
 }
 
 export function createOpenRouterSummaryProvider(): SummaryProvider | null {
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey || process.env.SYNAPSE_LLM_SUMMARY === "0") {
+  const config = openRouterConfig("SYNAPSE_LLM_SUMMARY");
+  if (!config) {
     return null;
   }
 
-  const baseUrl = (process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1").replace(/\/$/, "");
-  const model = process.env.SYNAPSE_LLM_MODEL ?? "anthropic/claude-haiku-4.5";
-  const timeoutMs = Number(process.env.SYNAPSE_LLM_TIMEOUT_MS ?? 8000);
-
   return {
-    model,
+    model: config.model,
     async summarizeSession(input: SessionSummaryInput): Promise<string | null> {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-
       try {
-        const response = await fetch(`${baseUrl}/chat/completions`, {
-          method: "POST",
-          signal: controller.signal,
-          headers: {
-            "content-type": "application/json",
-            authorization: `Bearer ${apiKey}`,
-            "x-title": "Synapse"
-          },
-          body: JSON.stringify({
-            model,
-            max_tokens: 220,
-            temperature: 0.3,
-            messages: [
-              { role: "system", content: SUMMARY_SYSTEM_PROMPT },
-              { role: "user", content: buildSummaryPrompt(input) }
-            ]
-          })
-        });
-
-        if (!response.ok) {
-          return null;
-        }
-
-        const data = (await response.json()) as { choices?: { message?: { content?: string } }[] };
-        const content = data.choices?.[0]?.message?.content?.trim();
+        const content = (
+          await requestCompletion(config, 220, 0.3, SUMMARY_SYSTEM_PROMPT, buildSummaryPrompt(input))
+        )?.trim();
         return content && content.length > 0 ? content : null;
       } catch {
         return null;
-      } finally {
-        clearTimeout(timer);
       }
     }
   };
