@@ -762,7 +762,7 @@ export type ClientMessage =
 export type ServerMessage =
   | WireEnvelope<"state.snapshot", { teamState: TeamState; seq?: number }>
   | WireEnvelope<"state.delta", { repoId: string; seq: number; ops: StateOp[] }>
-  | WireEnvelope<"ack", { forId: string; ok: boolean; error?: string }>;
+  | WireEnvelope<"ack", { forId: string; ok: boolean; error?: string; locks?: EditLock[] }>;
 
 export type StateOp =
   | { op: "upsertSession"; session: Session }
