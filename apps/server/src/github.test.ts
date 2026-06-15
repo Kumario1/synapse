@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { distillProse, gitHubPushToNotify, gitHubRepoEventToNotify } from "./github.js";
+import {
+  distillProse,
+  gitHubPushToNotify,
+  gitHubRepoEventToNotify,
+  webhookRepoFullName
+} from "./github.js";
 
 test("converts GitHub push payloads into push.notify payloads", () => {
   const push = gitHubPushToNotify(
@@ -107,6 +112,15 @@ test("rejects push payloads without changed files", () => {
     () => gitHubPushToNotify({ after: "abc123", commits: [] }),
     /changed files/
   );
+});
+
+test("reads repository full_name from webhook payloads", () => {
+  assert.equal(webhookRepoFullName({ repository: { full_name: "acme/widgets" } }), "acme/widgets");
+  assert.equal(webhookRepoFullName({ repository: {} }), null);
+  assert.equal(webhookRepoFullName({}), null);
+  assert.equal(webhookRepoFullName(null), null);
+  assert.equal(webhookRepoFullName("string"), null);
+  assert.equal(webhookRepoFullName(42), null);
 });
 
 test("converts pull_request payloads into repo events", () => {
