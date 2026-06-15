@@ -159,6 +159,11 @@ async function handleHttp(request: IncomingMessage, response: ServerResponse): P
   }
 
   if (request.method === "GET" && url.pathname === "/state") {
+    if (overRateLimit(httpReadRate, HTTP_READ_RATE_LIMIT_PER_MIN, Date.now())) {
+      metrics.count("synapse_rate_limited_total", { surface: "state" });
+      writeJson(response, 429, { ok: false, error: "rate_limited" });
+      return;
+    }
     const repoId = url.searchParams.get("repoId") ?? "local";
     if (!authorized(request, url, repoId)) {
       metrics.count("synapse_auth_rejections_total", { surface: "state" });
@@ -171,6 +176,11 @@ async function handleHttp(request: IncomingMessage, response: ServerResponse): P
   }
 
   if (request.method === "POST" && url.pathname === "/recall") {
+    if (overRateLimit(httpReadRate, HTTP_READ_RATE_LIMIT_PER_MIN, Date.now())) {
+      metrics.count("synapse_rate_limited_total", { surface: "recall" });
+      writeJson(response, 429, { ok: false, error: "rate_limited" });
+      return;
+    }
     let body: { repoId?: string; query?: string; limit?: number };
     try {
       body = JSON.parse(await readBody(request)) as typeof body;
@@ -270,6 +280,8 @@ const socketProtocol = new WeakMap<WebSocket, ProtocolVersion>();
 // Set a limit to 0 to disable it.
 const WS_RATE_LIMIT_PER_MIN = Number(process.env.SYNAPSE_RATE_LIMIT_PER_MIN ?? 600);
 const WEBHOOK_RATE_LIMIT_PER_MIN = Number(process.env.SYNAPSE_WEBHOOK_RATE_LIMIT_PER_MIN ?? 120);
+// /state and /recall share one global read budget; set 0 to disable.
+const HTTP_READ_RATE_LIMIT_PER_MIN = Number(process.env.SYNAPSE_HTTP_RATE_LIMIT_PER_MIN ?? 120);
 
 interface RateWindow {
   windowStartedAt: number;
@@ -278,6 +290,7 @@ interface RateWindow {
 
 const socketRates = new WeakMap<WebSocket, RateWindow>();
 const webhookRate: RateWindow = { windowStartedAt: 0, count: 0 };
+const httpReadRate: RateWindow = { windowStartedAt: 0, count: 0 };
 
 function overRateLimit(window: RateWindow, limitPerMinute: number, now: number): boolean {
   if (limitPerMinute <= 0) {
