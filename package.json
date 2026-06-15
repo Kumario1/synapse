@@ -52,6 +52,7 @@
     "verify:go-check": "npm run build && npm run setup:analyzer-go && node scripts/verify-go-check.mjs",
     "verify:protocol-compat": "npm run build && node scripts/verify-protocol-compat.mjs",
     "verify:delta-broadcast": "npm run build && node scripts/verify-delta-broadcast.mjs",
+    "verify:atomic-intent": "npm run build && node scripts/verify-atomic-intent.mjs",
     "verify:security": "npm run build && node scripts/verify-security.mjs",
     "verify:why-rag": "npm run build && node scripts/verify-why-rag.mjs",
     "verify:onboard": "npm run build && node scripts/verify-onboard.mjs",

@@ -179,6 +179,30 @@ export function pruneExpiredLocks(state: TeamState, store: StateStoreOps = noopS
 }
 
 /**
+ * Peer edit locks held on `symbolRaw` right now, excluding the requesting
+ * session and expired leases. Returned on the edit.intent ack so a checking
+ * session evaluates against server-authoritative state, not its async local
+ * mirror. Mirrors the expiry rule in {@link pruneExpiredLocks} without mutating.
+ */
+export function peerLocksForIntent(
+  state: TeamState,
+  selfSessionId: string,
+  symbolRaw: string,
+  now: number
+): EditLock[] {
+  return state.editLocks.filter((lock) => {
+    if (lock.sessionId === selfSessionId) {
+      return false;
+    }
+    if (lock.symbolId.raw !== symbolRaw) {
+      return false;
+    }
+    const acquiredAt = Date.parse(lock.acquiredAt);
+    return Number.isNaN(acquiredAt) || now - acquiredAt <= lock.ttlSec * 1000;
+  });
+}
+
+/**
  * Liveness sweep for sessions (plan 032): a session that misses heartbeats for
  * SESSION_STALE_MS is marked "ended" — same teardown as an explicit
  * `session.end` (filesEditing cleared, its edit locks dropped) — so a daemon
