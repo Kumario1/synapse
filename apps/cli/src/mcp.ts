@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type {
+  CodeSymbol,
   SynapseCheckRequest,
   SynapseFeedbackRequest,
   SynapseInsightsRequest,
@@ -13,7 +14,8 @@ import type {
   SynapseWhyRequest
 } from "@synapse/protocol";
 import { z } from "zod/v4";
-import { parseFlags, readLocalConfig } from "./config.js";
+import { extractSymbolsForFile, isAnalyzable, readSourceFiles } from "./analysis.js";
+import { configFromArgs, parseFlags, readLocalConfig, type RuntimeConfig } from "./config.js";
 import { SYNAPSE_AGENT_GUIDANCE } from "./connect.js";
 
 const serverInfo = {
@@ -49,6 +51,7 @@ export async function runMcp(rawArgs: string[]): Promise<void> {
   // told to check before edits and report after — no rules file required.
   const server = new McpServer(serverInfo, { instructions: SYNAPSE_AGENT_GUIDANCE });
   const daemonContext = (tool: string, body: unknown) => daemonPost(defaultPort, tool, body);
+  const runtimeConfig = configFromArgs(rawArgs);
 
   server.registerResource(
     "synapse-briefing",
@@ -132,6 +135,18 @@ export async function runMcp(rawArgs: string[]): Promise<void> {
           limit: 20
         } satisfies SynapsePrBriefRequest)
       })
+  );
+
+  server.registerResource(
+    "synapse-contracts",
+    "synapse://contracts",
+    {
+      title: "Synapse Contract Surface",
+      description:
+        "Read-only static contract surface for the current worktree: public/exported symbols and signatures.",
+      mimeType: "application/json"
+    },
+    async (uri) => jsonResource(uri.href, await contractSurfaceResource(runtimeConfig))
   );
 
   server.registerTool(
@@ -530,6 +545,51 @@ function jsonResource(uri: string, value: unknown) {
         text: JSON.stringify(value, null, 2)
       }
     ]
+  };
+}
+
+async function contractSurfaceResource(config: RuntimeConfig) {
+  const files = await readSourceFiles(config.worktreeRoot, isAnalyzable);
+  const symbols: ContractSurfaceSymbol[] = [];
+
+  for (const file of files) {
+    for (const symbol of await extractSymbolsForFile(config, file.filePath)) {
+      if (symbol.visibility === "internal") {
+        continue;
+      }
+
+      symbols.push(contractSurfaceSymbol(symbol));
+    }
+  }
+
+  symbols.sort((left, right) => left.id.localeCompare(right.id));
+
+  return {
+    kind: "synapse_contract_surface",
+    worktreeRoot: config.worktreeRoot,
+    generatedAt: new Date().toISOString(),
+    scope: "public",
+    symbols
+  };
+}
+
+interface ContractSurfaceSymbol {
+  id: string;
+  name: string;
+  kind: CodeSymbol["kind"];
+  visibility: Exclude<CodeSymbol["visibility"], "internal">;
+  filePath: string;
+  signature: string | null;
+}
+
+function contractSurfaceSymbol(symbol: CodeSymbol): ContractSurfaceSymbol {
+  return {
+    id: symbol.id.raw,
+    name: symbol.name,
+    kind: symbol.kind,
+    visibility: symbol.visibility as ContractSurfaceSymbol["visibility"],
+    filePath: symbol.span.path,
+    signature: symbol.signature?.raw ?? null
   };
 }
 
