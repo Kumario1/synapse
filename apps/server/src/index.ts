@@ -21,7 +21,7 @@ import {
 } from "@synapse/protocol";
 import { WebSocket, WebSocketServer } from "ws";
 import { createEmbeddingProvider } from "./embeddings.js";
-import { gitHubPushToNotify, gitHubRepoEventToNotify } from "./github.js";
+import { gitHubPushToNotify, gitHubRepoEventToNotify, webhookRepoFullName } from "./github.js";
 import {
   applyMessage,
   dueForSweep,
@@ -528,6 +528,13 @@ async function handleGitHubWebhook(
     payload = raw ? JSON.parse(raw) : {};
   } catch {
     writeJson(response, 400, { ok: false, error: "invalid_json" });
+    return;
+  }
+
+  if (authMode === "project-key" && !webhookRepoFullName(payload)) {
+    metrics.count("synapse_webhook_rejections_total", { reason: "repo_binding_required" });
+    log.warn("webhook.repo_binding_required", { authMode });
+    writeJson(response, 422, { ok: false, error: "repository_full_name_required" });
     return;
   }
 
