@@ -177,6 +177,13 @@ export interface DaemonGraph {
   /** A symbol's dependency-graph neighbors (it imports / is imported by) and
    * their signatures, for caller-aware resolution context. */
   neighborsOf(symbolRaw: string): { symbol: string; signature: string }[];
+  /** Symbols that directly depend on `symbolRaw`, suitable for fix handoff hints. */
+  dependentsOf(symbolRaw: string): AffectedSite[];
+}
+
+export interface AffectedSite {
+  symbolId: ContractDelta["symbolId"];
+  filePath: string;
 }
 
 export async function buildDependencyGraph(
@@ -248,7 +255,11 @@ export async function buildDependencyGraph(
   }
 
   if (symbols.length === 0 && edges.length === 0) {
-    const empty = { graph: emptyDependencyGraph, neighborsOf: () => [] };
+    const empty: DaemonGraph = {
+      graph: emptyDependencyGraph,
+      neighborsOf: () => [],
+      dependentsOf: () => []
+    };
     if (cache) {
       cache.graph = { fingerprint: graphFingerprint, value: empty };
       cache.graphDirty = !cache.graphTrusted;
@@ -257,6 +268,7 @@ export async function buildDependencyGraph(
   }
 
   const adjacency = new Map<string, ContractDelta["symbolId"][]>();
+  const reverseAdjacency = new Map<string, ContractDelta["symbolId"][]>();
   const signatureBySymbol = new Map<string, string>();
 
   for (const symbol of symbols) {
@@ -267,6 +279,10 @@ export async function buildDependencyGraph(
     const dependencies = adjacency.get(edge.from.raw) ?? [];
     dependencies.push(edge.to);
     adjacency.set(edge.from.raw, dependencies);
+
+    const dependents = reverseAdjacency.get(edge.to.raw) ?? [];
+    dependents.push(edge.from);
+    reverseAdjacency.set(edge.to.raw, dependents);
   }
 
   const neighborsOf = (symbolRaw: string): { symbol: string; signature: string }[] => {
@@ -315,12 +331,49 @@ export async function buildDependencyGraph(
     }
   };
 
-  const value = { graph: dependencyGraph, neighborsOf };
+  const value: DaemonGraph = {
+    graph: dependencyGraph,
+    neighborsOf,
+    dependentsOf(symbolRaw) {
+      return affectedSitesForSymbols(reverseAdjacency.get(symbolRaw) ?? []);
+    }
+  };
   if (cache) {
     cache.graph = { fingerprint: graphFingerprint, value };
     cache.graphDirty = !cache.graphTrusted;
   }
   return value;
+}
+
+export function affectedSitesForSymbols(symbolIds: ContractDelta["symbolId"][]): AffectedSite[] {
+  const seen = new Set<string>();
+  const sites: AffectedSite[] = [];
+
+  for (const symbolId of symbolIds) {
+    if (seen.has(symbolId.raw)) {
+      continue;
+    }
+
+    const filePath = filePathForSymbolRaw(symbolId.raw);
+    if (!filePath) {
+      continue;
+    }
+
+    seen.add(symbolId.raw);
+    sites.push({ symbolId, filePath });
+  }
+
+  return sites.sort((a, b) => a.symbolId.raw.localeCompare(b.symbolId.raw));
+}
+
+export function filePathForSymbolRaw(symbolRaw: string): string | null {
+  const marker = symbolRaw.indexOf(":");
+  const hash = symbolRaw.lastIndexOf("#");
+  if (marker < 0 || hash <= marker + 1) {
+    return null;
+  }
+
+  return symbolRaw.slice(marker + 1, hash);
 }
 
 /**
