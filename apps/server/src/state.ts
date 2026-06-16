@@ -17,6 +17,7 @@ const RECENT_PUSH_CAP = 50;
 const RECENT_REPO_EVENT_CAP = 50;
 const SESSION_SUMMARY_CAP = 50;
 const CONFLICT_FEEDBACK_CAP = 100;
+const EDIT_LOCK_PER_SESSION_CAP = Number(process.env.SYNAPSE_EDIT_LOCK_CAP ?? 200);
 
 // Session liveness sweep (plan 032): a session that misses heartbeats for
 // SESSION_STALE_MS (e.g. a crashed daemon, closed laptop) is marked ended —
@@ -329,6 +330,29 @@ function upsertEditLock(state: TeamState, repoId: string, store: StateStoreOps, 
   );
 
   if (index === -1) {
+    let oldestIndex = -1;
+    let oldestTime = Infinity;
+    let sessionLockCount = 0;
+
+    for (let candidateIndex = 0; candidateIndex < state.editLocks.length; candidateIndex += 1) {
+      const candidate = state.editLocks[candidateIndex];
+      if (candidate.sessionId !== lock.sessionId) {
+        continue;
+      }
+
+      sessionLockCount += 1;
+      const acquiredAt = Date.parse(candidate.acquiredAt);
+      if (acquiredAt < oldestTime) {
+        oldestTime = acquiredAt;
+        oldestIndex = candidateIndex;
+      }
+    }
+
+    if (EDIT_LOCK_PER_SESSION_CAP > 0 && sessionLockCount >= EDIT_LOCK_PER_SESSION_CAP && oldestIndex !== -1) {
+      const [oldest] = state.editLocks.splice(oldestIndex, 1);
+      store.deleteEditLock(repoId, oldest.sessionId, oldest.symbolId.raw);
+    }
+
     state.editLocks.push(lock);
   } else {
     state.editLocks[index] = lock;
