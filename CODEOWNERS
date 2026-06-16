@@ -1,0 +1,3 @@
+# Default owner for everything in this repo.
+# Required reviews from code owners are enforced via branch protection (see plan 048).
+*       @Kumario1
