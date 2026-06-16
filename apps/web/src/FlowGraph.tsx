@@ -1,3 +1,5 @@
+"use client";
+
 import type { TeamState } from "@synapse/protocol";
 import { deriveGraph } from "./derive";
 
