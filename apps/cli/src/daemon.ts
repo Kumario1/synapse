@@ -63,6 +63,7 @@ import {
   resolveCheckTargets,
   selfChanges,
   selfSignatures,
+  type AffectedSite,
   type AnalysisCache
 } from "./analysis.js";
 import {
@@ -545,7 +546,7 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
             ? teamState
             : { ...teamState, editLocks: [...teamState.editLocks, ...authoritativeLocks] };
 
-        const { graph, neighborsOf } = await buildDependencyGraph(config, analysisCache);
+        const { graph, neighborsOf, dependentsOf } = await buildDependencyGraph(config, analysisCache);
         const rawConflicts = evaluateConflicts({
           selfSessionId: config.sessionId,
           targets,
@@ -610,6 +611,7 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
           neighborsOf,
           sendToServer
         );
+        const withAffectedSites = attachAffectedSites(resolved, dependentsOf);
         await seedContractSnapshotsForFiles(
           config,
           contractSnapshots,
@@ -619,7 +621,7 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
 
         writeJson(response, 200, {
           verdict: verdictFor(conflicts),
-          conflicts: resolved,
+          conflicts: withAffectedSites,
           degraded: socket?.readyState !== WebSocket.OPEN
         });
         return;
@@ -924,6 +926,41 @@ function envelope(type: ClientMessage["type"], payload: unknown): ClientMessage 
     ts: new Date().toISOString(),
     payload
   } as ClientMessage;
+}
+
+type ConflictWithAffectedSites = Conflict & {
+  analysis?: NonNullable<Conflict["analysis"]> & {
+    affectedSites?: AffectedSite[];
+  };
+};
+
+function attachAffectedSites(
+  conflicts: Conflict[],
+  dependentsOf: (symbolRaw: string) => AffectedSite[]
+): ConflictWithAffectedSites[] {
+  return conflicts.map((conflict) => {
+    if (
+      (conflict.rule !== "contract_divergent" &&
+        conflict.rule !== "dependency_changed" &&
+        conflict.rule !== "transitive_dependency") ||
+      !conflict.analysis
+    ) {
+      return conflict;
+    }
+
+    const affectedSites = dependentsOf(conflict.targetSymbol.raw);
+    if (affectedSites.length === 0) {
+      return conflict;
+    }
+
+    return {
+      ...conflict,
+      analysis: {
+        ...conflict.analysis,
+        affectedSites
+      }
+    };
+  });
 }
 
 async function attachResolutions(
