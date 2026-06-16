@@ -19,6 +19,22 @@ export interface Feed {
   subscribe(listener: FeedListener): () => void;
 }
 
+export interface LiveFeedConnection {
+  id: string;
+  serverUrl: string;
+  repoId: string;
+}
+
+export type LiveFeedConfig =
+  | {
+      server: string;
+      repoId: string;
+      token: string;
+    }
+  | {
+      needsToken: true;
+    };
+
 interface StateSnapshotEnvelope {
   type: "state.snapshot";
   payload: {
@@ -171,7 +187,21 @@ export function createLiveFeed(options: { server: string; repoId: string; token:
   };
 }
 
-function buildSocketUrl(options: { server: string; repoId: string; token: string | null }) {
+export function resolveLiveFeedConfig(options: {
+  connection: LiveFeedConnection;
+  token: string | null;
+}): LiveFeedConfig {
+  if (!options.token) {
+    return { needsToken: true };
+  }
+  return {
+    server: options.connection.serverUrl,
+    repoId: options.connection.repoId,
+    token: options.token
+  };
+}
+
+export function buildSocketUrl(options: { server: string; repoId: string; token: string | null }) {
   const url = new URL(options.server);
   url.searchParams.set("repoId", options.repoId);
   if (options.token) {

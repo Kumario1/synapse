@@ -1,3 +1,5 @@
+"use client";
+
 import type { RecentPush, RecentRepoEvent, Session, TeamState } from "@synapse/protocol";
 import { deriveContestedSymbols } from "./derive";
 
