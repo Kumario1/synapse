@@ -69,7 +69,13 @@ try {
   const resources = await client.listResources();
   assert.deepEqual(
     resources.resources.map((resource) => resource.uri).sort(),
-    ["synapse://briefing", "synapse://decisions", "synapse://pr-brief", "synapse://team-state"]
+    [
+      "synapse://briefing",
+      "synapse://contracts",
+      "synapse://decisions",
+      "synapse://pr-brief",
+      "synapse://team-state"
+    ]
   );
   assert.ok(
     resources.resources.every((resource) => resource.mimeType === "application/json"),
@@ -125,6 +131,7 @@ try {
 
   const resourceReads = {
     briefing: await readJsonResource(client, "synapse://briefing"),
+    contracts: await readJsonResource(client, "synapse://contracts"),
     teamState: await readJsonResource(client, "synapse://team-state"),
     decisions: await readJsonResource(client, "synapse://decisions"),
     prBrief: await readJsonResource(client, "synapse://pr-brief")
@@ -136,6 +143,19 @@ try {
   assert.ok(
     resourceReads.briefing.context.sections.decisions.some(
       (source) => source.kind === "unpushed_delta" && source.summary.includes("TokenValidator.validate")
+    )
+  );
+
+  assert.equal(resourceReads.contracts.kind, "synapse_contract_surface");
+  assert.equal(resourceReads.contracts.scope, "public");
+  assert.ok(Array.isArray(resourceReads.contracts.symbols));
+  assert.ok(resourceReads.contracts.symbols.length > 0);
+  assert.ok(
+    resourceReads.contracts.symbols.some(
+      (symbol) =>
+        typeof symbol.id === "string" &&
+        typeof symbol.name === "string" &&
+        ("signature" in symbol || typeof symbol.filePath === "string")
     )
   );
 
