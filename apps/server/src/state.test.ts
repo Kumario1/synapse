@@ -147,6 +147,33 @@ test("conflict.feedback stores most-recent-first, replaces retries, and caps his
   assert.equal(state.conflictFeedback[99].conflictId, "conflict-5");
 });
 
+test("edit.intent caps locks per session and evicts the oldest lock", () => {
+  const state = createEmptyTeamState("local");
+
+  for (let index = 0; index < 201; index += 1) {
+    applyMessage(state, "local", editIntentMessage("alice", index), undefined, timestamp(index));
+  }
+
+  const aliceLocks = state.editLocks.filter((lock) => lock.sessionId === "alice");
+  assert.equal(aliceLocks.length, 200);
+  assert.equal(
+    state.editLocks.some((lock) => lock.sessionId === "alice" && lock.symbolId.raw === editSymbol(0)),
+    false
+  );
+  assert.equal(
+    state.editLocks.some((lock) => lock.sessionId === "alice" && lock.symbolId.raw === editSymbol(200)),
+    true
+  );
+
+  applyMessage(state, "local", editIntentMessage("bob", 0), undefined, timestamp(201));
+
+  assert.equal(state.editLocks.filter((lock) => lock.sessionId === "alice").length, 200);
+  assert.equal(
+    state.editLocks.some((lock) => lock.sessionId === "bob" && lock.symbolId.raw === editSymbol(0)),
+    true
+  );
+});
+
 const now = "2026-06-07T00:00:00.000Z";
 
 function withDivergentDeltas(): TeamState {
@@ -288,6 +315,29 @@ function feedbackMessage(
       }
     }
   };
+}
+
+function editIntentMessage(sessionId: string, index: number): ClientMessage {
+  return {
+    v: PROTOCOL_VERSION,
+    type: "edit.intent",
+    id: `edit-${sessionId}-${index}`,
+    ts: timestamp(index),
+    payload: {
+      repoId: "local",
+      sessionId,
+      symbolId: { raw: editSymbol(index) },
+      filePath: `src/edit-${index}.ts`
+    }
+  };
+}
+
+function editSymbol(index: number): string {
+  return `ts:src/edit-${index}.ts#symbol${index}`;
+}
+
+function timestamp(index: number): string {
+  return new Date(Date.parse(now) + index).toISOString();
 }
 
 test("session.heartbeat with a branch refreshes the session branch", () => {
