@@ -1,3 +1,5 @@
+"use client";
+
 import type { FeedMode } from "./feed";
 
 export default function Landing({ mode }: { mode: FeedMode }) {

@@ -23,7 +23,7 @@ for (const packageDir of workspaceDirs) {
   const packageJsonPath = join(packageDir, "package.json");
   const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8"));
   const packageName = packageJson.name ?? relative(rootDir, packageDir);
-  const runsTypeScriptSourceTests = testScriptRunsTypeScriptSource(packageJson.scripts?.test);
+  const runsTypeScriptSourceTests = await testScriptRunsTypeScriptSource(packageJson.scripts?.test, packageDir);
   const sourceTests = (await findTests(join(packageDir, "src"))).sort();
   const matchedDistTests = [];
 
@@ -118,6 +118,28 @@ async function exists(path) {
     .catch(() => false);
 }
 
-function testScriptRunsTypeScriptSource(script) {
-  return Boolean(script?.includes("--import tsx") && script.includes("--test") && script.includes(".test.ts"));
+async function testScriptRunsTypeScriptSource(script, packageDir) {
+  if (!script) {
+    return false;
+  }
+  if (runsTsxNodeTests(script)) {
+    return true;
+  }
+
+  const runnerPath = script.match(/^node\s+([^\s;&|]+\.mjs)(?:\s|$)/)?.[1];
+  if (!runnerPath) {
+    return false;
+  }
+
+  const runner = await readFile(join(packageDir, runnerPath), "utf8").catch((error) => {
+    if (error.code === "ENOENT") {
+      return "";
+    }
+    throw error;
+  });
+  return runsTsxNodeTests(runner);
+}
+
+function runsTsxNodeTests(source) {
+  return source.includes("--import") && source.includes("tsx") && source.includes("--test") && source.includes(".test.ts");
 }

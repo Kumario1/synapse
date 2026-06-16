@@ -1,3 +1,5 @@
+"use client";
+
 import { useMemo } from "react";
 import { activeSessions, deriveContestedSymbols } from "./derive";
 import type { FeedSnapshot } from "./feed";
