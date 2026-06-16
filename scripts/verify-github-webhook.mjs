@@ -5,6 +5,7 @@ import { once } from "node:events";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { deriveProjectKey } from "@synapse/protocol";
 
 // Hermetic: pin the coordination room so git-remote derivation does not pick up the host repo.
 process.env.SYNAPSE_REPO_ID ??= "local";
@@ -14,11 +15,69 @@ const children = [];
 const serverPort = await freePort();
 const alicePort = await freePort();
 const bobPort = await freePort();
+const tenancyServerPort = await freePort();
 const filePath = "src/auth/token.ts";
 const symbol = "ts:src/auth/token.ts#TokenValidator.validate";
 const webhookSecret = "synapse-test-secret";
+const masterSecret = "synapse-webhook-tenancy-secret";
 
 try {
+  const tenancyServer = startProcess("tenancy-server", ["apps/server/dist/index.js"], {
+    SYNAPSE_SERVER_PORT: String(tenancyServerPort),
+    SYNAPSE_MASTER_SECRET: masterSecret,
+    SYNAPSE_GITHUB_WEBHOOK_SECRET: webhookSecret
+  });
+  await waitForHttp(`http://localhost:${tenancyServerPort}/health`);
+
+  const tenantRepo = "someone/else";
+  const tenantKey = deriveProjectKey(masterSecret, tenantRepo);
+  const missingRepoPayload = {
+    after: "tenant123",
+    sender: { login: "mallory" },
+    head_commit: { message: "Attempt missing repo binding" },
+    commits: [{ modified: [filePath] }]
+  };
+  const missingRepoWebhook = await postJsonResponse(
+    `http://localhost:${tenancyServerPort}/webhooks/github?repoId=${encodeURIComponent(tenantRepo)}`,
+    missingRepoPayload,
+    signedGitHubHeaders(missingRepoPayload)
+  );
+  assert.equal(missingRepoWebhook.status, 422, "project-key webhook requires repository.full_name");
+  assert.equal(missingRepoWebhook.body.error, "repository_full_name_required");
+
+  const tenantStateAfterReject = await getState(tenancyServerPort, tenantRepo, tenantKey);
+  assert.equal(
+    tenantStateAfterReject.recentPushes.length,
+    0,
+    "missing full_name webhook does not write a push"
+  );
+  assert.equal(
+    tenantStateAfterReject.recentRepoEvents.length,
+    0,
+    "missing full_name webhook does not write a repo event"
+  );
+
+  const boundPayload = {
+    after: "tenant456",
+    repository: { full_name: tenantRepo },
+    sender: { login: "alice" },
+    head_commit: { message: "Bound tenant push" },
+    commits: [{ modified: [filePath] }]
+  };
+  const boundWebhook = await postJson(
+    `http://localhost:${tenancyServerPort}/webhooks/github?repoId=${encodeURIComponent(tenantRepo)}`,
+    boundPayload,
+    signedGitHubHeaders(boundPayload)
+  );
+  assert.deepEqual(boundWebhook, { ok: true, repoId: tenantRepo, sha: "tenant456", files: [filePath] });
+  const tenantStateAfterAccept = await getState(tenancyServerPort, tenantRepo, tenantKey);
+  assert.equal(
+    tenantStateAfterAccept.recentPushes.length,
+    1,
+    "repository.full_name webhook writes in project-key mode"
+  );
+  tenancyServer.kill();
+
   const server = startProcess("server", ["apps/server/dist/index.js"], {
     SYNAPSE_SERVER_PORT: String(serverPort),
     SYNAPSE_GITHUB_WEBHOOK_SECRET: webhookSecret
@@ -248,8 +307,13 @@ async function waitForState(port, predicate, timeoutMs = 5000) {
   return lastState;
 }
 
-async function getState(port, repoId) {
-  const response = await fetch(`http://localhost:${port}/state?repoId=${encodeURIComponent(repoId)}`);
+async function getState(port, repoId, token) {
+  const url = new URL(`http://localhost:${port}/state`);
+  url.searchParams.set("repoId", repoId);
+  if (token) {
+    url.searchParams.set("token", token);
+  }
+  const response = await fetch(url);
   assert.equal(response.ok, true);
   return response.json();
 }
