@@ -11,6 +11,12 @@ export interface Owner {
   avatarUrl: string | null;
 }
 
+/** A repo the signed-in Owner has claimed, with its per-repo daemon credential. */
+export interface Project {
+  repoId: string;
+  projectKey: string;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -36,6 +42,32 @@ export async function fetchMe(): Promise<Owner | null> {
     };
   } catch {
     return null;
+  }
+}
+
+export async function fetchProjects(): Promise<Project[]> {
+  try {
+    const response = await fetch("/auth/projects", { credentials: "include" });
+    if (!response.ok) {
+      return [];
+    }
+    const body: unknown = await response.json();
+    if (!isRecord(body) || !Array.isArray(body.projects)) {
+      return [];
+    }
+    const projects: Project[] = [];
+    for (const entry of body.projects) {
+      if (
+        isRecord(entry) &&
+        typeof entry.repoId === "string" &&
+        typeof entry.projectKey === "string"
+      ) {
+        projects.push({ repoId: entry.repoId, projectKey: entry.projectKey });
+      }
+    }
+    return projects;
+  } catch {
+    return [];
   }
 }
 

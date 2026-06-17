@@ -30,6 +30,9 @@ export default function TopbarAuth() {
           ) : null}
           @{owner.login}
         </span>
+        <Button asChild size="sm" variant="secondary">
+          <a href="/auth/projects/add">Add project</a>
+        </Button>
         <Button
           size="sm"
           variant="outline"

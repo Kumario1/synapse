@@ -8,15 +8,23 @@ import {
   signSession
 } from "./session.js";
 import type { GitHubUser } from "./github-oauth.js";
+import type { ClaimedRepo } from "./github-app.js";
 import { createUserStore } from "./user-store.js";
+import { createProjectStore, type ProjectStore } from "./project-store.js";
+import { deriveProjectKey } from "@synapse/protocol";
 
 const sessionKey = sessionKeyFromClientSecret("fake-client-secret");
 const octocat: GitHubUser = { id: "42", login: "octocat", name: "Octo", avatarUrl: "u" };
+const installRepos: ClaimedRepo[] = [
+  { fullName: "o/r1", pushAccess: true },
+  { fullName: "o/r2", pushAccess: false }
+];
 
 async function makeCtx(
   overrides: Partial<AuthContext> = {}
-): Promise<{ ctx: AuthContext; close: () => Promise<void> }> {
+): Promise<{ ctx: AuthContext; projectStore: ProjectStore; close: () => Promise<void> }> {
   const userStore = await createUserStore({ path: ":memory:" });
+  const projectStore = await createProjectStore({ path: ":memory:" });
   const ctx: AuthContext = {
     creds: { clientId: "Iv1.fakeclient", clientSecret: "fake-client-secret" },
     sessionKey,
@@ -25,9 +33,35 @@ async function makeCtx(
     exchangeCodeForToken: async () => "tok",
     fetchGitHubUser: async () => octocat,
     isSecure: true,
+    appSlug: "my-app",
+    masterSecret: "test-master",
+    projectStore,
+    listInstallationReposForUser: async () => installRepos,
     ...overrides
   };
-  return { ctx, close: () => userStore.close() };
+  return {
+    ctx,
+    projectStore,
+    close: async () => {
+      await userStore.close();
+      await projectStore.close();
+    }
+  };
+}
+
+/** Drive GET /auth/projects/add (with an authed Owner) to obtain a matching install-state value. */
+async function freshInstallState(ctx: AuthContext, ownerSession: string): Promise<string> {
+  const result = await resolveAuthRoute(
+    "GET",
+    "/auth/projects/add",
+    new URLSearchParams(),
+    { [SESSION_COOKIE]: ownerSession },
+    ctx
+  );
+  assert.ok(result);
+  const cookie = (result.setCookies ?? []).find((c) => c.startsWith("synapse_install_state="));
+  assert.ok(cookie, "expected an install state cookie");
+  return parseCookies(cookie.split(";")[0]).synapse_install_state;
 }
 
 /** Drive GET /auth/github to obtain a matching state value + its cookie. */
@@ -213,6 +247,191 @@ test("an unknown /auth path is 404 and a non-auth path is null", async () => {
     assert.equal(unknown?.status, 404);
     const nonAuth = await resolveAuthRoute("GET", "/health", new URLSearchParams(), {}, ctx);
     assert.equal(nonAuth, null);
+  } finally {
+    await close();
+  }
+});
+
+test("install setup records ownership for a push repo and mints its project-key", async () => {
+  const { ctx, projectStore, close } = await makeCtx();
+  try {
+    const session = signSession("42", sessionKey);
+    const state = await freshInstallState(ctx, session);
+    const result = await resolveAuthRoute(
+      "GET",
+      "/auth/github/setup",
+      new URLSearchParams({ installation_id: "1", code: "c", state }),
+      { [SESSION_COOKIE]: session, synapse_install_state: state },
+      ctx
+    );
+    assert.equal(result?.status, 302);
+    assert.equal(result?.redirect, "/");
+    const claimed = await projectStore.getProject("42", "o/r1");
+    assert.ok(claimed);
+    assert.equal(claimed?.projectKey, deriveProjectKey("test-master", "o/r1"));
+  } finally {
+    await close();
+  }
+});
+
+test("install setup does not claim a non-push repo", async () => {
+  const { ctx, projectStore, close } = await makeCtx();
+  try {
+    const session = signSession("42", sessionKey);
+    const state = await freshInstallState(ctx, session);
+    await resolveAuthRoute(
+      "GET",
+      "/auth/github/setup",
+      new URLSearchParams({ installation_id: "1", code: "c", state }),
+      { [SESSION_COOKIE]: session, synapse_install_state: state },
+      ctx
+    );
+    assert.equal(await projectStore.getProject("42", "o/r2"), null);
+  } finally {
+    await close();
+  }
+});
+
+test("the project-key is minted once across repeated installs", async () => {
+  const { ctx, projectStore, close } = await makeCtx();
+  try {
+    const session = signSession("42", sessionKey);
+    for (let i = 0; i < 2; i++) {
+      const state = await freshInstallState(ctx, session);
+      const result = await resolveAuthRoute(
+        "GET",
+        "/auth/github/setup",
+        new URLSearchParams({ installation_id: "1", code: "c", state }),
+        { [SESSION_COOKIE]: session, synapse_install_state: state },
+        ctx
+      );
+      assert.equal(result?.status, 302);
+    }
+    const stored = await projectStore.getProject("42", "o/r1");
+    assert.equal(stored?.projectKey, deriveProjectKey("test-master", "o/r1"));
+  } finally {
+    await close();
+  }
+});
+
+test("GET /auth/projects/add requires a session", async () => {
+  const { ctx, close } = await makeCtx();
+  try {
+    const result = await resolveAuthRoute(
+      "GET",
+      "/auth/projects/add",
+      new URLSearchParams(),
+      {},
+      ctx
+    );
+    assert.equal(result?.status, 401);
+    assert.deepEqual(result?.body, { error: "unauthenticated" });
+  } finally {
+    await close();
+  }
+});
+
+test("GET /auth/projects/add is 503 when claiming is unavailable", async () => {
+  const { ctx, close } = await makeCtx({ appSlug: null });
+  try {
+    const session = signSession("42", sessionKey);
+    const result = await resolveAuthRoute(
+      "GET",
+      "/auth/projects/add",
+      new URLSearchParams(),
+      { [SESSION_COOKIE]: session },
+      ctx
+    );
+    assert.equal(result?.status, 503);
+    assert.deepEqual(result?.body, { error: "claiming_unavailable" });
+  } finally {
+    await close();
+  }
+});
+
+test("GET /auth/projects returns only the Owner's own claimed repos with their keys", async () => {
+  const { ctx, close } = await makeCtx();
+  try {
+    const session = signSession("42", sessionKey);
+    const state = await freshInstallState(ctx, session);
+    await resolveAuthRoute(
+      "GET",
+      "/auth/github/setup",
+      new URLSearchParams({ installation_id: "1", code: "c", state }),
+      { [SESSION_COOKIE]: session, synapse_install_state: state },
+      ctx
+    );
+
+    const mine = await resolveAuthRoute(
+      "GET",
+      "/auth/projects",
+      new URLSearchParams(),
+      { [SESSION_COOKIE]: session },
+      ctx
+    );
+    assert.equal(mine?.status, 200);
+    assert.deepEqual(mine?.body, {
+      projects: [{ repoId: "o/r1", projectKey: deriveProjectKey("test-master", "o/r1") }]
+    });
+
+    // A different Owner does not see o/r1.
+    const other = await resolveAuthRoute(
+      "GET",
+      "/auth/projects",
+      new URLSearchParams(),
+      { [SESSION_COOKIE]: signSession("99", sessionKey) },
+      ctx
+    );
+    assert.deepEqual(other?.body, { projects: [] });
+  } finally {
+    await close();
+  }
+});
+
+test("install setup rejects a bad install-state", async () => {
+  const { ctx, close } = await makeCtx();
+  try {
+    const session = signSession("42", sessionKey);
+    const state = await freshInstallState(ctx, session);
+    const result = await resolveAuthRoute(
+      "GET",
+      "/auth/github/setup",
+      new URLSearchParams({ installation_id: "1", code: "c", state }),
+      { [SESSION_COOKIE]: session, synapse_install_state: "a-different-value" },
+      ctx
+    );
+    assert.equal(result?.status, 400);
+    assert.deepEqual(result?.body, { error: "bad_state" });
+  } finally {
+    await close();
+  }
+});
+
+test("install setup rejects a missing installation_id or code", async () => {
+  const { ctx, close } = await makeCtx();
+  try {
+    const session = signSession("42", sessionKey);
+    const state = await freshInstallState(ctx, session);
+    const noInstall = await resolveAuthRoute(
+      "GET",
+      "/auth/github/setup",
+      new URLSearchParams({ code: "c", state }),
+      { [SESSION_COOKIE]: session, synapse_install_state: state },
+      ctx
+    );
+    assert.equal(noInstall?.status, 400);
+    assert.deepEqual(noInstall?.body, { error: "missing_installation" });
+
+    const state2 = await freshInstallState(ctx, session);
+    const noCode = await resolveAuthRoute(
+      "GET",
+      "/auth/github/setup",
+      new URLSearchParams({ installation_id: "1", state: state2 }),
+      { [SESSION_COOKIE]: session, synapse_install_state: state2 },
+      ctx
+    );
+    assert.equal(noCode?.status, 400);
+    assert.deepEqual(noCode?.body, { error: "missing_installation" });
   } finally {
     await close();
   }
