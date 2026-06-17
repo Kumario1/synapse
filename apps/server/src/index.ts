@@ -21,6 +21,7 @@ import {
 } from "@synapse/protocol";
 import { WebSocket, WebSocketServer } from "ws";
 import { createEmbeddingProvider } from "./embeddings.js";
+import { loadGitHubAppConfig } from "./github-app-config.js";
 import { gitHubPushToNotify, gitHubRepoEventToNotify, webhookRepoFullName } from "./github.js";
 import {
   applyMessage,
@@ -54,6 +55,12 @@ const authMode: "project-key" | "shared-token" | "open" = masterSecret
   : authToken
     ? "shared-token"
     : "open";
+const log = createLogger("synapse-server");
+const githubApp = loadGitHubAppConfig();
+const githubWebhookSecret = githubApp.webhookSecret;
+if (githubApp.status === "incomplete") {
+  log.warn("github_app.incomplete", { missing: githubApp.missing });
+}
 // Durable per-repo state. In-memory cache is the hot-path working copy; every
 // mutation in state.ts emits the matching per-entity store op (plan M8), so a
 // restart resumes live state row-by-row. SYNAPSE_DATABASE_URL selects
@@ -62,7 +69,6 @@ const store = await createStateStore();
 const states = new Map<string, TeamState>();
 const roomClients = new Map<string, Set<WebSocket>>();
 const repoSeq = new Map<string, number>();
-const log = createLogger("synapse-server");
 const metrics = new MetricsRegistry();
 const deltaBroadcastEnabled = process.env.SYNAPSE_DELTA_BROADCAST !== "0";
 // Prune-sweep throttle (plan 038): getState() is called on every inbound
@@ -145,6 +151,7 @@ async function handleHttp(request: IncomingMessage, response: ServerResponse): P
       ok: true,
       service: "synapse-server",
       version: SERVER_VERSION,
+      githubApp: githubApp.status,
       protocolVersion: PROTOCOL_VERSION,
       minProtocolVersion: MIN_SUPPORTED_PROTOCOL_VERSION
     });
@@ -491,7 +498,7 @@ async function handleGitHubWebhook(
     return;
   }
 
-  const secret = process.env.SYNAPSE_GITHUB_WEBHOOK_SECRET;
+  const secret = githubWebhookSecret;
   // G4: a server running with auth (shared token or project keys) is a
   // production posture — an unsigned, internet-reachable webhook that mutates
   // team state is not acceptable there. Open mode (local/dev) stays unchanged.
