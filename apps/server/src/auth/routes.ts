@@ -44,6 +44,7 @@ export interface AuthContext {
     installationId: string,
     userToken: string
   ) => Promise<ClaimedRepo[]>;
+  readRoomState: (repoId: string) => Promise<unknown>;
 }
 
 export interface RouteResult {
@@ -233,6 +234,26 @@ export async function resolveAuthRoute(
       status: 200,
       body: { projects: projects.map((p) => ({ repoId: p.repoId, projectKey: p.projectKey })) }
     };
+  }
+
+  // Owner dashboard read: cookie-authed, authorized by ownership. An Owner may read
+  // the live Room only for a repo they have claimed. Distinct from the machine
+  // GET /state (project-key) path — the boundary stays separate.
+  if (method === "GET" && pathname === "/auth/projects/state") {
+    const owner = requireOwner(cookies, ctx);
+    if (!owner) {
+      return { status: 401, body: { error: "unauthenticated" } };
+    }
+    const repoId = query.get("repoId");
+    if (!repoId) {
+      return { status: 400, body: { error: "missing_repo" } };
+    }
+    const project = await ctx.projectStore.getProject(owner.userId, repoId);
+    if (!project) {
+      return { status: 403, body: { error: "not_owner" } };
+    }
+    const state = await ctx.readRoomState(repoId);
+    return { status: 200, body: state };
   }
 
   return { status: 404, body: { error: "not_found" } };

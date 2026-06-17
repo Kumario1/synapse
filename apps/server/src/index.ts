@@ -100,7 +100,8 @@ const authContext: AuthContext | null =
           masterSecret,
           projectStore,
           listInstallationReposForUser: (installationId, userToken) =>
-            listInstallationReposForUser(installationId, userToken)
+            listInstallationReposForUser(installationId, userToken),
+          readRoomState: (repoId: string) => withRepo(repoId, () => getState(repoId))
         } satisfies AuthContext;
       })()
     : null;

@@ -37,6 +37,14 @@ async function makeCtx(
     masterSecret: "test-master",
     projectStore,
     listInstallationReposForUser: async () => installRepos,
+    readRoomState: async (repoId: string) => ({
+      repoId,
+      sessions: [{ id: "s1" }],
+      editLocks: [],
+      unpushedDeltas: [],
+      recentPushes: [],
+      recentRepoEvents: []
+    }),
     ...overrides
   };
   return {
@@ -383,6 +391,86 @@ test("GET /auth/projects returns only the Owner's own claimed repos with their k
       ctx
     );
     assert.deepEqual(other?.body, { projects: [] });
+  } finally {
+    await close();
+  }
+});
+
+test("GET /auth/projects/state returns the Room state for a claimed repo", async () => {
+  const { ctx, close } = await makeCtx();
+  try {
+    const session = signSession("42", sessionKey);
+    const state = await freshInstallState(ctx, session);
+    await resolveAuthRoute(
+      "GET",
+      "/auth/github/setup",
+      new URLSearchParams({ installation_id: "1", code: "c", state }),
+      { [SESSION_COOKIE]: session, synapse_install_state: state },
+      ctx
+    );
+
+    const result = await resolveAuthRoute(
+      "GET",
+      "/auth/projects/state",
+      new URLSearchParams({ repoId: "o/r1" }),
+      { [SESSION_COOKIE]: session },
+      ctx
+    );
+    assert.equal(result?.status, 200);
+    assert.equal((result?.body as { repoId: string }).repoId, "o/r1");
+  } finally {
+    await close();
+  }
+});
+
+test("GET /auth/projects/state denies a repo the Owner has not claimed", async () => {
+  const { ctx, close } = await makeCtx();
+  try {
+    const session = signSession("42", sessionKey);
+    const result = await resolveAuthRoute(
+      "GET",
+      "/auth/projects/state",
+      new URLSearchParams({ repoId: "o/unclaimed" }),
+      { [SESSION_COOKIE]: session },
+      ctx
+    );
+    assert.equal(result?.status, 403);
+    assert.deepEqual(result?.body, { error: "not_owner" });
+  } finally {
+    await close();
+  }
+});
+
+test("GET /auth/projects/state is 401 without a session", async () => {
+  const { ctx, close } = await makeCtx();
+  try {
+    const result = await resolveAuthRoute(
+      "GET",
+      "/auth/projects/state",
+      new URLSearchParams({ repoId: "o/r1" }),
+      {},
+      ctx
+    );
+    assert.equal(result?.status, 401);
+    assert.deepEqual(result?.body, { error: "unauthenticated" });
+  } finally {
+    await close();
+  }
+});
+
+test("GET /auth/projects/state is 400 without a repoId", async () => {
+  const { ctx, close } = await makeCtx();
+  try {
+    const session = signSession("42", sessionKey);
+    const result = await resolveAuthRoute(
+      "GET",
+      "/auth/projects/state",
+      new URLSearchParams(),
+      { [SESSION_COOKIE]: session },
+      ctx
+    );
+    assert.equal(result?.status, 400);
+    assert.deepEqual(result?.body, { error: "missing_repo" });
   } finally {
     await close();
   }
