@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { ActivityIcon, GitPullRequestIcon, LockKeyholeIcon, UsersIcon } from "lucide-react";
+import type { Session } from "@synapse/protocol";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -14,7 +15,13 @@ import type { FeedSnapshot, FeedStatus } from "./feed";
 import FlowGraph from "./FlowGraph";
 import { CommitsPanel, OnlinePanel, SignalsPanel } from "./panels";
 
-export default function Dashboard({ snapshot }: { snapshot: FeedSnapshot }) {
+export default function Dashboard({
+  snapshot,
+  onKick
+}: {
+  snapshot: FeedSnapshot;
+  onKick?: (session: Session) => void;
+}) {
   const sessions = useMemo(() => activeSessions(snapshot.state), [snapshot.state]);
   const contested = useMemo(() => deriveContestedSymbols(snapshot.state), [snapshot.state]);
   const signalCount = snapshot.state.unpushedDeltas.length + snapshot.state.editLocks.length;
@@ -49,7 +56,7 @@ export default function Dashboard({ snapshot }: { snapshot: FeedSnapshot }) {
       </section>
 
       <section className="grid gap-5 lg:grid-cols-2" aria-label="Synapse room dashboard">
-        <OnlinePanel sessions={sessions} />
+        <OnlinePanel sessions={sessions} onKick={onKick} />
         <SignalsPanel state={snapshot.state} />
         <FlowGraph state={snapshot.state} />
         <CommitsPanel pushes={snapshot.state.recentPushes} events={snapshot.state.recentRepoEvents} />

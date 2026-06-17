@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { TeamState } from "@synapse/protocol";
 import { Button } from "@/components/ui/button";
 import { fetchProjects, type Project } from "@/auth";
-import { emptyRoomState, fetchOwnedRoomState, toSnapshot } from "@/projects";
+import { emptyRoomState, fetchOwnedRoomState, kickSession, toSnapshot } from "@/projects";
 import type { FeedStatus } from "@/feed";
 import Dashboard from "@/Dashboard";
 
@@ -88,7 +88,12 @@ function SelectedRoom({ repoId }: { repoId: string }) {
 
   return (
     <div className="mt-6">
-      <Dashboard snapshot={toSnapshot(state, seq, status)} />
+      <Dashboard
+        snapshot={toSnapshot(state, seq, status)}
+        onKick={(session) => {
+          void kickSession(repoId, session.id).then(() => {});
+        }}
+      />
     </div>
   );
 }

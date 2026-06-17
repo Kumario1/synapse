@@ -2,6 +2,7 @@ import { GitCommitHorizontalIcon, LockKeyholeIcon, RadioTowerIcon, UsersIcon } f
 import type { RecentPush, RecentRepoEvent, Session, TeamState } from "@synapse/protocol";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardAction,
@@ -20,7 +21,13 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { deriveContestedSymbols } from "./derive";
 
-export function OnlinePanel({ sessions }: { sessions: Session[] }) {
+export function OnlinePanel({
+  sessions,
+  onKick
+}: {
+  sessions: Session[];
+  onKick?: (session: Session) => void;
+}) {
   return (
     <Card className="bg-card/85">
       <CardHeader>
@@ -52,6 +59,11 @@ export function OnlinePanel({ sessions }: { sessions: Session[] }) {
                     <Badge variant="outline">{session.agentType}</Badge>
                     <Badge variant={session.status === "active" ? "secondary" : "outline"}>{session.status}</Badge>
                     <Badge variant="outline">{session.branch ?? "unknown branch"}</Badge>
+                    {onKick && session.status !== "ended" ? (
+                      <Button size="sm" variant="outline" onClick={() => onKick(session)}>
+                        Kick
+                      </Button>
+                    ) : null}
                   </div>
                 </section>
               </div>

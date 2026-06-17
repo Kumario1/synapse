@@ -31,6 +31,28 @@ export function emptyRoomState(repoId: string): TeamState {
   };
 }
 
+/**
+ * The Owner kick write path: an authenticated HTTP POST (never a browser WS
+ * message). repoId and sessionId ride the query string. The server ends the
+ * Session, releases its edit locks, closes its socket, and broadcasts the new
+ * Room state; a reconnecting daemon returns as a fresh Session.
+ */
+export function kickUrl(repoId: string, sessionId: string): string {
+  return `/auth/projects/kick?repoId=${encodeURIComponent(repoId)}&sessionId=${encodeURIComponent(sessionId)}`;
+}
+
+export async function kickSession(repoId: string, sessionId: string): Promise<boolean> {
+  try {
+    const response = await fetch(kickUrl(repoId, sessionId), {
+      method: "POST",
+      credentials: "include"
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function fetchOwnedRoomState(repoId: string): Promise<TeamState | null> {
   try {
     const response = await fetch(ownedRoomStateUrl(repoId), { credentials: "include" });

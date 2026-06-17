@@ -550,3 +550,35 @@ test("a returning daemon's session.start revives a session the sweep ended", () 
   assert.equal(state.sessions.length, 1);
   assert.equal(state.sessions[0].status, "active");
 });
+
+test("kick (session.end) ends the session, clears edits, releases its locks; a fresh join is active", () => {
+  // The Owner-kick HTTP route reuses this state.end teardown (plan 055). Here we
+  // exercise the mechanics the kick relies on: end the active session, then verify
+  // a reconnecting daemon returns as a fresh active session (interrupt, not ban).
+  const state = createEmptyTeamState("local");
+  applyMessage(state, "local", sessionStartMessage("alice", "main"));
+  applyMessage(state, "local", editIntentMessage("alice", 0));
+  assert.equal(state.sessions[0].status, "active");
+  assert.ok(state.editLocks.some((lock) => lock.sessionId === "alice"));
+
+  applyMessage(state, "local", {
+    v: PROTOCOL_VERSION,
+    type: "session.end",
+    id: "end-alice",
+    ts: now,
+    payload: { repoId: "local", sessionId: "alice" }
+  });
+
+  assert.equal(state.sessions[0].status, "ended");
+  assert.deepEqual(state.sessions[0].filesEditing, []);
+  assert.ok(
+    !state.editLocks.some((lock) => lock.sessionId === "alice"),
+    "the kicked session's edit locks are released"
+  );
+
+  // A reconnecting daemon returns as a fresh Session — kick is an interrupt, not a ban.
+  applyMessage(state, "local", sessionStartMessage("bob", "main"));
+  const fresh = state.sessions.find((session) => session.id === "bob");
+  assert.ok(fresh);
+  assert.equal(fresh?.status, "active");
+});
