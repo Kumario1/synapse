@@ -21,6 +21,7 @@ const releaseConfig = JSON.parse(readFileSync(join(rootDir, "release.config.json
 const children = [];
 const token = "package-token";
 const loopback = "127.0.0.1";
+const PACKAGED_DAEMON_HEALTH_TIMEOUT_MS = 60000;
 
 // 1. Build + pack the release tarball.
 await execFileAsync("node", [join(rootDir, "scripts/build-package.mjs")], {
@@ -95,11 +96,11 @@ console.log("resolved:" + (imported.length + 1));
 
   startUp(cli, "alice", aliceRoot, alicePort, serverPort, ["--serve", "--server-port", String(serverPort)]);
   await waitForHttp(`http://${loopback}:${serverPort}/health`);
-  await waitForHttp(`http://${loopback}:${alicePort}/health`);
+  await waitForHttp(`http://${loopback}:${alicePort}/health`, PACKAGED_DAEMON_HEALTH_TIMEOUT_MS);
   await assertJoined(aliceRoot, alicePort, "alice");
 
   startUp(cli, "bob", bobRoot, bobPort, serverPort);
-  await waitForHttp(`http://${loopback}:${bobPort}/health`);
+  await waitForHttp(`http://${loopback}:${bobPort}/health`, PACKAGED_DAEMON_HEALTH_TIMEOUT_MS);
   await assertJoined(bobRoot, bobPort, "bob");
 
   await waitForDaemonState(alicePort, (state) =>
