@@ -1,4 +1,4 @@
-import DemoDashboard from "./components/DemoDashboard";
+import NarratedDemo from "./components/NarratedDemo";
 
 const features = [
   ["Contract-level conflicts", "Classifies real before/after signature changes instead of treating every file overlap as equal."],
@@ -121,10 +121,10 @@ export default function Page() {
 
         <section className="section demo-section" aria-labelledby="demo-title">
           <div className="section__head">
-            <p className="eyebrow">Embedded live demo</p>
-            <h2 id="demo-title">A seeded room loops through real dashboard states.</h2>
+            <p className="eyebrow">See it live</p>
+            <h2 id="demo-title">A collision, caught in four steps.</h2>
           </div>
-          <DemoDashboard />
+          <NarratedDemo />
         </section>
 
         <section className="section cta">
