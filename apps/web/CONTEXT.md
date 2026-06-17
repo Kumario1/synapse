@@ -1,37 +1,21 @@
-# Web surface — context
+# apps/web — Context
 
-Glossary for the Synapse website (`apps/web`). This is the marketing + onboarding +
-dashboard surface, distinct from the self-hosted coordination **Server** that users run
-via the CLI.
+The marketing + live-room site for Synapse. Two jobs: (1) explain what Synapse
+is, (2) show the coordination room in action.
 
 ## Glossary
 
-### Account
-A website login, identified by a **GitHub** identity (GitHub OAuth, the only sign-in
-method). An Account exists to (1) gate the website and (2) own a synced list of
-**Connections**. It does **not** host or proxy anything — Synapse stays self-hosted.
-Distinct from a **Session** in the coordination domain (an agent's editing session on a
-Server); when ambiguous, say "website Account" vs "agent Session".
+Data terms come from `@synapse/protocol`; the entries below are the
+web-presentation vocabulary we use to talk about the UI.
 
-### Connection
-A saved profile pointing at one self-hosted **Server**: a human label, the `wss://`
-server URL, and the `repoId`. Connection **metadata is synced** in the website database,
-per Account. A Connection deliberately does **not** include the **Token** — see Token.
-
-### Token
-The per-server secret that authenticates a browser (or CLI) to a **Server**. It grants
-read access to a room's live coordination state. The website **never stores the Token**:
-it lives only in the browser (localStorage), re-entered once per device. A breach of the
-website exposes no Tokens.
-
-### Server
-A self-hosted Synapse coordination server (`apps/server`), run by the user via the CLI.
-The browser connects **directly** to it over WebSocket — the website is never in the
-path of live coordination traffic.
-
-### Dashboard
-The live view of a room's `TeamState` (members, edit locks, contract deltas, data-flow
-graph, commits/PRs). Two feeds drive it:
-- **Demo feed** — a seeded, public, no-login loop used for pitching on the landing page.
-- **Live feed** — a real WebSocket to a user's **Server**, selected from a saved
-  **Connection** plus its locally-held **Token**.
+- **Owner** — a human who has signed in (GitHub/Google OAuth) and claimed one or more Projects. Owners are the *only* humans in the model; the people "on a session" are AI agents, never human teammates.
+- **Project** — an Owner-facing name for a repo's Room: the thing an Owner claims, configures, and watches from the dashboard. One Project = one Room = one repo.
+- **Room** — a single coordination space for one repo. The dashboard renders one room.
+- **Session** — an **AI agent** connected to a room (member, agent type, branch, task, files). NOT a human. Source: protocol `Session`. "Who is on the session" = which agent sessions are active in a Project's Room.
+- **Kick** — an Owner-initiated **force-end** of an agent Session: the server marks it `ended`, closes its socket, releases its edit locks, and broadcasts. A reconnecting daemon returns as a *fresh* session (kick is an interrupt, not a ban — banning is deferred). Authorized by the Owner's cookie session + GitHub push-access; travels over an authenticated HTTP route, never the machine WS protocol. Net-new capability.
+- **Edit lock** — a session's claim on a symbol it's editing. Source: protocol `EditLock`.
+- **Contract delta** — a recorded before→after change to a symbol's contract, classified breaking/compatible/etc. Source: protocol `ContractDelta`.
+- **Contested symbol** — a symbol two or more sessions are touching at once; the moment Synapse exists to surface. Derived in `derive.ts`.
+- **Ship trail** — the page's name for recent pushes + repo events (the "work landed" stream).
+- **Demo (narrated step-through)** — the scripted 4-frame conflict story (Alice & Bob collide on `loadRoom`), shown as a guided walkthrough with a caption per step, highlighting only the panel that changed. Used when `mode === "demo"`.
+- **Live grid** — the cleaned-up 4-panel dashboard shown when a real server is connected (`mode === "live"`). Same panels, no scripted narration.

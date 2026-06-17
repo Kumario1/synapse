@@ -1,5 +1,4 @@
 dist
 dist-types
+.vite
 .turbo
-.next/
-out/
