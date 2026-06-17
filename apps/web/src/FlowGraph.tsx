@@ -1,4 +1,21 @@
+import { WorkflowIcon } from "lucide-react";
 import type { TeamState } from "@synapse/protocol";
+import { Badge } from "@/components/ui/badge";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle
+} from "@/components/ui/card";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle
+} from "@/components/ui/empty";
 import { deriveGraph } from "./derive";
 
 const sessionX = 120;
@@ -13,84 +30,126 @@ export default function FlowGraph({ state }: { state: TeamState }) {
   const waiting = graph.sessions.length === 0 && graph.symbols.length === 0;
 
   return (
-    <article className="panel panel--flow">
-      <header className="panel__header">
-        <p className="eyebrow">Data flow</p>
-        <strong>{graph.edges.length}</strong>
-      </header>
-      {waiting ? (
-        <p className="empty">Waiting for agents and symbols.</p>
-      ) : (
-        <svg className="flow-graph" viewBox="0 0 840 360" role="img" aria-label="Sessions flowing through the Synapse server into symbols">
-          <g className="flow-labels">
-            <text x={sessionX} y="28">Sessions</text>
-            <text x={serverX} y="28">Server</text>
-            <text x={symbolX} y="28">Symbols</text>
-          </g>
-          <g>
-            {graph.edges.map((edge) => {
-              const from = edge.from === "server" ? server : sessionPositions.get(edge.from);
-              const to = edge.to === "server" ? server : symbolPositions.get(edge.to);
-              if (!from || !to) {
-                return null;
-              }
-              const mid = (from.x + to.x) / 2;
-              return (
-                <path
-                  className={edge.contested ? "flow-edge flow-edge--contested" : "flow-edge"}
-                  d={`M ${from.x + 62} ${from.y} C ${mid} ${from.y}, ${mid} ${to.y}, ${to.x - 62} ${to.y}`}
-                  key={`${edge.from}-${edge.to}`}
-                />
-              );
-            })}
-          </g>
-          <g>
-            {graph.sessions.map((session) => {
-              const position = sessionPositions.get(session.id);
-              if (!position) {
-                return null;
-              }
-              return (
-                <FlowNode
-                  group="session"
-                  key={session.id}
-                  label={session.memberLogin ?? session.memberId}
-                  sublabel={session.status}
-                  x={position.x}
-                  y={position.y}
-                />
-              );
-            })}
-            <FlowNode group="server" label={state.repoId} sublabel="state.snapshot" x={server.x} y={server.y} />
-            {graph.symbols.map((symbol) => {
-              const position = symbolPositions.get(symbol);
-              if (!position) {
-                return null;
-              }
-              return (
-                <FlowNode
-                  group="symbol"
-                  key={symbol}
-                  label={symbolLabel(symbol)}
-                  sublabel={symbol.includes("#") ? symbol.split("#")[0] : "symbol"}
-                  x={position.x}
-                  y={position.y}
-                />
-              );
-            })}
-          </g>
-        </svg>
-      )}
-    </article>
+    <Card className="bg-card/85 lg:col-span-2">
+      <CardHeader>
+        <CardTitle>Data flow</CardTitle>
+        <CardDescription>Sessions flowing through Synapse into symbols currently changing.</CardDescription>
+        <CardAction>
+          <Badge variant="secondary">{graph.edges.length}</Badge>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        {waiting ? (
+          <Empty className="border">
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <WorkflowIcon />
+              </EmptyMedia>
+              <EmptyTitle>Waiting for flow</EmptyTitle>
+              <EmptyDescription>Agents and symbols will appear as the room changes.</EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        ) : (
+          <div className="rounded-lg border bg-muted/30">
+            <svg
+              className="block h-72 w-full sm:h-80 lg:h-96"
+              viewBox="0 0 840 360"
+              role="img"
+              aria-label="Sessions flowing through the Synapse server into symbols"
+            >
+              <g fill="var(--muted-foreground)" fontSize="13" textAnchor="middle">
+                <text x={sessionX} y="28">Sessions</text>
+                <text x={serverX} y="28">Server</text>
+                <text x={symbolX} y="28">Symbols</text>
+              </g>
+              <g>
+                {graph.edges.map((edge) => {
+                  const from = edge.from === "server" ? server : sessionPositions.get(edge.from);
+                  const to = edge.to === "server" ? server : symbolPositions.get(edge.to);
+                  if (!from || !to) {
+                    return null;
+                  }
+                  const mid = (from.x + to.x) / 2;
+                  return (
+                    <path
+                      d={`M ${from.x + 62} ${from.y} C ${mid} ${from.y}, ${mid} ${to.y}, ${to.x - 62} ${to.y}`}
+                      fill="none"
+                      key={`${edge.from}-${edge.to}`}
+                      stroke={edge.contested ? "var(--destructive)" : "var(--primary)"}
+                      strokeDasharray="8 12"
+                      strokeLinecap="round"
+                      strokeWidth={edge.contested ? 3 : 2}
+                    />
+                  );
+                })}
+              </g>
+              <g>
+                {graph.sessions.map((session) => {
+                  const position = sessionPositions.get(session.id);
+                  if (!position) {
+                    return null;
+                  }
+                  return (
+                    <FlowNode
+                      key={session.id}
+                      label={session.memberLogin ?? session.memberId}
+                      sublabel={session.status}
+                      tone="primary"
+                      x={position.x}
+                      y={position.y}
+                    />
+                  );
+                })}
+                <FlowNode label={state.repoId} sublabel="state.snapshot" tone="accent" x={server.x} y={server.y} />
+                {graph.symbols.map((symbol) => {
+                  const position = symbolPositions.get(symbol);
+                  if (!position) {
+                    return null;
+                  }
+                  return (
+                    <FlowNode
+                      key={symbol}
+                      label={symbolLabel(symbol)}
+                      sublabel={symbol.includes("#") ? symbol.split("#")[0] : "symbol"}
+                      tone="secondary"
+                      x={position.x}
+                      y={position.y}
+                    />
+                  );
+                })}
+              </g>
+            </svg>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
-function FlowNode({ group, label, sublabel, x, y }: { group: string; label: string; sublabel: string; x: number; y: number }) {
+function FlowNode({
+  label,
+  sublabel,
+  tone,
+  x,
+  y
+}: {
+  label: string;
+  sublabel: string;
+  tone: "accent" | "primary" | "secondary";
+  x: number;
+  y: number;
+}) {
+  const stroke = tone === "primary" ? "var(--primary)" : tone === "accent" ? "var(--accent)" : "var(--secondary)";
+
   return (
-    <g className={`flow-node flow-node--${group}`} transform={`translate(${x}, ${y})`}>
-      <rect x="-68" y="-24" width="136" height="48" rx="8" />
-      <text y="-3">{shortLabel(label, 20)}</text>
-      <text className="flow-node__sub" y="14">{shortLabel(sublabel, 22)}</text>
+    <g transform={`translate(${x}, ${y})`}>
+      <rect fill="var(--card)" height="50" rx="8" stroke={stroke} width="136" x="-68" y="-25" />
+      <text fill="var(--foreground)" fontSize="12" textAnchor="middle" y="-4">
+        {shortLabel(label, 20)}
+      </text>
+      <text fill="var(--muted-foreground)" fontSize="10" textAnchor="middle" y="14">
+        {shortLabel(sublabel, 22)}
+      </text>
     </g>
   );
 }

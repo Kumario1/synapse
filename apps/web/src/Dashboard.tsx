@@ -1,42 +1,54 @@
 import { useMemo } from "react";
+import { ActivityIcon, GitPullRequestIcon, LockKeyholeIcon, UsersIcon } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle
+} from "@/components/ui/card";
 import { activeSessions, deriveContestedSymbols } from "./derive";
-import type { FeedSnapshot } from "./feed";
+import type { FeedSnapshot, FeedStatus } from "./feed";
 import FlowGraph from "./FlowGraph";
 import { CommitsPanel, OnlinePanel, SignalsPanel } from "./panels";
 
 export default function Dashboard({ snapshot }: { snapshot: FeedSnapshot }) {
   const sessions = useMemo(() => activeSessions(snapshot.state), [snapshot.state]);
   const contested = useMemo(() => deriveContestedSymbols(snapshot.state), [snapshot.state]);
+  const signalCount = snapshot.state.unpushedDeltas.length + snapshot.state.editLocks.length;
+  const activityCount = snapshot.state.recentPushes.length + snapshot.state.recentRepoEvents.length;
 
   return (
-    <main className="dashboard" id="dashboard">
-      <section className="dashboard__head">
-        <div>
-          <p className="eyebrow">Live room</p>
-          <h2>{snapshot.state.repoId}</h2>
-        </div>
-        <dl className="metrics" aria-label="Room metrics">
-          <div>
-            <dt>Members</dt>
-            <dd>{sessions.length}</dd>
-          </div>
-          <div>
-            <dt>Signals</dt>
-            <dd>{snapshot.state.unpushedDeltas.length + snapshot.state.editLocks.length}</dd>
-          </div>
-          <div>
-            <dt>Contested</dt>
-            <dd>{contested.size}</dd>
-          </div>
-        </dl>
-        <div className={`status status--${snapshot.status}`}>
-          <span aria-hidden="true" />
-          <strong>{snapshot.mode}</strong>
-          <small>{snapshot.message} · seq {snapshot.seq}</small>
+    <main className="mx-auto flex w-full max-w-7xl flex-col gap-5 px-4 pb-16 sm:px-6 lg:px-8" id="dashboard">
+      <section className="grid gap-3 lg:grid-cols-[1fr_auto]" aria-label="Live room summary">
+        <Card className="bg-card/85">
+          <CardHeader>
+            <CardTitle className="text-3xl tracking-normal sm:text-4xl">{snapshot.state.repoId}</CardTitle>
+            <CardDescription>
+              Live coordination room with current sessions, edit signals, data flow, and repository activity.
+            </CardDescription>
+            <CardAction>
+              <Badge variant={statusVariant(snapshot.status)}>{snapshot.status}</Badge>
+            </CardAction>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">
+              {snapshot.message} · {snapshot.mode} · seq {snapshot.seq}
+            </p>
+          </CardContent>
+        </Card>
+
+        <div className="grid gap-3 sm:grid-cols-4 lg:min-w-[34rem]">
+          <Metric icon={UsersIcon} label="Members" value={sessions.length} />
+          <Metric icon={LockKeyholeIcon} label="Signals" value={signalCount} />
+          <Metric icon={ActivityIcon} label="Contested" value={contested.size} />
+          <Metric icon={GitPullRequestIcon} label="Ship trail" value={activityCount} />
         </div>
       </section>
 
-      <section className="dashboard__grid" aria-label="Synapse room dashboard">
+      <section className="grid gap-5 lg:grid-cols-2" aria-label="Synapse room dashboard">
         <OnlinePanel sessions={sessions} />
         <SignalsPanel state={snapshot.state} />
         <FlowGraph state={snapshot.state} />
@@ -44,4 +56,24 @@ export default function Dashboard({ snapshot }: { snapshot: FeedSnapshot }) {
       </section>
     </main>
   );
+}
+
+function Metric({ icon: Icon, label, value }: { icon: typeof UsersIcon; label: string; value: number }) {
+  return (
+    <Card className="bg-card/70" size="sm">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <Icon className="size-4 text-primary" />
+          {label}
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <p className="font-heading text-3xl leading-none">{value}</p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function statusVariant(status: FeedStatus) {
+  return status === "open" || status === "connecting" ? "secondary" : "destructive";
 }

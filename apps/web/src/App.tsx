@@ -10,9 +10,9 @@ export default function App() {
   useEffect(() => feed.subscribe(setSnapshot), [feed]);
 
   return (
-    <>
+    <div className="min-h-screen">
       <Landing mode={snapshot.mode} />
       <Dashboard snapshot={snapshot} />
-    </>
+    </div>
   );
 }

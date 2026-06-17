@@ -17,6 +17,12 @@
       "vite/client",
       "node"
     ],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ]
+    },
     "allowImportingTsExtensions": false,
     "noEmit": true
   },
