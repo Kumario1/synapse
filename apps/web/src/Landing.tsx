@@ -81,6 +81,10 @@ export default function Landing({ mode }: { mode: FeedMode }) {
             <Button asChild size="sm" variant="outline">
               <a href="#dashboard">See the room</a>
             </Button>
+            {/* ponytail: stub link — server route /auth/github (GitHub App user auth) lands with the auth work, see docs/adr/0001 */}
+            <Button asChild size="sm">
+              <a href="/auth/github">Sign up</a>
+            </Button>
           </div>
         </div>
       </nav>
