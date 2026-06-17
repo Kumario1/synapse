@@ -5,6 +5,7 @@
 > implement from. Decisions are locked per the build plan's Decisions Log.
 
 ## Contents
+
 1. Process & Component Topology
 2. Identity & Auth
 3. The Symbol Model (language-neutral)
@@ -26,6 +27,7 @@
 ## 1. Process & Component Topology
 
 ### On each developer machine
+
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │ Coding agents                                                  │
@@ -62,6 +64,7 @@ stacks. The daemon speaks one **Analyzer Protocol** (§4) to all analyzers, so t
 is language-agnostic.
 
 ### On the server (hosted multi-tenant by default; self-host via Docker Compose still supported)
+
 ```
 node-server:  WSS gateway + REST API + GitHub webhook receiver + conflict-fanout
 postgres:     durable state (+ pgvector for Layer III)
@@ -96,10 +99,19 @@ Everything downstream (graph, deltas, conflicts) speaks `Symbol`, not language s
 
 ```ts
 type SymbolKind =
-  | "function" | "method" | "class" | "interface" | "type"
-  | "field" | "enum" | "const" | "route" | "schema";
+  | "function"
+  | "method"
+  | "class"
+  | "interface"
+  | "type"
+  | "field"
+  | "enum"
+  | "const"
+  | "route"
+  | "schema";
 
-interface SymbolId {        // stable, deterministic, language-prefixed
+interface SymbolId {
+  // stable, deterministic, language-prefixed
   // e.g. "ts:src/auth/token.ts#TokenValidator.validate"
   //      "py:src/auth/token.py#TokenValidator.validate"
   //      "go:pkg/auth/token.go#Validator.Validate"
@@ -110,23 +122,23 @@ interface Signature {
   params: { name: string; type: string | null; optional: boolean }[];
   returns: string | null;
   generics?: string[];
-  raw: string;              // normalized human-readable form
+  raw: string; // normalized human-readable form
 }
 
 interface Symbol {
   id: SymbolId;
   kind: SymbolKind;
-  name: string;             // fully-qualified within file
+  name: string; // fully-qualified within file
   visibility: "exported" | "public" | "internal";
-  signature: Signature | null;   // null for fields w/o type, etc.
-  sigHash: string;          // hash(normalized signature) — change detection
+  signature: Signature | null; // null for fields w/o type, etc.
+  sigHash: string; // hash(normalized signature) — change detection
   span: { path: string; startLine: number; endLine: number };
   lang: "ts" | "py" | "go";
 }
 ```
 
 **`sigHash` is the linchpin:** a change with an identical `sigHash` is an implementation-only change
-and is *never* a contract conflict (honors "minor implementation changes don't trigger a warning").
+and is _never_ a contract conflict (honors "minor implementation changes don't trigger a warning").
 
 ---
 
@@ -143,6 +155,7 @@ analyzer.health()                      -> { ok, version, lang }
 ```
 
 ### TS/JS analyzer (Node, in-process via ts-morph)
+
 Extracts: exported functions (params+types+return+generics), exported classes (public methods/fields),
 `interface`/`type` shapes, exported `const`/`enum`, and — phase 2 — framework route definitions
 (Next.js route handlers, Express/Hono routes). Uses the TS compiler's type checker for real types.
@@ -151,11 +164,13 @@ imports to exported symbol ids, preserving the defining-file symbol identity so 
 warnings survive common TypeScript import styles.
 
 ### Python analyzer (Python sidecar, pyright/jedi + tree-sitter)
+
 Extracts: module-level `def` (params + annotations + return annotation), class public methods &
 attributes, dataclass/Pydantic model fields, and — phase 2 — FastAPI/Flask route decorators.
 tree-sitter gives fast structural parse; pyright/jedi give cross-file reference resolution.
 
 ### Go analyzer (Go sidecar, stdlib parser)
+
 Extracts exported functions, methods, types, interfaces, structs, constants, and variables using
 `go/parser`/`go/ast`. Export visibility follows Go's uppercase-name rule and symbol ids use the
 `go:` prefix.
@@ -171,7 +186,9 @@ upgrades already-detected conflicts into richer, side-addressed action plans (§
 ## 5. The Dependency Graph
 
 ### Shape
+
 Directed multigraph. Nodes = `Symbol`. Edge kinds:
+
 ```
 calls         A invokes B
 references    A names B (type position, import, etc.)
@@ -181,7 +198,8 @@ defines       container → member (class → method)
 ```
 
 ### Two layers, computed locally
-1. **Base graph** — built from the latest *pushed* commit (everyone has this code via git, so it's
+
+1. **Base graph** — built from the latest _pushed_ commit (everyone has this code via git, so it's
    identical across the team and deterministic from the commit SHA). Built once on `synapse join` and
    rebuilt on pull/branch-switch.
 2. **Working overlay** — the diff the local agent has introduced but not pushed. Incrementally
@@ -189,6 +207,7 @@ defines       container → member (class → method)
    support incremental reanalysis).
 
 ### Conflict-relevant queries (answered locally, <50ms target)
+
 - `dependentsOf(symbolId, maxHops)` → who breaks if this symbol's contract changes.
 - `dependenciesOf(symbolId, maxHops)` → what this symbol relies on.
 - `symbolsInFile(path)` and `symbolAtLine(path, line)` → map an about-to-edit location to a symbol.
@@ -207,23 +226,27 @@ The unit Synapse shares about a change.
 
 ```ts
 type ChangeKind =
-  | "added" | "removed" | "renamed" | "moved"
-  | "signature_changed" | "visibility_changed";
+  | "added"
+  | "removed"
+  | "renamed"
+  | "moved"
+  | "signature_changed"
+  | "visibility_changed";
 
 interface ContractDelta {
   id: string;
   repoId: string;
-  sessionId: string;             // who/which session produced it
+  sessionId: string; // who/which session produced it
   symbolId: SymbolId;
   changeKind: ChangeKind;
   before: Signature | null;
   after: Signature | null;
-  summary: string;               // short human summary, not trusted for detection
+  summary: string; // short human summary, not trusted for detection
   filePath: string;
-  baseSha: string;               // commit the change is relative to
-  dependents: SymbolId[];        // from local graph — who is affected (IDs only)
-  createdAt: string;             // ISO
-  pushedAt: string | null;       // set on git push → triggers state clear
+  baseSha: string; // commit the change is relative to
+  dependents: SymbolId[]; // from local graph — who is affected (IDs only)
+  createdAt: string; // ISO
+  pushedAt: string | null; // set on git push → triggers state clear
 }
 ```
 
@@ -234,47 +257,66 @@ hashes match we emit no delta at all.
 
 ## 7. Live State Model
 
-What the server holds about the *present* (cleared as work is pushed). Mirrors `synapse-context.md` §5
+What the server holds about the _present_ (cleared as work is pushed). Mirrors `synapse-context.md` §5
 but typed.
 
 ```ts
 interface Session {
-  id: string; repoId: string; memberId: string;
+  id: string;
+  repoId: string;
+  memberId: string;
   agentType: "claude-code" | "cursor" | "cline" | "aider" | "other";
-  filesOpen: string[]; filesEditing: string[];
+  filesOpen: string[];
+  filesEditing: string[];
   lastTask: string | null;
-  startedAt: string; lastSeen: string;
+  startedAt: string;
+  lastSeen: string;
   status: "active" | "idle" | "ended";
 }
 
-interface EditLock {            // Redis, TTL ~ 90s, renewed by heartbeat
-  sessionId: string; symbolId: SymbolId; filePath: string;
-  acquiredAt: string; ttlSec: number;
+interface EditLock {
+  // Redis, TTL ~ 90s, renewed by heartbeat
+  sessionId: string;
+  symbolId: SymbolId;
+  filePath: string;
+  acquiredAt: string;
+  ttlSec: number;
 }
 
 interface RecentPush {
-  id: string; repoId: string; memberId: string;
-  summary: string; filesAffected: string[]; sha: string; pushedAt: string;
+  id: string;
+  repoId: string;
+  memberId: string;
+  summary: string;
+  filesAffected: string[];
+  sha: string;
+  pushedAt: string;
 }
 
 interface RecentRepoEvent {
-  id: string; repoId: string;
+  id: string;
+  repoId: string;
   kind: "pull_request" | "pull_request_review" | "issue_comment";
-  action: string; actor: string;
-  title: string; number?: number; url?: string;
-  summary: string; createdAt: string;
+  action: string;
+  actor: string;
+  title: string;
+  number?: number;
+  url?: string;
+  summary: string;
+  createdAt: string;
 }
 
-interface TeamState {           // what a daemon's warm cache replicates
+interface TeamState {
+  // what a daemon's warm cache replicates
   repoId: string;
   sessions: Session[];
   editLocks: EditLock[];
-  unpushedDeltas: ContractDelta[];   // pushedAt === null
-  recentPushes: RecentPush[];        // last 24h
-  recentRepoEvents: RecentRepoEvent[];// PR/review/comment activity for Layer II
+  unpushedDeltas: ContractDelta[]; // pushedAt === null
+  recentPushes: RecentPush[]; // last 24h
+  recentRepoEvents: RecentRepoEvent[]; // PR/review/comment activity for Layer II
   resolutions: ContractResolution[]; // shared merged contracts (implemented)
-  sessionSummaries: SessionSummary[];// Layer II, on session end (implemented)
-  conflictFeedback: ConflictFeedback[];// explicit acted/dismissed warning feedback
+  sessionSummaries: SessionSummary[]; // Layer II, on session end (implemented)
+  conflictFeedback: ConflictFeedback[]; // explicit acted/dismissed warning feedback
 }
 ```
 
@@ -290,6 +332,7 @@ interface TeamState {           // what a daemon's warm cache replicates
 ### 8a. Agent ↔ Daemon (localhost)
 
 **MCP tools** the daemon exposes (works for any MCP-capable agent):
+
 ```
 synapse_check        { files: string[], symbols?: SymbolId[], task?: string }
                      -> { verdict: "none"|"info"|"warn", conflicts: Conflict[] }
@@ -323,6 +366,7 @@ configured, `synapse_why` additionally ranks by vector recall on top of the dete
 (`rag: true`); without embeddings, `/recall` reports `degraded: true` and the floor answers alone.
 
 **Claude Code hooks** (the first-class automatic path) — installed into the repo's settings:
+
 - `PreToolUse` on `Edit|Write|MultiEdit`: shells into the daemon's local endpoint = `synapse_check`
   for the target file. On `warn`, the hook returns context that Claude surfaces inline before editing
   (per "warn inline, dev decides" — it does **not** block). For file-based checks, the daemon also
@@ -337,6 +381,7 @@ WebSocket handshake: legacy clients with no announcement connect as v1, overlapp
 agree on the lower supported dialect, and non-overlapping clients are refused with HTTP 426.
 
 Client → Server:
+
 ```
 session.start | session.heartbeat | session.end
 edit.intent          { symbolId, filePath }      // acquire/renew an EditLock
@@ -348,12 +393,15 @@ session.summary      { summary: SessionSummary }   // Layer II, on session end (
 conflict.feedback    { feedback: ConflictFeedback }// explicit acted/dismissed telemetry
 query.briefing       { since? }
 ```
+
 Server → Client (implemented subset):
+
 ```
 state.snapshot       { teamState: TeamState, seq?: number }         // on connect/resync; also v1 fallback
 state.delta          { repoId: string, seq: number, ops: StateOp[] } // v2 incremental fan-out
 ack                  { forId, ok, error? }
 ```
+
 Protocol v2 sockets receive `state.delta` frames after local mutations; v1 sockets and remote
 multi-instance fanout still receive snapshots as a compatibility/resync baseline. A daemon applies
 deltas only after a snapshot baseline, ignores duplicates, and reconnects on sequence gaps. Proactive
@@ -425,22 +473,24 @@ function evaluate(target: {symbolId, filePath}, state: TeamState, graph): Confli
 **Verdict = max severity across results.** `none` → proceed silently (≈95% of edits, per principle #4).
 
 ### Fatigue controls
+
 - Dedup key: `(targetSymbol, counterpartSession, deltaHash)` — don't re-warn within a session unless it
   changes.
 - Current telemetry: every emitted conflict carries a deterministic `id`, and `synapse_feedback`
-  records whether a surfaced `warn` was *acted on* (dev adjusted/pinged) vs. dismissed. Adaptive
+  records whether a surfaced `warn` was _acted on_ (dev adjusted/pinged) vs. dismissed. Adaptive
   severity uses this telemetry to demote chronically-dismissed `warn` rules to `info` (deterministic,
   one-directional — `info` never gets promoted, and detection itself is untouched).
 
 ### `Conflict` payload
+
 ```ts
 interface Conflict {
-  id: string;                           // deterministic feedback key
+  id: string; // deterministic feedback key
   severity: "info" | "warn";
-  rule: string;                        // e.g. "dependency_changed"
+  rule: string; // e.g. "dependency_changed"
   targetSymbol: SymbolId;
   counterpart: { memberLogin: string; sessionId: string; agentType: string };
-  detail: string;                      // short deterministic explanation
+  detail: string; // short deterministic explanation
   change?: {
     changeKind: ChangeKind;
     before: Signature | null;
@@ -452,7 +502,7 @@ interface Conflict {
     assessment: string;
     recommendation: "block" | "warn" | "info" | "proceed";
     actions: { audience: "you" | "counterpart" | "both"; step: string }[];
-    source: "deterministic" | string;  // model id when OpenRouter upgraded it
+    source: "deterministic" | string; // model id when OpenRouter upgraded it
   };
 }
 ```
@@ -497,13 +547,13 @@ missing key keeps the deterministic analysis.
 
 ## 11. Privacy Boundary
 
-| Leaves the machine by default | Never leaves the machine by default |
-|-------------------------------|------------------------------------|
-| Symbol IDs (path + name) | Function/method bodies |
-| Normalized signatures (param names/types, returns) | Full file contents |
-| Human-readable contract summaries and deterministic actions | Raw implementation diffs |
-| Commit SHAs, file paths | Business logic / comments |
-| Session metadata (task description, agent type) | Anything not in a public contract |
+| Leaves the machine by default                               | Never leaves the machine by default |
+| ----------------------------------------------------------- | ----------------------------------- |
+| Symbol IDs (path + name)                                    | Function/method bodies              |
+| Normalized signatures (param names/types, returns)          | Full file contents                  |
+| Human-readable contract summaries and deterministic actions | Raw implementation diffs            |
+| Commit SHAs, file paths                                     | Business logic / comments           |
+| Session metadata (task description, agent type)             | Anything not in a public contract   |
 
 - All detection and compatibility analysis runs locally (daemon + Python sidecar). The server is a
   coordination hub, not a code store.
@@ -514,6 +564,7 @@ missing key keeps the deterministic analysis.
   — no param names/types. Reduces conflict detail but keeps same-symbol/dependency detection working.
 - The product story is **hosted/multi-tenant with GitHub-only ownership** (ADR-0001): the server runs on Synapse's infra, each repo's daemon connecting with a per-repo scoped credential. **Self-host** (running this same server on your own infra, where even the coordination metadata stays on the team's machines) remains supported but deprioritized.
 - **Two distinct trust boundaries.** The **machine boundary** (daemon ↔ server) is the per-repo credential above (`project-key`/`shared-token`), validated at the WS handshake and on `/state`. The **human boundary** (browser ↔ server) is the GitHub sign-in session: a hand-rolled (no hosted auth provider, per ADR-0001) **stateless signed cookie** — `HMAC-SHA256` over `{uid, iat}`, key **derived from the OAuth client secret**, so there is no sessions table and no extra session secret. The two never cross: an OAuth cookie session establishes Owner identity only and never authorizes a daemon WS room or `/state`, and a machine credential never stands in for a human session. Sign-in is live only when the GitHub App env is fully configured.
+- **Ownership model (Owner ↔ Project).** A signed-in Owner claims a repo by installing the GitHub App on it (`GET /auth/projects/add` → install → `GET /auth/github/setup`). The setup callback exchanges the install-time OAuth `code` for the user access token (used once to list the installation's repos, then discarded — never persisted), and claims each repo the Owner can **push** to: it stores the `(ownerId, repoId)` pair and mints that repo's `project-key` via `deriveProjectKey(SYNAPSE_MASTER_SECRET, repoId)`. The key is minted **once per `(owner, repo)`** — re-installing keeps the original, so a running daemon's credential is stable. The `project-key` is the bridge between the two boundaries: it is the per-repo _machine_ credential, but it is created and surfaced only to the _human_ Owner who claimed the repo (`GET /auth/projects`), never to anyone else. Installing the App also makes that repo's webhooks live automatically, so no new webhook wiring is needed.
 
 ---
 
@@ -532,6 +583,7 @@ the daemon with `node --env-file=.env ...`). With no key, timeout, malformed res
 `SYNAPSE_LLM_EXPLAIN=0`, Synapse keeps the deterministic analysis.
 
 Allowed non-authoritative uses:
+
 1. **ConflictAnalysis upgrade**: compare the already-detected counterpart change with your current
    contract and your own unpushed change, then return `{ assessment, recommendation, actions, source }`.
 2. **Session summary** (Layer II, on session end): batch-summarize the session's deltas + task into 2-3
@@ -554,6 +606,7 @@ hot path cheap, fast, and free of hallucinated contracts.
 > only; durable live state remains in the selected `StateStore`.
 
 ### Postgres (durable)
+
 ```sql
 team(id, name, plan, created_at)
 member(id, team_id, github_login, github_id, role, created_at)
@@ -568,6 +621,7 @@ decision_memory(id, repo_id, kind, text, embedding vector(1024), source_url, cre
 ```
 
 ### Redis (ephemeral, with TTL)
+
 ```
 session:{id}                 hash  (status, lastSeen, filesEditing)   TTL renewed by heartbeat
 lock:{repoId}:{symbolId}     -> sessionId                              TTL ~90s
@@ -613,4 +667,7 @@ restarts and feeds Layer II/III. Once a delta's `pushed_at` is set, it's out of 
    (`setup-venv.mjs`, pinned deps). A container/binary bundle is a later option.
 6. **Wire-protocol auth** — 🟡 partial: an **optional shared token** gates WSS + `/state` (PR #21).
    Short-lived per-connection JWT via GitHub OAuth (with rotation) is the planned upgrade.
+
+```
+
 ```
