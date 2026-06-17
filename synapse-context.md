@@ -617,7 +617,7 @@ The MCP server is not a history store. Once a change is pushed to GitHub, it’s
 Every PreToolUse hook fires, but 95% of the time the agent hears nothing and continues working. Only real conflicts surface. If the system is noisy, developers will turn it off.
 
 **5. Zero-trust install.**  
-Synapse should be installable as a self-hosted MCP server on the team’s own infrastructure. Agent-heavy startup teams are privacy-paranoid about their code. The self-hosted option removes the trust barrier. SaaS (running on Synapse’s servers) comes later, once trust is established.
+Synapse ships as a **hosted, multi-tenant** product with **GitHub-only ownership** (ADR-0001, 2026-06-17): you sign in with GitHub and claim the repos you can push to. For privacy-paranoid teams a **self-hosted** deployment (Docker Compose + per-project keys, SQLite, zero external services) remains fully supported — it is now a deprioritized option rather than the default sequencing this once described ("self-host first, SaaS later" has been reversed).
 
 **6. No surveillance framing.**  
 The agent works *for you*, not *on you*. Synapse surfaces team context *to you*, not reports about you *to management*. The mental model is: “my agent is now aware of my teammates’ agents.” Not: “the system is tracking what I’m doing.”
@@ -638,7 +638,7 @@ These are the unresolved product and business questions as of June 2026. They sh
 
 ### Business Questions
 
-1. **Distribution: self-hosted vs SaaS?** For agent-heavy startup teams who are privacy-paranoid about their code, a self-hosted MCP server is a lower-trust-barrier install. But SaaS is easier to monetize and update. The answer might be: self-hosted for early access, SaaS with a self-hosted option later.
+1. **Distribution: self-hosted vs SaaS?** ✅ **Resolved (ADR-0001, 2026-06-17):** the product story is **hosted/multi-tenant with GitHub-only ownership**. Self-hosting (Docker Compose + per-project keys) stays supported for privacy-paranoid teams but is deprioritized — the reverse of the "self-host first" framing originally proposed here.
 1. **Pricing model.** Per-seat (like most dev tools)? Per-team? Usage-based (per agent-session or per query)? The pricing model signals who the buyer is — per-seat implies individual adoption, per-team implies company adoption.
 1. **Where do users discover this?** The likely early channels: Cursor Discord, Claude Code Discord/forums, Twitter/X developer community, Indie Hackers, r/ChatGPTCoding, r/cursor, YC/startup community. Need to find the specific communities where 3–10 person agent-heavy teams congregate.
 1. **The name.** Synapse is the working name. The domain landscape is competitive. Alternatives to investigate: `trysynapse.dev`, `synapse.coop`, `getsynapse.io`, `syn.app`. The name should feel like infrastructure (short, lowercase, vaguely technical) rather than a product (evocative, consumer-facing).

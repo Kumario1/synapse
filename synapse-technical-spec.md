@@ -61,7 +61,7 @@ way to get real TS symbol resolution). Python and Go live in sidecars that use t
 stacks. The daemon speaks one **Analyzer Protocol** (§4) to all analyzers, so the rest of the system
 is language-agnostic.
 
-### On the server (self-hosted, Docker Compose)
+### On the server (hosted multi-tenant by default; self-host via Docker Compose still supported)
 ```
 node-server:  WSS gateway + REST API + GitHub webhook receiver + conflict-fanout
 postgres:     durable state (+ pgvector for Layer III)
@@ -512,7 +512,7 @@ missing key keeps the deterministic analysis.
   model provider to improve `ConflictAnalysis`; no key means fully offline deterministic output.
 - **`privacy.redactSignatures` config**: for maximum-paranoia teams, send only `{symbolId, changeKind}`
   — no param names/types. Reduces conflict detail but keeps same-symbol/dependency detection working.
-- Self-hosted means even the coordination metadata stays on the team's own infra.
+- The product story is **hosted/multi-tenant with GitHub-only ownership** (ADR-0001): the server runs on Synapse's infra, each repo's daemon connecting with a per-repo scoped credential. **Self-host** (running this same server on your own infra, where even the coordination metadata stays on the team's machines) remains supported but deprioritized.
 
 ---
 

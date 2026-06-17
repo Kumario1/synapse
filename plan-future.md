@@ -92,12 +92,12 @@ Per owner direction, design/product changes are flagged here *before* being made
 marked “(D-gated)” do not start until the decision is confirmed. Everything else follows the
 already-documented design.
 
-- **D1 — Auth roadmap: keep project keys as the primary story; re-scope OAuth.**
-  Proposal: treat per-project keys as the supported self-host + small-team SaaS auth
-  indefinitely; build GitHub OAuth/JWT (M14) only when a hosted multi-tenant offering with
-  per-user identity is actually being launched. Implication: A3 moves from Phase 2 to the SaaS
-  launch phase; tenancy is already done. *Default if unconfirmed: plan assumes D1 accepted
-  (matches what was already shipped in #31).*
+- **D1 — Auth roadmap. ✅ Resolved by ADR-0001 (2026-06-17).** The hosted multi-tenant offering
+  is now the committed direction (no longer a deferred D-gate): **GitHub-only ownership via a GitHub
+  App** — user-to-server OAuth + cookie sessions + a users/ownership table, where authz reduces to
+  "GitHub says you have push on this repo." Per-project keys are retained as the **machine/daemon**
+  credential and the self-host path. This supersedes the earlier "project keys indefinitely, OAuth
+  only at some future launch" proposal below.
 - **D2 — Store evolution shape.** v1 chose "per-entity row ops wired through `applyMessage`".
   Confirmed as still the right call (it's the only way two instances don't clobber snapshots), but
   with a concrete amendment: keep `SqliteStateStore` on the *new* interface via per-entity tables,
@@ -250,9 +250,11 @@ branch awareness, pulled forward ahead of M7)*
   read-only team view (sessions, deltas, pushes, resolutions, feedback) over `GET /state` with a
   project key. Opt-in, read-only (principle #6).
 
-**M14 — GitHub OAuth + JWT identity** *(was A3; D1-gated, SaaS launch phase)* — OAuth callback
-  mints short-lived JWTs carrying `{githubLogin, allowedRepoIds}`; project-key mode remains for
-  self-host. Exit: `verify:oauth-jwt` with a stubbed identity provider.
+**M14 — Human auth for the hosted product** *(supersedes the earlier "GitHub OAuth + JWT,
+  D1-gated, SaaS-launch-phase" framing — see ADR-0001, 2026-06-17)* — sign in via the **GitHub
+  App** (user-to-server OAuth → **cookie session**, not short-lived JWTs as originally planned);
+  ownership = "GitHub says you have push on this repo." Project-key mode remains the daemon
+  credential and the self-host path.
 
 **M15 — Protocol version negotiation** *(was G5)* — versions exchanged at WS open; graceful
   downgrade/refusal. Prerequisite for D3 (incremental deltas). Exit: `verify:protocol-compat`.

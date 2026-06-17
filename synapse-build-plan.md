@@ -298,8 +298,10 @@ also record cold first-check time.
    sidecar). SCIP-grade indexing remains a later option.
 4. Privacy boundary — ✅ raw code stays local; only contract deltas + summaries + symbol ids leave the
    machine. The one relaxation (LLM resolver sends a file for context) is opt-in and documented.
-5. Self-hosted vs. SaaS — ✅ self-hosted first: SQLite persistence (no infra), optional shared-token
-   auth, runs with zero external services. SaaS/multi-instance (Postgres/Redis) is a later swap.
+5. Self-hosted vs. SaaS — ✅ **reversed by ADR-0001 (2026-06-17): hosted/multi-tenant with
+   GitHub-only ownership is now the product story.** Self-host (SQLite, optional shared-token/per-project
+   keys, zero external services) stays supported but deprioritized; the hosted server uses Postgres +
+   per-repo scoped credentials.
 6. Alarm fatigue — severity model (none/info/warn), non-blocking `ask` hook, and explicit
    acted/dismissed feedback capture are in place; using that telemetry to tune thresholds is still
    TODO.
@@ -314,7 +316,7 @@ definition, multi-repo, pricing, name — are tracked in `synapse-context.md` §
 | # | Decision | Choice | Implication |
 |---|----------|--------|-------------|
 | 1 | Conflict detection depth | **Dependency-graph from day one** | Transitive, contract-level detection is the moat; heaviest build path |
-| 2 | Hosting | **Self-hosted first** | Ship Docker Compose; SaaS later. Privacy-first packaging from day one |
+| 2 | Hosting | **Hosted/multi-tenant first** (reversed 2026-06-17, ADR-0001) | GitHub-only ownership on the hosted server; self-host (Docker Compose) still supported but deprioritized. *Was: "self-hosted first, SaaS later."* |
 | 3 | Agent support | **Agent-agnostic from start** | Universal MCP tools + Claude Code native hooks as the first-class path |
 | 4 | Stack | **Hybrid: TS server + polyglot analyzers** | TS server/daemon/realtime; analyzer layer is Node-for-TS + Python-for-Python |
 | 5 | Languages first | **TypeScript/JS + Python** | Two analyzers at launch (ts-morph; pyright/jedi) |

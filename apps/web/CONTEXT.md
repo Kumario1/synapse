@@ -8,7 +8,7 @@ is, (2) show the coordination room in action.
 Data terms come from `@synapse/protocol`; the entries below are the
 web-presentation vocabulary we use to talk about the UI.
 
-- **Owner** — a human who has signed in (GitHub/Google OAuth) and claimed one or more Projects. Owners are the *only* humans in the model; the people "on a session" are AI agents, never human teammates.
+- **Owner** — a human who has signed in with GitHub (via the GitHub App) and claimed one or more Projects. Owners are the *only* humans in the model; the people "on a session" are AI agents, never human teammates.
 - **Project** — an Owner-facing name for a repo's Room: the thing an Owner claims, configures, and watches from the dashboard. One Project = one Room = one repo.
 - **Room** — a single coordination space for one repo. The dashboard renders one room.
 - **Session** — an **AI agent** connected to a room (member, agent type, branch, task, files). NOT a human. Source: protocol `Session`. "Who is on the session" = which agent sessions are active in a Project's Room.
