@@ -21,6 +21,10 @@ import {
 } from "@synapse/protocol";
 import { WebSocket, WebSocketServer } from "ws";
 import { createEmbeddingProvider } from "./embeddings.js";
+import { exchangeCodeForToken, fetchGitHubUser } from "./auth/github-oauth.js";
+import { handleAuthRequest, type AuthContext } from "./auth/routes.js";
+import { sessionKeyFromClientSecret } from "./auth/session.js";
+import { createUserStore } from "./auth/user-store.js";
 import { loadGitHubAppConfig } from "./github-app-config.js";
 import { gitHubPushToNotify, gitHubRepoEventToNotify, webhookRepoFullName } from "./github.js";
 import {
@@ -66,6 +70,32 @@ if (githubApp.status === "incomplete") {
 // restart resumes live state row-by-row. SYNAPSE_DATABASE_URL selects
 // Postgres; SYNAPSE_DB_PATH a SQLite file; neither means in-memory SQLite.
 const store = await createStateStore();
+// Human GitHub sign-in boundary (plan 051). Built ONLY when the GitHub App env
+// is fully configured; otherwise null and the SPA shows signed-out. This cookie
+// session is identity only — it never authorizes a daemon WS room or `/state`,
+// which remain the separate machine-credential boundary (authorized()).
+// SYNAPSE_PUBLIC_URL builds the OAuth redirect_uri; defaults to host:port.
+const publicOrigin = process.env.SYNAPSE_PUBLIC_URL ?? `http://${host}:${port}`;
+const authContext: AuthContext | null =
+  githubApp.status === "configured"
+    ? await (async () => {
+        const userStore = await createUserStore();
+        const creds = {
+          clientId: githubApp.config.clientId,
+          clientSecret: githubApp.config.clientSecret
+        };
+        const redirectUri = `${publicOrigin}/auth/github/callback`;
+        return {
+          creds,
+          sessionKey: sessionKeyFromClientSecret(creds.clientSecret),
+          userStore,
+          redirectUri,
+          exchangeCodeForToken: (code: string) => exchangeCodeForToken(creds, code, redirectUri),
+          fetchGitHubUser: (token: string) => fetchGitHubUser(token),
+          isSecure: publicOrigin.startsWith("https:")
+        } satisfies AuthContext;
+      })()
+    : null;
 const states = new Map<string, TeamState>();
 const roomClients = new Map<string, Set<WebSocket>>();
 const repoSeq = new Map<string, number>();
@@ -98,7 +128,9 @@ const memory =
 
 const instanceId = randomUUID();
 const fanout = process.env.SYNAPSE_REDIS_URL
-  ? await (await import("./fanout.js")).createRedisFanout({
+  ? await (
+      await import("./fanout.js")
+    ).createRedisFanout({
       redisUrl: process.env.SYNAPSE_REDIS_URL,
       instanceId,
       store,
@@ -227,6 +259,14 @@ async function handleHttp(request: IncomingMessage, response: ServerResponse): P
     return;
   }
 
+  // Human GitHub sign-in routes (plan 051), live only when the App is
+  // configured. Strictly distinct from authorized() — never gates a WS room.
+  if (authContext && url.pathname.startsWith("/auth/")) {
+    if (await handleAuthRequest(request, response, url, authContext)) {
+      return;
+    }
+  }
+
   writeJson(response, 404, { error: "not_found" });
 }
 
@@ -248,9 +288,7 @@ const wsServer = new WebSocketServer({
     // handshake with an explicit reason, instead of failing opaquely on every
     // message. No `v` param = a pre-negotiation client = version 1.
     const announced = url.searchParams.get("v");
-    const negotiated = negotiateProtocolVersion(
-      announced === null ? undefined : Number(announced)
-    );
+    const negotiated = negotiateProtocolVersion(announced === null ? undefined : Number(announced));
     if (!negotiated.ok) {
       metrics.count("synapse_protocol_refusals_total");
       log.warn("protocol.refused", { announced, reason: negotiated.reason });
@@ -344,7 +382,11 @@ wsServer.on("connection", (socket, request) => {
   void withRepo(repoId, () => getState(repoId)).then((state) =>
     send(
       socket,
-      envelope("state.snapshot", { teamState: state, seq: currentRepoSeq(repoId) }, socketVersion(socket))
+      envelope(
+        "state.snapshot",
+        { teamState: state, seq: currentRepoSeq(repoId) },
+        socketVersion(socket)
+      )
     )
   );
 
@@ -385,14 +427,18 @@ httpServer.listen(port, host, () => {
 // resumes from consistent rows.
 const shutdown = (): void => {
   httpServer.close();
-  void Promise.allSettled([fanout?.close(), memory?.close()])
+  void Promise.allSettled([fanout?.close(), memory?.close(), authContext?.userStore.close()])
     .then(() => store.close())
     .finally(() => process.exit(0));
 };
 process.once("SIGINT", shutdown);
 process.once("SIGTERM", shutdown);
 
-async function handleMessage(socket: WebSocket, fallbackRepoId: string, raw: string): Promise<void> {
+async function handleMessage(
+  socket: WebSocket,
+  fallbackRepoId: string,
+  raw: string
+): Promise<void> {
   let rate = socketRates.get(socket);
   if (!rate) {
     rate = { windowStartedAt: 0, count: 0 };
@@ -401,7 +447,11 @@ async function handleMessage(socket: WebSocket, fallbackRepoId: string, raw: str
   if (overRateLimit(rate, WS_RATE_LIMIT_PER_MIN, Date.now())) {
     metrics.count("synapse_rate_limited_total", { surface: "ws" });
     if (rate.count === WS_RATE_LIMIT_PER_MIN + 1) {
-      log.warn("rate.limited", { surface: "ws", repoId: fallbackRepoId, limit: WS_RATE_LIMIT_PER_MIN });
+      log.warn("rate.limited", {
+        surface: "ws",
+        repoId: fallbackRepoId,
+        limit: WS_RATE_LIMIT_PER_MIN
+      });
     }
     sendAck(socket, { forId: "unknown", ok: false, error: "rate_limited" });
     return;
@@ -438,11 +488,7 @@ async function handleMessage(socket: WebSocket, fallbackRepoId: string, raw: str
     // (fallbackRepoId, bound at the handshake). Reject any message whose payload
     // targets a different repo, so a client authorized for A cannot drive writes
     // into B through the message body.
-    if (
-      authMode === "project-key" &&
-      messageRepoId !== null &&
-      messageRepoId !== fallbackRepoId
-    ) {
+    if (authMode === "project-key" && messageRepoId !== null && messageRepoId !== fallbackRepoId) {
       metrics.count("synapse_message_failures_total", { reason: "forbidden_repo" });
       log.warn("message.forbidden_repo", { type: message.type, repoId: messageRepoId });
       sendAck(socket, { forId: message.id, ok: false, error: "forbidden_repo" });
@@ -580,7 +626,12 @@ async function handleGitHubWebhook(
     const ops: StateOp[] = [];
     const state = await withRepo(push.repoId, async () => {
       const current = await getState(push.repoId);
-      applyMessage(current, push.repoId, clientEnvelope("push.notify", push.payload), teeStateStoreOps(ops));
+      applyMessage(
+        current,
+        push.repoId,
+        clientEnvelope("push.notify", push.payload),
+        teeStateStoreOps(ops)
+      );
       return current;
     });
     broadcastStateChange(push.repoId, state, ops);
@@ -653,7 +704,8 @@ async function getState(repoId: string): Promise<TeamState> {
     loadsInFlight,
     load: (id) => store.load(id),
     createEmpty: createEmptyTeamState,
-    onLoaded: (id, fresh) => log.debug("state.loaded", { repoId: id, sessions: fresh.sessions.length })
+    onLoaded: (id, fresh) =>
+      log.debug("state.loaded", { repoId: id, sessions: fresh.sessions.length })
   });
 
   const now = Date.now();
@@ -857,8 +909,7 @@ function authorized(request: IncomingMessage, url: URL, repoId: string): boolean
     return false;
   }
 
-  const expected =
-    authMode === "project-key" ? deriveProjectKey(masterSecret, repoId) : authToken;
+  const expected = authMode === "project-key" ? deriveProjectKey(masterSecret, repoId) : authToken;
   const a = Buffer.from(provided);
   const b = Buffer.from(expected);
   return a.length === b.length && timingSafeEqual(a, b);
@@ -873,8 +924,7 @@ function validGitHubSignature(rawBody: string, signature: string | null, secret:
   const actualBuffer = Buffer.from(signature);
   const expectedBuffer = Buffer.from(expected);
   return (
-    actualBuffer.length === expectedBuffer.length &&
-    timingSafeEqual(actualBuffer, expectedBuffer)
+    actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer)
   );
 }
 

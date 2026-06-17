@@ -262,9 +262,24 @@ GitHub console settings:
 - Repository permissions: Contents read-only, Metadata read-only, Pull requests read-only
 - Subscribe to events: Push, Pull request, Pull request review, Issue comment
 
-OAuth and setup routes are follow-up work; the current server only registers the App/env surface and keeps the existing signed webhook ingestion path. Setting only `SYNAPSE_GITHUB_WEBHOOK_SECRET` remains valid for signed webhooks without the full App auth flow.
+The repo-claiming and setup routes are follow-up work; sign-in is live (below). Setting only `SYNAPSE_GITHUB_WEBHOOK_SECRET` remains valid for signed webhooks without the full App auth flow.
 
 Credentials are sent via `Authorization: Bearer` (the server still accepts `?token=` for back-compat), keeping tokens out of URL query strings and access logs.
+
+### Sign in with GitHub
+
+The first **human** trust boundary. Active only when the GitHub App env above is fully `configured` (visible as `githubApp: "configured"` on `/health`); otherwise the routes 404 and the web app stays signed-out. Four same-origin routes:
+
+| Route | Purpose |
+| --- | --- |
+| `GET /auth/github` | Start the user-to-server OAuth flow (sets a short-lived signed `state` cookie for CSRF, redirects to GitHub) |
+| `GET /auth/github/callback` | Exchange the code, upsert the Owner on first login, set the session cookie, redirect to `/` |
+| `GET /auth/me` | Return the signed-in Owner (`{ owner: { login, name, avatarUrl } }`) or `401` |
+| `POST /auth/logout` | Clear the session cookie (`GET` accepted too) |
+
+The session is a **stateless signed cookie** (`synapse_session`, `HttpOnly; SameSite=Lax`, 30-day HMAC; `Secure` when the public origin is https) — no sessions table, so sign-out just clears the cookie. The HMAC key is **derived from the OAuth client secret**, so no extra env var is needed. Set `SYNAPSE_PUBLIC_URL` (optional) to build the OAuth `redirect_uri`; it defaults to `http://<host>:<port>`.
+
+This cookie session is **identity only** — it is never a daemon credential and never authorizes a WS room or `/state`, which keep using the separate machine `project-key`/`shared-token` path. A small `users` table (same backend selection as the state store) holds Owner identity; the GitHub user access token is not persisted (repo claiming is follow-up work).
 
 **State store** — persisted per entity (sessions, locks, deltas, pushes, events, resolutions, summaries, feedback as rows; every mutation writes only its own row). Backend selection: `SYNAPSE_DATABASE_URL` → Postgres (the shared-database backend for multi-instance deployments; the `pg` driver loads only when selected); else `SYNAPSE_DB_PATH` → file-backed SQLite (WAL) that survives restarts; neither → ephemeral in-memory SQLite. Pre-existing SQLite snapshot databases migrate to per-entity rows automatically on first boot. Postgres schema initialization is serialized with advisory locks, and startup always attempts to release the lock before returning the pooled connection, including when DDL fails.
 
