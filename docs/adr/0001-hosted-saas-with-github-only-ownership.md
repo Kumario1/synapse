@@ -1,5 +1,13 @@
 # Synapse-as-a-hosted-product: GitHub-only ownership on the existing server
 
+Status: Accepted (2026-06-17). **Reverses** the earlier, also-numbered ADR 0001
+"Website accounts with saved connections, no token custody" (Accepted
+2026-06-16), which chose a *self-hosted* model where the website only stored
+connection metadata and the browser connected directly to a user-run server.
+That direction is withdrawn: we are going hosted/multi-tenant instead, and the
+Next.js + Auth.js + saved-Connections implementation it produced is removed.
+The reasons for the flip are the decisions below.
+
 To turn the static web app into a real product (sign in, onboard, manage your
 projects, watch live agent sessions), we are adding a human-facing layer with
 these decisions made together:
