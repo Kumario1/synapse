@@ -1,38 +1,37 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    "composite": true,
     "module": "ESNext",
-    "moduleResolution": "bundler",
-    "jsx": "preserve",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
     "lib": [
       "ES2022",
       "DOM",
       "DOM.Iterable"
     ],
+    "rootDir": "src",
+    "outDir": "dist-types",
+    "tsBuildInfoFile": "dist-types/tsconfig.tsbuildinfo",
     "types": [
+      "vite/client",
       "node"
     ],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ]
+    },
     "allowImportingTsExtensions": false,
-    "noEmit": true,
-    "plugins": [
-      {
-        "name": "next"
-      }
-    ],
-    "allowJs": true,
-    "incremental": true,
-    "isolatedModules": true
+    "noEmit": true
   },
-  "include": [
-    "next-env.d.ts",
-    "app/**/*.ts",
-    "app/**/*.tsx",
-    "src/**/*.ts",
-    "src/**/*.tsx",
-    ".next/types/**/*.ts"
+  "references": [
+    {
+      "path": "../../packages/protocol"
+    }
   ],
-  "exclude": [
-    "node_modules",
-    ".next"
+  "include": [
+    "src"
   ]
 }
