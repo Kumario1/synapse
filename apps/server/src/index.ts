@@ -23,8 +23,10 @@ import { WebSocket, WebSocketServer } from "ws";
 import { createEmbeddingProvider } from "./embeddings.js";
 import { exchangeCodeForToken, fetchGitHubUser } from "./auth/github-oauth.js";
 import { handleAuthRequest, type AuthContext } from "./auth/routes.js";
+import { listInstallationReposForUser } from "./auth/github-app.js";
 import { sessionKeyFromClientSecret } from "./auth/session.js";
 import { createUserStore } from "./auth/user-store.js";
+import { createProjectStore } from "./auth/project-store.js";
 import { loadGitHubAppConfig } from "./github-app-config.js";
 import { gitHubPushToNotify, gitHubRepoEventToNotify, webhookRepoFullName } from "./github.js";
 import {
@@ -80,6 +82,7 @@ const authContext: AuthContext | null =
   githubApp.status === "configured"
     ? await (async () => {
         const userStore = await createUserStore();
+        const projectStore = await createProjectStore();
         const creds = {
           clientId: githubApp.config.clientId,
           clientSecret: githubApp.config.clientSecret
@@ -92,7 +95,12 @@ const authContext: AuthContext | null =
           redirectUri,
           exchangeCodeForToken: (code: string) => exchangeCodeForToken(creds, code, redirectUri),
           fetchGitHubUser: (token: string) => fetchGitHubUser(token),
-          isSecure: publicOrigin.startsWith("https:")
+          isSecure: publicOrigin.startsWith("https:"),
+          appSlug: process.env.SYNAPSE_GITHUB_APP_SLUG ?? null,
+          masterSecret,
+          projectStore,
+          listInstallationReposForUser: (installationId, userToken) =>
+            listInstallationReposForUser(installationId, userToken)
         } satisfies AuthContext;
       })()
     : null;
@@ -427,7 +435,12 @@ httpServer.listen(port, host, () => {
 // resumes from consistent rows.
 const shutdown = (): void => {
   httpServer.close();
-  void Promise.allSettled([fanout?.close(), memory?.close(), authContext?.userStore.close()])
+  void Promise.allSettled([
+    fanout?.close(),
+    memory?.close(),
+    authContext?.userStore.close(),
+    authContext?.projectStore.close()
+  ])
     .then(() => store.close())
     .finally(() => process.exit(0));
 };

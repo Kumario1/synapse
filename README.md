@@ -146,13 +146,13 @@ synapse whatsup --port 4012
 
 Use the Quick Start above to bring up the host (`synapse up --serve --tunnel`) and teammate (`SYNAPSE_AUTH_TOKEN=<token> synapse up`). Then **restart Claude Code** in the repo, confirm the room with `synapse doctor` (it should list the other person as a peer), and drive it **in order**:
 
-- **Alice** asks her Claude: *"Edit `src/auth/token.ts` so `validate` returns `Token | null`."* Let it **save** — the PostToolUse hook reports the delta.
-- **Bob** asks his Claude: *"Edit `src/auth/token.ts` so `validate` returns `Promise<boolean>`."* Before it writes, Bob's PreToolUse hook surfaces *"⚠ Synapse: alice has an unpushed change to `validate` — coordinate before editing,"* and Claude asks Bob how to proceed.
+- **Alice** asks her Claude: _"Edit `src/auth/token.ts` so `validate` returns `Token | null`."_ Let it **save** — the PostToolUse hook reports the delta.
+- **Bob** asks his Claude: _"Edit `src/auth/token.ts` so `validate` returns `Promise<boolean>`."_ Before it writes, Bob's PreToolUse hook surfaces _"⚠ Synapse: alice has an unpushed change to `validate` — coordinate before editing,"_ and Claude asks Bob how to proceed.
 
 ### Gotchas (why a demo can look like nothing happened)
 
 1. **Share a real token.** `--tunnel` requires auth; without `SYNAPSE_AUTH_TOKEN` a random token is generated and printed only once. Pass your own so the teammate can join. `synapse doctor` shows `token=unset → 401` when this is wrong.
-2. **Different sessions only.** A session never warns about its *own* change — editing twice from one machine/session shows nothing.
+2. **Different sessions only.** A session never warns about its _own_ change — editing twice from one machine/session shows nothing.
 3. **Order matters.** The editor must **save first** (PostToolUse reports) before the other agent's PreToolUse check can see it.
 4. **Restart Claude Code** after `synapse up` so it loads the freshly installed hooks. Don't commit `.claude/settings.json` — the hook path is machine-specific; each person's `synapse up` writes their own.
 
@@ -181,27 +181,27 @@ Every write is idempotent and preserves your existing content (managed blocks fo
 
 The CLI binary is `synapse` (`apps/cli/src/index.ts`). In a dev checkout, run any command via `npm run dev --workspace @synapse/cli -- <command>`.
 
-| Command | Description |
-| --- | --- |
-| `daemon` | Start the local daemon |
-| `check` | Call the local `synapse_check` endpoint |
-| `report` | Call the local `synapse_report` endpoint |
-| `push` | Notify Synapse that files were pushed |
-| `feedback` | Record acted/dismissed feedback for a conflict warning |
-| `insights` | Show local aggregate coordination insights |
-| `session` | Start, heartbeat, or end a local session |
-| `whatsup` | Show the daemon's current team-state briefing |
-| `why` | Search Synapse memory with source citations |
-| `pr-brief` | Local PR handoff briefing for a base/head branch pair |
-| `mcp` | Run a stdio MCP server exposing Synapse tools plus read-only context resources |
-| `connect` | Wire other agents (Cursor, VS Code/Copilot, Gemini CLI, Windsurf, any MCP client) to the MCP server |
-| `join` | Write `.synapse/config.json`, install Claude Code hooks, and `connect` other agents |
-| `up` | join + preflight + start daemon (`--serve` / `--tunnel` for the host) |
-| `keygen` | Mint a project-scoped key for this repo (needs `SYNAPSE_MASTER_SECRET`) |
-| `doctor` | Preflight: identity, server reachability, auth, and live peers |
-| `hook` | Claude Code hook entrypoint (`pre`\|`post`); reads hook JSON on stdin |
-| `analyze` | Extract TypeScript contract symbols from a file |
-| `help` | Print usage and examples |
+| Command    | Description                                                                                         |
+| ---------- | --------------------------------------------------------------------------------------------------- |
+| `daemon`   | Start the local daemon                                                                              |
+| `check`    | Call the local `synapse_check` endpoint                                                             |
+| `report`   | Call the local `synapse_report` endpoint                                                            |
+| `push`     | Notify Synapse that files were pushed                                                               |
+| `feedback` | Record acted/dismissed feedback for a conflict warning                                              |
+| `insights` | Show local aggregate coordination insights                                                          |
+| `session`  | Start, heartbeat, or end a local session                                                            |
+| `whatsup`  | Show the daemon's current team-state briefing                                                       |
+| `why`      | Search Synapse memory with source citations                                                         |
+| `pr-brief` | Local PR handoff briefing for a base/head branch pair                                               |
+| `mcp`      | Run a stdio MCP server exposing Synapse tools plus read-only context resources                      |
+| `connect`  | Wire other agents (Cursor, VS Code/Copilot, Gemini CLI, Windsurf, any MCP client) to the MCP server |
+| `join`     | Write `.synapse/config.json`, install Claude Code hooks, and `connect` other agents                 |
+| `up`       | join + preflight + start daemon (`--serve` / `--tunnel` for the host)                               |
+| `keygen`   | Mint a project-scoped key for this repo (needs `SYNAPSE_MASTER_SECRET`)                             |
+| `doctor`   | Preflight: identity, server reachability, auth, and live peers                                      |
+| `hook`     | Claude Code hook entrypoint (`pre`\|`post`); reads hook JSON on stdin                               |
+| `analyze`  | Extract TypeScript contract symbols from a file                                                     |
+| `help`     | Print usage and examples                                                                            |
 
 ---
 
@@ -226,12 +226,12 @@ The server is single-process with an in-memory hot path backed by a durable stor
 
 ## Deterministic vs. optional LLM (OpenRouter)
 
-| Layer | Without a key | With `OPENROUTER_API_KEY` |
-| --- | --- | --- |
-| Detection | Fully deterministic | Unchanged (never affected) |
-| Analysis | Structured before→after verdict | Task-aware prose; can raise but not downgrade a verdict |
-| Resolution | `contract_divergent` → escalate; `same_symbol_unpushed` → adopt counterpart | Synthesizes one merged contract (must parse via the real analyzer) |
-| Session summary | Structured list of changes | 2–3 prose sentences |
+| Layer           | Without a key                                                               | With `OPENROUTER_API_KEY`                                          |
+| --------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| Detection       | Fully deterministic                                                         | Unchanged (never affected)                                         |
+| Analysis        | Structured before→after verdict                                             | Task-aware prose; can raise but not downgrade a verdict            |
+| Resolution      | `contract_divergent` → escalate; `same_symbol_unpushed` → adopt counterpart | Synthesizes one merged contract (must parse via the real analyzer) |
+| Session summary | Structured list of changes                                                  | 2–3 prose sentences                                                |
 
 Set the key in `.env` (see `.env.example`). Model defaults to `anthropic/claude-haiku-4.5`, overridable via `SYNAPSE_LLM_MODEL`. Disable layers independently with `SYNAPSE_LLM_EXPLAIN=0`, `SYNAPSE_LLM_RESOLVE=0`, `SYNAPSE_LLM_SUMMARY=0`.
 
@@ -243,11 +243,11 @@ An analysis's `actions[]` may carry a `command` suggesting a Synapse tool to cal
 
 Resolved at server startup. `/health` and the GitHub webhook (its own HMAC) stay open; credentials are sent via `?token=` / `Authorization: Bearer` and compared in constant time — never written to disk.
 
-| Mode | Trigger | Behavior |
-| --- | --- | --- |
-| **open** | neither var set | No auth — keeps local/dev and verify scripts hermetic |
-| **shared-token** | `SYNAPSE_AUTH_TOKEN` | Any valid token reads/writes any project |
-| **project-key** | `SYNAPSE_MASTER_SECRET` | Real tenancy: key = `base64url(HMAC-SHA256(secret, repoId))`, authorizes only its project (checked at handshake + per-message) |
+| Mode             | Trigger                 | Behavior                                                                                                                       |
+| ---------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| **open**         | neither var set         | No auth — keeps local/dev and verify scripts hermetic                                                                          |
+| **shared-token** | `SYNAPSE_AUTH_TOKEN`    | Any valid token reads/writes any project                                                                                       |
+| **project-key**  | `SYNAPSE_MASTER_SECRET` | Real tenancy: key = `base64url(HMAC-SHA256(secret, repoId))`, authorizes only its project (checked at handshake + per-message) |
 
 ### GitHub App setup
 
@@ -262,7 +262,7 @@ GitHub console settings:
 - Repository permissions: Contents read-only, Metadata read-only, Pull requests read-only
 - Subscribe to events: Push, Pull request, Pull request review, Issue comment
 
-The repo-claiming and setup routes are follow-up work; sign-in is live (below). Setting only `SYNAPSE_GITHUB_WEBHOOK_SECRET` remains valid for signed webhooks without the full App auth flow.
+Sign-in and repo-claiming (below) are both live. For claiming, enable **"Request user authorization (OAuth) during installation"** on the App so the setup callback carries an OAuth `code`, and set the optional `SYNAPSE_GITHUB_APP_SLUG` (the App's URL slug) so the server can build the install URL. Setting only `SYNAPSE_GITHUB_WEBHOOK_SECRET` remains valid for signed webhooks without the full App auth flow.
 
 Credentials are sent via `Authorization: Bearer` (the server still accepts `?token=` for back-compat), keeping tokens out of URL query strings and access logs.
 
@@ -270,16 +270,30 @@ Credentials are sent via `Authorization: Bearer` (the server still accepts `?tok
 
 The first **human** trust boundary. Active only when the GitHub App env above is fully `configured` (visible as `githubApp: "configured"` on `/health`); otherwise the routes 404 and the web app stays signed-out. Four same-origin routes:
 
-| Route | Purpose |
-| --- | --- |
-| `GET /auth/github` | Start the user-to-server OAuth flow (sets a short-lived signed `state` cookie for CSRF, redirects to GitHub) |
-| `GET /auth/github/callback` | Exchange the code, upsert the Owner on first login, set the session cookie, redirect to `/` |
-| `GET /auth/me` | Return the signed-in Owner (`{ owner: { login, name, avatarUrl } }`) or `401` |
-| `POST /auth/logout` | Clear the session cookie (`GET` accepted too) |
+| Route                       | Purpose                                                                                                      |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `GET /auth/github`          | Start the user-to-server OAuth flow (sets a short-lived signed `state` cookie for CSRF, redirects to GitHub) |
+| `GET /auth/github/callback` | Exchange the code, upsert the Owner on first login, set the session cookie, redirect to `/`                  |
+| `GET /auth/me`              | Return the signed-in Owner (`{ owner: { login, name, avatarUrl } }`) or `401`                                |
+| `POST /auth/logout`         | Clear the session cookie (`GET` accepted too)                                                                |
 
 The session is a **stateless signed cookie** (`synapse_session`, `HttpOnly; SameSite=Lax`, 30-day HMAC; `Secure` when the public origin is https) — no sessions table, so sign-out just clears the cookie. The HMAC key is **derived from the OAuth client secret**, so no extra env var is needed. Set `SYNAPSE_PUBLIC_URL` (optional) to build the OAuth `redirect_uri`; it defaults to `http://<host>:<port>`.
 
-This cookie session is **identity only** — it is never a daemon credential and never authorizes a WS room or `/state`, which keep using the separate machine `project-key`/`shared-token` path. A small `users` table (same backend selection as the state store) holds Owner identity; the GitHub user access token is not persisted (repo claiming is follow-up work).
+This cookie session is **identity only** — it is never a daemon credential and never authorizes a WS room or `/state`, which keep using the separate machine `project-key`/`shared-token` path. A small `users` table (same backend selection as the state store) holds Owner identity; the GitHub user access token is not persisted.
+
+### Claim a Project
+
+Turns a signed-in Owner into the **Owner of a Project**. Claiming runs the Owner through the GitHub App installation flow for a repo they can push to, then records ownership and mints that repo's `project-key`. It needs `SYNAPSE_MASTER_SECRET` set (for the key) and `SYNAPSE_GITHUB_APP_SLUG` set (for the install URL); absent either, `/auth/projects/add` returns `503 claiming_unavailable`.
+
+| Route                    | Purpose                                                                                                                                                                         |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /auth/projects/add` | Start the claim: redirect the Owner to the App install page (`/apps/<slug>/installations/new`) with a short-lived signed `state` cookie                                         |
+| `GET /auth/github/setup` | Install setup callback: verify session + state, exchange the OAuth `code` for the user access token, list the installation's repos, and claim each one the user can **push** to |
+| `GET /auth/projects`     | Return the Owner's own claimed projects (`{ projects: [{ repoId, projectKey }] }`)                                                                                              |
+
+The setup callback requires **"Request user authorization during installation"** enabled on the App, so it carries an OAuth `code`; if that setting is off, the `code` is absent and setup returns `400 missing_installation`. The user access token is used once (to list the installation's repositories) and then discarded — never persisted. Repos the Owner cannot push to are never claimed.
+
+The `project-key` is minted via `deriveProjectKey(SYNAPSE_MASTER_SECRET, repoId)` and is **idempotent per `(owner, repo)`**: re-installing keeps the original key, so a running daemon's credential never changes. This key IS the per-repo daemon credential and is returned only to the authenticated Owner who claimed it (via `GET /auth/projects`); the cookie session never acts as a daemon credential. Installing the App also makes the repo's webhooks **live automatically** — GitHub delivers push/PR/review to the existing `POST /webhooks/github`, so no new webhook wiring is needed.
 
 **State store** — persisted per entity (sessions, locks, deltas, pushes, events, resolutions, summaries, feedback as rows; every mutation writes only its own row). Backend selection: `SYNAPSE_DATABASE_URL` → Postgres (the shared-database backend for multi-instance deployments; the `pg` driver loads only when selected); else `SYNAPSE_DB_PATH` → file-backed SQLite (WAL) that survives restarts; neither → ephemeral in-memory SQLite. Pre-existing SQLite snapshot databases migrate to per-entity rows automatically on first boot. Postgres schema initialization is serialized with advisory locks, and startup always attempts to release the lock before returning the pooled connection, including when DDL fails.
 
@@ -289,22 +303,22 @@ This cookie session is **identity only** — it is never a daemon credential and
 
 ## Reliability & operations
 
-| Capability | Summary |
-| --- | --- |
-| **Resilient channel** | Exponential backoff + full jitter (`SYNAPSE_RECONNECT_BASE_MS` / `SYNAPSE_RECONNECT_MAX_MS`), capped offline outbox flushed in order on reconnect, and 20s server pings (`SYNAPSE_WS_PING_INTERVAL_MS`) that terminate half-open sockets |
-| **Observability** | JSON logs gated by `SYNAPSE_LOG_LEVEL` (default `info`) + Prometheus counters at `GET /metrics` |
-| **Ingress validation** | Every server-bound wire message is validated against shared zod schemas before any state mutation, and daemon-bound server frames are validated before they update the warm cache. WS/webhook bodies and local daemon JSON tool bodies are capped at 1MB; malformed local JSON returns 400 and oversized local JSON returns 413 |
-| **Rate limiting** | Per-connection WS budget (`SYNAPSE_RATE_LIMIT_PER_MIN`, default 600) and a webhook budget (`SYNAPSE_WEBHOOK_RATE_LIMIT_PER_MIN`, default 120): over-limit messages are acked `rate_limited` and dropped before any mutation; webhooks answer 429. `0` disables |
-| **Webhook posture** | A server running with auth (shared token or project keys) refuses unsigned webhooks with 403 until `SYNAPSE_GITHUB_WEBHOOK_SECRET` is set; open mode (local/dev) is unchanged |
-| **Protocol negotiation** | Versions are exchanged at the WS handshake: legacy clients (no announcement) connect as v1, newer clients downgrade to the server's dialect, out-of-range clients are refused with HTTP 426 + the supported range in headers. Protocol v2 sockets receive incremental `state.delta` frames after mutations; v1 sockets continue to receive snapshots. `/health` reports `protocolVersion` + `minProtocolVersion`; `synapse doctor` fails loudly on non-overlapping ranges |
-| **Adaptive severity** | `synapse_feedback` telemetry demotes a noisy rule (≥5 dismissals, ≥80% dismiss rate) from `warn` to `info`; detection never changes. Opt out with `SYNAPSE_ADAPTIVE_SEVERITY=0` |
-| **Branch-aware severity** | Cross-branch `dependency_changed`/`stale_base` conflicts demote `warn` → `info` (they bite at merge time, not on the next keystroke); merge-blocking rules (`same_symbol_*`, `contract_divergent`) never demote. Sessions/pushes carry their git branch (webhook pushes derive it from `ref`), refreshed on every heartbeat so a mid-session checkout propagates within ~30s; unknown branch → no change. Opt out with `SYNAPSE_BRANCH_AWARE_SEVERITY=0` |
-| **File watcher** | The daemon watches the worktree (same ignore set as the analyzer scan), so manual edits — no agent, no `synapse_report` — still emit contract deltas through the report path. Debounced per file (`SYNAPSE_WATCH_DEBOUNCE_MS`, default 400ms); only analyzable sources are reported. While the watcher is active, warm pre-edit checks reuse the cached dependency graph instead of re-scanning the source tree (any report or watched change invalidates it; `synapse_graph_cache_hits_total` counts reuse). Opt out with `SYNAPSE_FILE_WATCHER=0` |
-| **GitHub webhook binding** | Signed webhook events are bound to the payload's `repository.full_name`; local verifier overrides must use the same repo identity as the signed payload instead of remapping arbitrary repository names |
+| Capability                 | Summary                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Resilient channel**      | Exponential backoff + full jitter (`SYNAPSE_RECONNECT_BASE_MS` / `SYNAPSE_RECONNECT_MAX_MS`), capped offline outbox flushed in order on reconnect, and 20s server pings (`SYNAPSE_WS_PING_INTERVAL_MS`) that terminate half-open sockets                                                                                                                                                                                                                                                                                                            |
+| **Observability**          | JSON logs gated by `SYNAPSE_LOG_LEVEL` (default `info`) + Prometheus counters at `GET /metrics`                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| **Ingress validation**     | Every server-bound wire message is validated against shared zod schemas before any state mutation, and daemon-bound server frames are validated before they update the warm cache. WS/webhook bodies and local daemon JSON tool bodies are capped at 1MB; malformed local JSON returns 400 and oversized local JSON returns 413                                                                                                                                                                                                                     |
+| **Rate limiting**          | Per-connection WS budget (`SYNAPSE_RATE_LIMIT_PER_MIN`, default 600) and a webhook budget (`SYNAPSE_WEBHOOK_RATE_LIMIT_PER_MIN`, default 120): over-limit messages are acked `rate_limited` and dropped before any mutation; webhooks answer 429. `0` disables                                                                                                                                                                                                                                                                                      |
+| **Webhook posture**        | A server running with auth (shared token or project keys) refuses unsigned webhooks with 403 until `SYNAPSE_GITHUB_WEBHOOK_SECRET` is set; open mode (local/dev) is unchanged                                                                                                                                                                                                                                                                                                                                                                       |
+| **Protocol negotiation**   | Versions are exchanged at the WS handshake: legacy clients (no announcement) connect as v1, newer clients downgrade to the server's dialect, out-of-range clients are refused with HTTP 426 + the supported range in headers. Protocol v2 sockets receive incremental `state.delta` frames after mutations; v1 sockets continue to receive snapshots. `/health` reports `protocolVersion` + `minProtocolVersion`; `synapse doctor` fails loudly on non-overlapping ranges                                                                           |
+| **Adaptive severity**      | `synapse_feedback` telemetry demotes a noisy rule (≥5 dismissals, ≥80% dismiss rate) from `warn` to `info`; detection never changes. Opt out with `SYNAPSE_ADAPTIVE_SEVERITY=0`                                                                                                                                                                                                                                                                                                                                                                     |
+| **Branch-aware severity**  | Cross-branch `dependency_changed`/`stale_base` conflicts demote `warn` → `info` (they bite at merge time, not on the next keystroke); merge-blocking rules (`same_symbol_*`, `contract_divergent`) never demote. Sessions/pushes carry their git branch (webhook pushes derive it from `ref`), refreshed on every heartbeat so a mid-session checkout propagates within ~30s; unknown branch → no change. Opt out with `SYNAPSE_BRANCH_AWARE_SEVERITY=0`                                                                                            |
+| **File watcher**           | The daemon watches the worktree (same ignore set as the analyzer scan), so manual edits — no agent, no `synapse_report` — still emit contract deltas through the report path. Debounced per file (`SYNAPSE_WATCH_DEBOUNCE_MS`, default 400ms); only analyzable sources are reported. While the watcher is active, warm pre-edit checks reuse the cached dependency graph instead of re-scanning the source tree (any report or watched change invalidates it; `synapse_graph_cache_hits_total` counts reuse). Opt out with `SYNAPSE_FILE_WATCHER=0` |
+| **GitHub webhook binding** | Signed webhook events are bound to the payload's `repository.full_name`; local verifier overrides must use the same repo identity as the signed payload instead of remapping arbitrary repository names                                                                                                                                                                                                                                                                                                                                             |
 
 **RAG memory** — with `SYNAPSE_DATABASE_URL` (Postgres + pgvector) and an OpenAI-compatible embeddings endpoint (`SYNAPSE_EMBED_BASE_URL`), the server indexes session summaries, contract resolutions, and repo events as vectors, and `synapse_why` answers **hybrid**: the deterministic lexical floor always stands, vector recall only adds semantically-related memories on top (`rag: true`, numbered citations preserved). pgvector extension/table initialization uses the same advisory-lock discipline as the state store and degrades cleanly if setup fails. Without embeddings, `/recall` reports `degraded: true` and the floor answers alone. Only prose is embedded — titles, summaries, rationales, and distilled PR/issue comment excerpts (code blocks stripped, capped at 500 chars; raw bodies are never persisted) — never raw code. `SYNAPSE_RAG=0` disables.
 
-**Privacy** — detection is fully deterministic and local: only symbol-level contracts (signatures, never function bodies) leave the daemon. The optional LLM layers relax this in one place: the contract *resolver* sends the computing agent's full file plus its dependency-graph neighbors to the configured model so the merge is caller-aware. Opt out with `SYNAPSE_LLM_RESOLVE=0` (or leave `OPENROUTER_API_KEY` unset), or point `OPENROUTER_BASE_URL` at a local/self-hosted OpenAI-compatible endpoint to keep code on your machines.
+**Privacy** — detection is fully deterministic and local: only symbol-level contracts (signatures, never function bodies) leave the daemon. The optional LLM layers relax this in one place: the contract _resolver_ sends the computing agent's full file plus its dependency-graph neighbors to the configured model so the merge is caller-aware. Opt out with `SYNAPSE_LLM_RESOLVE=0` (or leave `OPENROUTER_API_KEY` unset), or point `OPENROUTER_BASE_URL` at a local/self-hosted OpenAI-compatible endpoint to keep code on your machines.
 
 **Install as a package** — the CLI ships as a single self-contained npm package (all five workspace packages, the server, and the Python/Go sidecar assets bundled):
 
@@ -337,43 +351,43 @@ SYNAPSE_VERIFY_SKIP=hot-path-latency npm run verify:all  # explicit skips
 
 Run with `npm run <script>`. See [`package.json`](package.json) for the complete list.
 
-| Script | Verifies |
-| --- | --- |
-| `verify:m0` | Runnable skeleton + realtime stub loop (milestone 0) |
-| `verify:analyzer-ts` / `verify:analyzer-py` | Per-language contract extraction, signature diffing, and TS import-edge coverage |
-| `verify:python-check` | Full realtime Python loop → `contract_divergent` + resolution |
-| `verify:analyzer-go` / `verify:go-check` | Go contract extraction/diff (warm `go/parser` sidecar); full realtime Go loop → `contract_divergent` + resolution. Skips only when no Go toolchain is available; fails if Go is installed but the sidecar cannot build |
-| `verify:daemon-ts-report` / `verify:file-only-ts-check` | Automatic TS report path; symbol-level conflicts from a file path |
-| `verify:dependency-ts-check` | Warns when a file depends on another's unpushed change through TS dependency edges |
-| `verify:tsx-check` | React-shaped repos: default-exported `.tsx` component props change → symbol delta + `dependency_changed` for the importing component; `.mjs` modules join the same graph |
-| `verify:contract-compat` / `verify:resolution` | Compatibility classification; merged-contract resolution |
-| `verify:hot-path-latency` / `verify:large-repo-latency` / `verify:repo-latency` | Pre-edit hot-path latency budgets (p95 ≤ 50ms, max ≤ 150ms) |
-| `verify:whatsup` / `verify:why` / `verify:feedback` / `verify:insights` | Team briefing; memory search; conflict feedback telemetry; local aggregate coordination insights |
-| `verify:session-summary` / `verify:session-start` | Layer II session summaries and catch-up briefing |
-| `verify:hooks` | Claude Code `join` + `hook pre`/`hook post` as invoked by Claude Code, including check-before-edit then first post-edit delta reporting |
-| `verify:mcp-adapter` | Stdio MCP adapter tools/resources forwarding to the daemon |
-| `verify:connect` | `synapse connect` wires up every agent (configs + rules), idempotently, and the MCP server advertises hook-equivalent `instructions` |
-| `verify:auth` / `verify:tenancy` | Shared-token and project-key auth paths |
-| `verify:up` / `verify:up-tunnel` / `verify:doctor` | Multi-machine setup, tunnels, and preflight diagnostics |
-| `verify:persistence` | State survives a server restart (SQLite, per-entity rows) |
-| `verify:persistence-pg` | Same durability proof on Postgres incl. advisory-locked schema init and SIGKILL; runs when `SYNAPSE_VERIFY_PG_URL`/`SYNAPSE_DATABASE_URL` is set (CI service), SKIPs offline |
-| `verify:multi-instance` | Two servers on shared Postgres + Redis, daemons split across them; a report on A is readable in `GET /state` on B and pushed to B's daemon. Needs `SYNAPSE_VERIFY_PG_URL` + `SYNAPSE_VERIFY_REDIS_URL` (CI services), SKIPs offline |
-| `verify:file-watcher` | A manual edit (no report call) emits a contract delta via the watcher; non-analyzable files ignored; `SYNAPSE_FILE_WATCHER=0` daemon stays inert |
-| `verify:reconnect` | A delta emitted while the server is down still reaches the team after restart |
-| `verify:metrics` | Structured logs and `/metrics` counters |
-| `verify:protocol-compat` | Handshake version negotiation: legacy accepted, newer downgraded, out-of-range refused with 426 + range headers |
-| `verify:delta-broadcast` | Protocol v2 clients receive `state.delta` after mutations while legacy clients keep receiving snapshots |
-| `verify:security` | WS flood → `rate_limited` acks, state bounded; local daemon JSON 413/400 regressions; webhook 429 past budget; auth-mode server refuses unsigned webhooks (403) until a secret is set, then signed-only |
-| `verify:fuzz` | Seeded malformed-source corpus against all three analyzers: the TS extractor never throws; the Python/Go sidecars answer or reject every request and stay healthy |
-| `verify:why-rag` | Hybrid recall: a question with zero lexical overlap finds the memory through vectors (stub embeddings, advisory-locked pgvector init); the lexical floor alone finds nothing; no provider → `degraded: true`. Needs pgvector (CI image), SKIPs offline |
-| `verify:adaptive-severity` | Feedback-tuned demotion of noisy warnings |
-| `verify:branch-aware-severity` | Cross-branch `stale_base`/`dependency_changed` demote to `info`; merge-blocking rules and same-branch conflicts still warn |
-| `verify:docker` | Builds the server image, boots it, drives one edit→report |
-| `verify:npm-pack` | Compatibility alias for `verify:package` so npm-pack and release smoke use the same public tarball |
-| `verify:github-webhook` / `verify:github-briefing` / `verify:pr-brief` | GitHub push/PR/review/comment webhooks, catch-ups, and local PR handoff briefing |
-| `verify:all` | One build, then every verify (the CI matrix) |
-| `eval:conflicts` | Recorded conflict eval suite (overlap, breaking, compatible, divergent, …) — hard pass/fail gate on 7 fixed scenarios |
-| `eval:detection` | Detection-quality benchmark — per-rule precision/recall over `evals/detection-corpus/` against a committed ratchet baseline (see "Detection quality" below) |
+| Script                                                                          | Verifies                                                                                                                                                                                                                                               |
+| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `verify:m0`                                                                     | Runnable skeleton + realtime stub loop (milestone 0)                                                                                                                                                                                                   |
+| `verify:analyzer-ts` / `verify:analyzer-py`                                     | Per-language contract extraction, signature diffing, and TS import-edge coverage                                                                                                                                                                       |
+| `verify:python-check`                                                           | Full realtime Python loop → `contract_divergent` + resolution                                                                                                                                                                                          |
+| `verify:analyzer-go` / `verify:go-check`                                        | Go contract extraction/diff (warm `go/parser` sidecar); full realtime Go loop → `contract_divergent` + resolution. Skips only when no Go toolchain is available; fails if Go is installed but the sidecar cannot build                                 |
+| `verify:daemon-ts-report` / `verify:file-only-ts-check`                         | Automatic TS report path; symbol-level conflicts from a file path                                                                                                                                                                                      |
+| `verify:dependency-ts-check`                                                    | Warns when a file depends on another's unpushed change through TS dependency edges                                                                                                                                                                     |
+| `verify:tsx-check`                                                              | React-shaped repos: default-exported `.tsx` component props change → symbol delta + `dependency_changed` for the importing component; `.mjs` modules join the same graph                                                                               |
+| `verify:contract-compat` / `verify:resolution`                                  | Compatibility classification; merged-contract resolution                                                                                                                                                                                               |
+| `verify:hot-path-latency` / `verify:large-repo-latency` / `verify:repo-latency` | Pre-edit hot-path latency budgets (p95 ≤ 50ms, max ≤ 150ms)                                                                                                                                                                                            |
+| `verify:whatsup` / `verify:why` / `verify:feedback` / `verify:insights`         | Team briefing; memory search; conflict feedback telemetry; local aggregate coordination insights                                                                                                                                                       |
+| `verify:session-summary` / `verify:session-start`                               | Layer II session summaries and catch-up briefing                                                                                                                                                                                                       |
+| `verify:hooks`                                                                  | Claude Code `join` + `hook pre`/`hook post` as invoked by Claude Code, including check-before-edit then first post-edit delta reporting                                                                                                                |
+| `verify:mcp-adapter`                                                            | Stdio MCP adapter tools/resources forwarding to the daemon                                                                                                                                                                                             |
+| `verify:connect`                                                                | `synapse connect` wires up every agent (configs + rules), idempotently, and the MCP server advertises hook-equivalent `instructions`                                                                                                                   |
+| `verify:auth` / `verify:tenancy`                                                | Shared-token and project-key auth paths                                                                                                                                                                                                                |
+| `verify:up` / `verify:up-tunnel` / `verify:doctor`                              | Multi-machine setup, tunnels, and preflight diagnostics                                                                                                                                                                                                |
+| `verify:persistence`                                                            | State survives a server restart (SQLite, per-entity rows)                                                                                                                                                                                              |
+| `verify:persistence-pg`                                                         | Same durability proof on Postgres incl. advisory-locked schema init and SIGKILL; runs when `SYNAPSE_VERIFY_PG_URL`/`SYNAPSE_DATABASE_URL` is set (CI service), SKIPs offline                                                                           |
+| `verify:multi-instance`                                                         | Two servers on shared Postgres + Redis, daemons split across them; a report on A is readable in `GET /state` on B and pushed to B's daemon. Needs `SYNAPSE_VERIFY_PG_URL` + `SYNAPSE_VERIFY_REDIS_URL` (CI services), SKIPs offline                    |
+| `verify:file-watcher`                                                           | A manual edit (no report call) emits a contract delta via the watcher; non-analyzable files ignored; `SYNAPSE_FILE_WATCHER=0` daemon stays inert                                                                                                       |
+| `verify:reconnect`                                                              | A delta emitted while the server is down still reaches the team after restart                                                                                                                                                                          |
+| `verify:metrics`                                                                | Structured logs and `/metrics` counters                                                                                                                                                                                                                |
+| `verify:protocol-compat`                                                        | Handshake version negotiation: legacy accepted, newer downgraded, out-of-range refused with 426 + range headers                                                                                                                                        |
+| `verify:delta-broadcast`                                                        | Protocol v2 clients receive `state.delta` after mutations while legacy clients keep receiving snapshots                                                                                                                                                |
+| `verify:security`                                                               | WS flood → `rate_limited` acks, state bounded; local daemon JSON 413/400 regressions; webhook 429 past budget; auth-mode server refuses unsigned webhooks (403) until a secret is set, then signed-only                                                |
+| `verify:fuzz`                                                                   | Seeded malformed-source corpus against all three analyzers: the TS extractor never throws; the Python/Go sidecars answer or reject every request and stay healthy                                                                                      |
+| `verify:why-rag`                                                                | Hybrid recall: a question with zero lexical overlap finds the memory through vectors (stub embeddings, advisory-locked pgvector init); the lexical floor alone finds nothing; no provider → `degraded: true`. Needs pgvector (CI image), SKIPs offline |
+| `verify:adaptive-severity`                                                      | Feedback-tuned demotion of noisy warnings                                                                                                                                                                                                              |
+| `verify:branch-aware-severity`                                                  | Cross-branch `stale_base`/`dependency_changed` demote to `info`; merge-blocking rules and same-branch conflicts still warn                                                                                                                             |
+| `verify:docker`                                                                 | Builds the server image, boots it, drives one edit→report                                                                                                                                                                                              |
+| `verify:npm-pack`                                                               | Compatibility alias for `verify:package` so npm-pack and release smoke use the same public tarball                                                                                                                                                     |
+| `verify:github-webhook` / `verify:github-briefing` / `verify:pr-brief`          | GitHub push/PR/review/comment webhooks, catch-ups, and local PR handoff briefing                                                                                                                                                                       |
+| `verify:all`                                                                    | One build, then every verify (the CI matrix)                                                                                                                                                                                                           |
+| `eval:conflicts`                                                                | Recorded conflict eval suite (overlap, breaking, compatible, divergent, …) — hard pass/fail gate on 7 fixed scenarios                                                                                                                                  |
+| `eval:detection`                                                                | Detection-quality benchmark — per-rule precision/recall over `evals/detection-corpus/` against a committed ratchet baseline (see "Detection quality" below)                                                                                            |
 
 ---
 
@@ -395,15 +409,15 @@ disappearing from the run. Metrics only move via a deliberate
 Snapshot from the committed baseline (regenerate with `--write-baseline` after
 deliberately growing the corpus):
 
-| Rule | TP | FP | FN | Precision | Recall |
-| --- | --- | --- | --- | --- | --- |
-| `contract_divergent` | 1 | 0 | 0 | 1.000 | 1.000 |
-| `dependency_changed` | 5 | 1 | 0 | 0.833 | 1.000 |
-| `same_file_no_overlap` | 1 | 0 | 0 | 1.000 | 1.000 |
-| `same_symbol_active` | 1 | 0 | 0 | 1.000 | 1.000 |
-| `same_symbol_unpushed` | 6 | 0 | 0 | 1.000 | 1.000 |
-| `stale_base` | 1 | 0 | 0 | 1.000 | 1.000 |
-| `transitive_dependency` | 1 | 0 | 0 | 1.000 | 1.000 |
+| Rule                    | TP  | FP  | FN  | Precision | Recall |
+| ----------------------- | --- | --- | --- | --------- | ------ |
+| `contract_divergent`    | 1   | 0   | 0   | 1.000     | 1.000  |
+| `dependency_changed`    | 5   | 1   | 0   | 0.833     | 1.000  |
+| `same_file_no_overlap`  | 1   | 0   | 0   | 1.000     | 1.000  |
+| `same_symbol_active`    | 1   | 0   | 0   | 1.000     | 1.000  |
+| `same_symbol_unpushed`  | 6   | 0   | 0   | 1.000     | 1.000  |
+| `stale_base`            | 1   | 0   | 0   | 1.000     | 1.000  |
+| `transitive_dependency` | 1   | 0   | 0   | 1.000     | 1.000  |
 
 The one sub-1.0 metric is a known precision gap, not a corpus artifact: the
 `dependency_changed` rule fires whenever a direct (1-hop) dependency changes,
@@ -423,24 +437,24 @@ scope for this benchmark.
 
 Planning is the source of truth — there is no public docs site.
 
-| Doc | Contents |
-| --- | --- |
-| [`synapse-context.md`](synapse-context.md) | Product context and rationale |
-| [`synapse-build-plan.md`](synapse-build-plan.md) | Milestone build plan |
-| [`synapse-technical-spec.md`](synapse-technical-spec.md) | Technical specification |
-| [`apps/cli/src/index.ts`](apps/cli/src/index.ts) | CLI commands and daemon |
+| Doc                                                      | Contents                      |
+| -------------------------------------------------------- | ----------------------------- |
+| [`synapse-context.md`](synapse-context.md)               | Product context and rationale |
+| [`synapse-build-plan.md`](synapse-build-plan.md)         | Milestone build plan          |
+| [`synapse-technical-spec.md`](synapse-technical-spec.md) | Technical specification       |
+| [`apps/cli/src/index.ts`](apps/cli/src/index.ts)         | CLI commands and daemon       |
 
 ---
 
 ## Roadmap
 
-| Milestone | Scope |
-| --- | --- |
-| **0** | Runnable skeleton and realtime stub loop |
-| **1** | TS/Python contract extraction, delta diffing, durable live state, severity scoring |
-| **2** | Dependency graph, MCP adapter, GitHub webhooks, cross-agent support |
-| **3** | Team briefings |
-| **4** | Persistent memory (`synapse why` deterministic seed, plus optional pgvector/RAG when Postgres + embeddings are configured) |
+| Milestone | Scope                                                                                                                      |
+| --------- | -------------------------------------------------------------------------------------------------------------------------- |
+| **0**     | Runnable skeleton and realtime stub loop                                                                                   |
+| **1**     | TS/Python contract extraction, delta diffing, durable live state, severity scoring                                         |
+| **2**     | Dependency graph, MCP adapter, GitHub webhooks, cross-agent support                                                        |
+| **3**     | Team briefings                                                                                                             |
+| **4**     | Persistent memory (`synapse why` deterministic seed, plus optional pgvector/RAG when Postgres + embeddings are configured) |
 
 ---
 

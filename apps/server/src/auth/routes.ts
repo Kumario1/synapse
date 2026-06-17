@@ -1,6 +1,8 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { deriveProjectKey } from "@synapse/protocol";
 import { buildAuthorizeUrl, type GitHubUser, type OAuthCreds } from "./github-oauth.js";
+import { buildInstallUrl, type ClaimedRepo } from "./github-app.js";
 import {
   SESSION_COOKIE,
   parseCookies,
@@ -9,6 +11,7 @@ import {
   verifySession
 } from "./session.js";
 import type { UserStore } from "./user-store.js";
+import type { ProjectStore } from "./project-store.js";
 
 /**
  * The human GitHub sign-in routes (plan 051). The decision logic
@@ -22,6 +25,7 @@ import type { UserStore } from "./user-store.js";
  */
 
 const OAUTH_STATE_COOKIE = "synapse_oauth_state";
+const INSTALL_STATE_COOKIE = "synapse_install_state";
 const SESSION_MAX_AGE_SEC = 30 * 24 * 60 * 60; // 30 days
 const STATE_MAX_AGE_SEC = 600; // 10 minutes
 
@@ -33,6 +37,13 @@ export interface AuthContext {
   exchangeCodeForToken: (code: string) => Promise<string>;
   fetchGitHubUser: (token: string) => Promise<GitHubUser>;
   isSecure: boolean;
+  appSlug: string | null;
+  masterSecret: string;
+  projectStore: ProjectStore;
+  listInstallationReposForUser: (
+    installationId: string,
+    userToken: string
+  ) => Promise<ClaimedRepo[]>;
 }
 
 export interface RouteResult {
@@ -61,6 +72,14 @@ function sessionCookie(value: string, isSecure: boolean): string {
 
 function clearCookie(name: string): string {
   return serializeCookie(name, "", { maxAgeSec: 0, path: "/", httpOnly: true });
+}
+
+/** The authenticated Owner behind a request, or null. Reuses the session HMAC. */
+function requireOwner(
+  cookies: Record<string, string>,
+  ctx: AuthContext
+): { userId: string } | null {
+  return verifySession(cookies[SESSION_COOKIE], ctx.sessionKey);
 }
 
 export async function resolveAuthRoute(
@@ -141,6 +160,79 @@ export async function resolveAuthRoute(
 
   if ((method === "POST" || method === "GET") && pathname === "/auth/logout") {
     return { status: 200, body: { ok: true }, setCookies: [clearCookie(SESSION_COOKIE)] };
+  }
+
+  // Start a repo claim: send the signed-in Owner through the App install flow.
+  if (method === "GET" && pathname === "/auth/projects/add") {
+    const owner = requireOwner(cookies, ctx);
+    if (!owner) {
+      return { status: 401, body: { error: "unauthenticated" } };
+    }
+    if (!ctx.appSlug || !ctx.masterSecret) {
+      return { status: 503, body: { error: "claiming_unavailable" } };
+    }
+    const state = signState(ctx.sessionKey);
+    return {
+      status: 302,
+      redirect: buildInstallUrl(ctx.appSlug, state),
+      setCookies: [
+        serializeCookie(INSTALL_STATE_COOKIE, state, {
+          httpOnly: true,
+          sameSite: "Lax",
+          secure: ctx.isSecure,
+          maxAgeSec: STATE_MAX_AGE_SEC,
+          path: "/"
+        })
+      ]
+    };
+  }
+
+  // Install setup callback: verify push access, record Owner↔repo, mint key.
+  if (method === "GET" && pathname === "/auth/github/setup") {
+    const owner = requireOwner(cookies, ctx);
+    if (!owner) {
+      return { status: 401, body: { error: "unauthenticated" } };
+    }
+    if (!verifyStateSigned(query.get("state"), cookies[INSTALL_STATE_COOKIE], ctx.sessionKey)) {
+      return { status: 400, body: { error: "bad_state" } };
+    }
+    const installationId = query.get("installation_id");
+    const code = query.get("code");
+    if (!installationId || !code) {
+      return { status: 400, body: { error: "missing_installation" } };
+    }
+    let repos: ClaimedRepo[];
+    try {
+      // The user access token is used once here and discarded — never stored.
+      const userToken = await ctx.exchangeCodeForToken(code);
+      repos = await ctx.listInstallationReposForUser(installationId, userToken);
+    } catch {
+      return { status: 502, body: { error: "github_install_failed" } };
+    }
+    // Only repos the Owner can push to are claimed; non-push repos are ignored.
+    const claimable = repos.filter((r) => r.pushAccess);
+    for (const repo of claimable) {
+      const key = deriveProjectKey(ctx.masterSecret, repo.fullName);
+      await ctx.projectStore.claimProject(owner.userId, repo.fullName, key);
+    }
+    return {
+      status: 302,
+      redirect: "/",
+      setCookies: [clearCookie(INSTALL_STATE_COOKIE)]
+    };
+  }
+
+  // The Owner's own claimed projects + their per-repo daemon credential.
+  if (method === "GET" && pathname === "/auth/projects") {
+    const owner = requireOwner(cookies, ctx);
+    if (!owner) {
+      return { status: 401, body: { error: "unauthenticated" } };
+    }
+    const projects = await ctx.projectStore.listProjectsForOwner(owner.userId);
+    return {
+      status: 200,
+      body: { projects: projects.map((p) => ({ repoId: p.repoId, projectKey: p.projectKey })) }
+    };
   }
 
   return { status: 404, body: { error: "not_found" } };
