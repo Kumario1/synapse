@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import TopbarAuth from "@/components/TopbarAuth";
 import type { FeedMode } from "./feed";
 
 const steps = [
@@ -81,106 +82,117 @@ export default function Landing({ mode }: { mode: FeedMode }) {
             <Button asChild size="sm" variant="outline">
               <a href="#dashboard">See the room</a>
             </Button>
-            {/* ponytail: stub link — server route /auth/github (GitHub App user auth) lands with the auth work, see docs/adr/0001 */}
-            <Button asChild size="sm">
-              <a href="/auth/github">Sign up</a>
-            </Button>
+            <TopbarAuth />
           </div>
         </div>
       </nav>
 
       <header className="mx-auto flex w-full max-w-7xl flex-col gap-24 px-4 pt-10 pb-16 sm:px-6 lg:px-8 lg:pt-16">
-        <section className="grid items-center gap-12 py-4 lg:grid-cols-[1.1fr_minmax(0,0.9fr)] lg:gap-16 lg:py-8" id="top">
-        <div className="flex max-w-2xl min-w-0 flex-col gap-7">
-          <Badge className="w-fit" variant="outline">
-            A realtime coordination layer for coding agents
-          </Badge>
-          <h1 className="font-heading text-5xl leading-[0.98] font-medium tracking-tight text-balance sm:text-6xl lg:text-[4.5rem]">
-            Shared context before the next edit lands.
-          </h1>
-          <p className="max-w-xl text-base leading-8 text-muted-foreground sm:text-lg">
-            Agents still write the code. Synapse gives them current team context before they edit, then records
-            contract-level changes after, so other agents avoid collisions.
-          </p>
-          <div className="flex flex-wrap gap-3">
-            <Button asChild size="lg">
-              <a href="#dashboard">
-                See it live
-                <ArrowRightIcon data-icon="inline-end" />
-              </a>
-            </Button>
-            <Button asChild size="lg" variant="secondary">
-              <a href="https://github.com/Kumario1/synapse" rel="noreferrer" target="_blank">
-                GitHub
-              </a>
-            </Button>
-          </div>
-          <div className="flex flex-col gap-2 pt-2">
-            <span className="font-mono text-xs tracking-[0.18em] text-muted-foreground uppercase">Works with</span>
-            <div className="flex flex-wrap gap-x-5 gap-y-1 text-sm text-muted-foreground">
-              {["Claude Code", "Cursor", "Copilot", "Gemini CLI", "Windsurf"].map((agent) => (
-                <span key={agent}>{agent}</span>
-              ))}
+        <section
+          className="grid items-center gap-12 py-4 lg:grid-cols-[1.1fr_minmax(0,0.9fr)] lg:gap-16 lg:py-8"
+          id="top"
+        >
+          <div className="flex max-w-2xl min-w-0 flex-col gap-7">
+            <Badge className="w-fit" variant="outline">
+              A realtime coordination layer for coding agents
+            </Badge>
+            <h1 className="font-heading text-5xl leading-[0.98] font-medium tracking-tight text-balance sm:text-6xl lg:text-[4.5rem]">
+              Shared context before the next edit lands.
+            </h1>
+            <p className="max-w-xl text-base leading-8 text-muted-foreground sm:text-lg">
+              Agents still write the code. Synapse gives them current team context before they edit,
+              then records contract-level changes after, so other agents avoid collisions.
+            </p>
+            <div className="flex flex-wrap gap-3">
+              <Button asChild size="lg">
+                <a href="#dashboard">
+                  See it live
+                  <ArrowRightIcon data-icon="inline-end" />
+                </a>
+              </Button>
+              <Button asChild size="lg" variant="secondary">
+                <a href="https://github.com/Kumario1/synapse" rel="noreferrer" target="_blank">
+                  GitHub
+                </a>
+              </Button>
+            </div>
+            <div className="flex flex-col gap-2 pt-2">
+              <span className="font-mono text-xs tracking-[0.18em] text-muted-foreground uppercase">
+                Works with
+              </span>
+              <div className="flex flex-wrap gap-x-5 gap-y-1 text-sm text-muted-foreground">
+                {["Claude Code", "Cursor", "Copilot", "Gemini CLI", "Windsurf"].map((agent) => (
+                  <span key={agent}>{agent}</span>
+                ))}
+              </div>
             </div>
           </div>
-        </div>
-        <TerminalCard />
-      </section>
+          <TerminalCard />
+        </section>
 
-      <section className="flex flex-col gap-8" aria-label="How it works">
-        <SectionHeading kicker="How it works" title="Check before edit. Edit. Report after." />
-        <div className="grid gap-4 md:grid-cols-3">
-          {steps.map(({ copy, label }, index) => (
-            <Card className="bg-card/70" key={label} size="sm">
-              <CardHeader>
-                <Badge className="w-fit" variant="outline">
-                  {String(index + 1).padStart(2, "0")}
-                </Badge>
-                <CardTitle>{label}</CardTitle>
-                <CardDescription className="leading-6">{copy}</CardDescription>
-              </CardHeader>
-            </Card>
-          ))}
-        </div>
-      </section>
+        <section className="flex flex-col gap-8" aria-label="How it works">
+          <SectionHeading kicker="How it works" title="Check before edit. Edit. Report after." />
+          <div className="grid gap-4 md:grid-cols-3">
+            {steps.map(({ copy, label }, index) => (
+              <Card className="bg-card/70" key={label} size="sm">
+                <CardHeader>
+                  <Badge className="w-fit" variant="outline">
+                    {String(index + 1).padStart(2, "0")}
+                  </Badge>
+                  <CardTitle>{label}</CardTitle>
+                  <CardDescription className="leading-6">{copy}</CardDescription>
+                </CardHeader>
+              </Card>
+            ))}
+          </div>
+        </section>
 
-      <section className="flex flex-col gap-8" aria-label="Features">
-        <SectionHeading kicker="What it does" title="Deterministic conflict detection across your agents." />
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {features.map(({ copy, icon: Icon, title }) => (
-            <Card className="bg-card/60 transition-colors hover:bg-card" key={title} size="sm">
-              <CardHeader>
-                <span className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary ring-1 ring-primary/20">
-                  <Icon className="size-4.5" />
-                </span>
-                <CardTitle className="pt-3 text-base">{title}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm leading-6 text-muted-foreground">{copy}</p>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      </section>
+        <section className="flex flex-col gap-8" aria-label="Features">
+          <SectionHeading
+            kicker="What it does"
+            title="Deterministic conflict detection across your agents."
+          />
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {features.map(({ copy, icon: Icon, title }) => (
+              <Card className="bg-card/60 transition-colors hover:bg-card" key={title} size="sm">
+                <CardHeader>
+                  <span className="flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary ring-1 ring-primary/20">
+                    <Icon className="size-4.5" />
+                  </span>
+                  <CardTitle className="pt-3 text-base">{title}</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm leading-6 text-muted-foreground">{copy}</p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </section>
 
-      <section className="flex flex-col gap-8" aria-label="Get started">
-        <SectionHeading kicker="Get started" title="One command. Hooks and MCP wired automatically." />
-        <Card className="bg-card/70">
-          <CardContent className="flex flex-col gap-4 py-5">
-            <pre className="overflow-x-auto rounded-lg border bg-background/60 p-4 font-mono text-sm leading-7">
-              <code>
-                <span className="text-muted-foreground">$ </span>npx synapse join{"\n"}
-                <span className="text-primary">{"✓"}</span> hooks installed (PreToolUse / PostToolUse / SessionStart){"\n"}
-                <span className="text-primary">{"✓"}</span> MCP server registered for connected agents
-              </code>
-            </pre>
-            <p className="text-sm text-muted-foreground">
-              <code className="font-mono">join</code> also runs <code className="font-mono">connect</code>, so non-Claude agents
-              get hook-equivalent behavior with zero manual setup.
-            </p>
-          </CardContent>
-        </Card>
-      </section>
+        <section className="flex flex-col gap-8" aria-label="Get started">
+          <SectionHeading
+            kicker="Get started"
+            title="One command. Hooks and MCP wired automatically."
+          />
+          <Card className="bg-card/70">
+            <CardContent className="flex flex-col gap-4 py-5">
+              <pre className="overflow-x-auto rounded-lg border bg-background/60 p-4 font-mono text-sm leading-7">
+                <code>
+                  <span className="text-muted-foreground">$ </span>npx synapse join{"\n"}
+                  <span className="text-primary">{"✓"}</span> hooks installed (PreToolUse /
+                  PostToolUse / SessionStart){"\n"}
+                  <span className="text-primary">{"✓"}</span> MCP server registered for connected
+                  agents
+                </code>
+              </pre>
+              <p className="text-sm text-muted-foreground">
+                <code className="font-mono">join</code> also runs{" "}
+                <code className="font-mono">connect</code>, so non-Claude agents get hook-equivalent
+                behavior with zero manual setup.
+              </p>
+            </CardContent>
+          </Card>
+        </section>
       </header>
     </>
   );
@@ -189,7 +201,9 @@ export default function Landing({ mode }: { mode: FeedMode }) {
 function SectionHeading({ kicker, title }: { kicker: string; title: string }) {
   return (
     <div className="flex flex-col gap-2">
-      <span className="font-mono text-xs font-medium tracking-[0.18em] text-primary uppercase">{kicker}</span>
+      <span className="font-mono text-xs font-medium tracking-[0.18em] text-primary uppercase">
+        {kicker}
+      </span>
       <h2 className="font-heading max-w-2xl text-3xl leading-[1.05] font-medium tracking-tight text-balance sm:text-[2.6rem]">
         {title}
       </h2>
