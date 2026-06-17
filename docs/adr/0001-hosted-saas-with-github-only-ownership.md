@@ -32,7 +32,11 @@ these decisions made together:
   for ownership. A plain OAuth App was rejected: it would force hand-built
   per-repo webhook creation (`admin:repo_hook` + repo-admin user), the exact
   friction onboarding is avoiding. Cost: app manifest + private key +
-  installation callback to register and handle.
+  installation callback to register and handle. The server-side env boundary is
+  `SYNAPSE_GITHUB_APP_ID`, `SYNAPSE_GITHUB_APP_CLIENT_ID`,
+  `SYNAPSE_GITHUB_APP_CLIENT_SECRET`, `SYNAPSE_GITHUB_APP_PRIVATE_KEY`, and
+  `SYNAPSE_GITHUB_WEBHOOK_SECRET`; missing App env disables human auth/onboarding
+  without crashing local/open server mode.
 - **Auth lives in `apps/server`, hand-rolled.** We extend the existing Node
   http+ws server (it already has `pg`, `ws`, and the daemon/web channel) with the
   App's user-to-server OAuth callback, a users/ownership table, and cookie
