@@ -40,6 +40,8 @@ This plan set came from a deep advisory audit. Source files were not modified wh
 | 030 | Add local aggregate `synapse insights` / `synapse_insights` | P2 | S | 017 | DONE |
 | 031 | Add local PR handoff briefing | P2 | M | 020, 029 | DONE |
 | [037](037-web-dashboard.md) | Add a web dashboard + landing page (`apps/web`) visualizing a live Synapse room | P2 | L | - | DONE (reviewed & APPROVED; `apps/web` Vite/React dashboard added with seeded demo + live WebSocket feed, type-only protocol imports, no server/package/turbo source changes; reviewer re-ran web/root typecheck, build, tests, no-fetch check, out-of-scope diff checks, and browser smoke on desktop/mobile) |
+| [048](048-repo-governance-protect-main-and-clean-branches.md) | Protect `main`, enable auto-delete-on-merge, and clean stale branches/worktrees | P1 | M | 047 recommended | DONE (2026-06-16: auto-delete already on; `main` branch protection applied; remote stale branches already absent; no `/private/tmp` worktrees; local `.cursor` worktree left intact) |
+| [049](049-web-accounts-landing-dashboard.md) | Expand web surface — marketing landing, login-gated onboarding, account-bound live dashboard | P2 | XL | none (owner: GitHub OAuth app + Postgres) | TODO ([#98](https://github.com/Kumario1/synapse/issues/98)) |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
 
