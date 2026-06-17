@@ -52,7 +52,7 @@ export default function FlowGraph({ state }: { state: TeamState }) {
         ) : (
           <div className="rounded-lg border bg-muted/30">
             <svg
-              className="block h-72 w-full sm:h-80 lg:h-96"
+              className="block h-60 w-full sm:h-64"
               viewBox="0 0 840 360"
               role="img"
               aria-label="Sessions flowing through the Synapse server into symbols"
