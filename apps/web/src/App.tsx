@@ -3,6 +3,7 @@ import Dashboard from "./Dashboard";
 import { createFeedFromLocation, type FeedSnapshot } from "./feed";
 import Landing from "./Landing";
 import NarratedDemo from "./NarratedDemo";
+import Onboarding from "./components/Onboarding";
 
 export default function App() {
   const feed = useMemo(() => createFeedFromLocation(window.location), []);
@@ -14,6 +15,7 @@ export default function App() {
     <div className="min-h-screen overflow-x-hidden">
       <Landing mode={snapshot.mode} />
       {snapshot.mode === "demo" ? <NarratedDemo /> : <Dashboard snapshot={snapshot} />}
+      <Onboarding />
       <footer className="mt-8 border-t border-border/60">
         <div className="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-2 px-4 py-8 text-sm text-muted-foreground sm:px-6 lg:px-8">
           <span>MIT license</span>
