@@ -513,6 +513,7 @@ missing key keeps the deterministic analysis.
 - **`privacy.redactSignatures` config**: for maximum-paranoia teams, send only `{symbolId, changeKind}`
   — no param names/types. Reduces conflict detail but keeps same-symbol/dependency detection working.
 - The product story is **hosted/multi-tenant with GitHub-only ownership** (ADR-0001): the server runs on Synapse's infra, each repo's daemon connecting with a per-repo scoped credential. **Self-host** (running this same server on your own infra, where even the coordination metadata stays on the team's machines) remains supported but deprioritized.
+- **Two distinct trust boundaries.** The **machine boundary** (daemon ↔ server) is the per-repo credential above (`project-key`/`shared-token`), validated at the WS handshake and on `/state`. The **human boundary** (browser ↔ server) is the GitHub sign-in session: a hand-rolled (no hosted auth provider, per ADR-0001) **stateless signed cookie** — `HMAC-SHA256` over `{uid, iat}`, key **derived from the OAuth client secret**, so there is no sessions table and no extra session secret. The two never cross: an OAuth cookie session establishes Owner identity only and never authorizes a daemon WS room or `/state`, and a machine credential never stands in for a human session. Sign-in is live only when the GitHub App env is fully configured.
 
 ---
 
