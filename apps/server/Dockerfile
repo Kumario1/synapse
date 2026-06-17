@@ -43,6 +43,10 @@ COPY --from=builder /app/packages/conflict-engine/dist ./packages/conflict-engin
 #   SYNAPSE_MASTER_SECRET          enables project-key auth + tenancy
 #   SYNAPSE_AUTH_TOKEN             legacy shared-token auth (alternative)
 #   SYNAPSE_DB_PATH                durable SQLite state (mount a volume)
+#   SYNAPSE_GITHUB_APP_ID          GitHub App id
+#   SYNAPSE_GITHUB_APP_CLIENT_ID   GitHub App OAuth client id
+#   SYNAPSE_GITHUB_APP_CLIENT_SECRET GitHub App OAuth client secret
+#   SYNAPSE_GITHUB_APP_PRIVATE_KEY GitHub App private key PEM
 #   SYNAPSE_GITHUB_WEBHOOK_SECRET  optional webhook HMAC
 EXPOSE 4010
 CMD ["node", "apps/server/dist/index.js"]

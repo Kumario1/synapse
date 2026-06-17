@@ -6,7 +6,7 @@ Source of truth used for this guide: `git log --reverse`, `README.md`, `synapse-
 
 ## Current System
 
-Synapse is a realtime coordination layer for coding agents. Agents still edit code; Synapse gives them current team context before edits and records contract-level changes after edits so teammates and other agents can avoid collisions.
+Synapse is a realtime coordination layer for coding agents. Agents still edit code; Synapse gives them current team context before edits and records contract-level changes after edits so teammates and other agents can avoid collisions. Server startup resolves daemon auth plus the GitHub App env loader, reporting only the App status on health while preserving standalone signed-webhook ingestion.
 
 ### Current Architecture
 
@@ -30,7 +30,7 @@ flowchart TB
     State["State engine<br/>sessions, locks, deltas, pushes, feedback, resolutions, PR history"]
     Store["StateStore<br/>SQLite or Postgres"]
     Redis["Redis fan-out<br/>optional multi-instance pub/sub"]
-    Github["GitHub webhooks<br/>push, PR, review, comments"]
+    Github["GitHub App + webhooks<br/>push, PR, review, comments"]
     Memory["Vector memory<br/>optional pgvector recall"]
     Metrics["/metrics and JSON logs"]
   end

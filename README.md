@@ -249,6 +249,21 @@ Resolved at server startup. `/health` and the GitHub webhook (its own HMAC) stay
 | **shared-token** | `SYNAPSE_AUTH_TOKEN` | Any valid token reads/writes any project |
 | **project-key** | `SYNAPSE_MASTER_SECRET` | Real tenancy: key = `base64url(HMAC-SHA256(secret, repoId))`, authorizes only its project (checked at handshake + per-message) |
 
+### GitHub App setup
+
+For hosted Synapse, register a GitHub App and set `SYNAPSE_GITHUB_APP_ID`, `SYNAPSE_GITHUB_APP_CLIENT_ID`, `SYNAPSE_GITHUB_APP_CLIENT_SECRET`, `SYNAPSE_GITHUB_APP_PRIVATE_KEY`, and `SYNAPSE_GITHUB_WEBHOOK_SECRET` on the server.
+
+GitHub console settings:
+
+- User authorization callback URL: `https://<host>/auth/github/callback`
+- Setup/installation callback URL: `https://<host>/auth/github/setup`
+- Webhook URL: `https://<host>/webhooks/github`
+- Webhook secret: the same value as `SYNAPSE_GITHUB_WEBHOOK_SECRET`
+- Repository permissions: Contents read-only, Metadata read-only, Pull requests read-only
+- Subscribe to events: Push, Pull request, Pull request review, Issue comment
+
+OAuth and setup routes are follow-up work; the current server only registers the App/env surface and keeps the existing signed webhook ingestion path. Setting only `SYNAPSE_GITHUB_WEBHOOK_SECRET` remains valid for signed webhooks without the full App auth flow.
+
 Credentials are sent via `Authorization: Bearer` (the server still accepts `?token=` for back-compat), keeping tokens out of URL query strings and access logs.
 
 **State store** — persisted per entity (sessions, locks, deltas, pushes, events, resolutions, summaries, feedback as rows; every mutation writes only its own row). Backend selection: `SYNAPSE_DATABASE_URL` → Postgres (the shared-database backend for multi-instance deployments; the `pg` driver loads only when selected); else `SYNAPSE_DB_PATH` → file-backed SQLite (WAL) that survives restarts; neither → ephemeral in-memory SQLite. Pre-existing SQLite snapshot databases migrate to per-entity rows automatically on first boot. Postgres schema initialization is serialized with advisory locks, and startup always attempts to release the lock before returning the pooled connection, including when DDL fails.

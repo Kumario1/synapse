@@ -21,6 +21,7 @@ const releaseConfig = JSON.parse(readFileSync(join(rootDir, "release.config.json
 const children = [];
 const token = "package-token";
 const loopback = "127.0.0.1";
+const PACKAGED_DAEMON_HEALTH_TIMEOUT_MS = 60000;
 
 // 1. Build + pack the release tarball.
 await execFileAsync("node", [join(rootDir, "scripts/build-package.mjs")], {
@@ -95,11 +96,11 @@ console.log("resolved:" + (imported.length + 1));
 
   startUp(cli, "alice", aliceRoot, alicePort, serverPort, ["--serve", "--server-port", String(serverPort)]);
   await waitForHttp(`http://${loopback}:${serverPort}/health`);
-  await waitForHttp(`http://${loopback}:${alicePort}/health`);
+  await waitForHttp(`http://${loopback}:${alicePort}/health`, PACKAGED_DAEMON_HEALTH_TIMEOUT_MS);
   await assertJoined(aliceRoot, alicePort, "alice");
 
   startUp(cli, "bob", bobRoot, bobPort, serverPort);
-  await waitForHttp(`http://${loopback}:${bobPort}/health`);
+  await waitForHttp(`http://${loopback}:${bobPort}/health`, PACKAGED_DAEMON_HEALTH_TIMEOUT_MS);
   await assertJoined(bobRoot, bobPort, "bob");
 
   await waitForDaemonState(alicePort, (state) =>
@@ -168,6 +169,7 @@ function startUp(cli, member, worktreeRoot, port, serverPort, extraArgs = []) {
     ],
     {
       cwd: worktreeRoot,
+      detached: process.platform !== "win32",
       env: {
         ...process.env,
         INIT_CWD: worktreeRoot,
@@ -284,22 +286,50 @@ async function freePort() {
 }
 
 async function stopChildren() {
-  await Promise.all(
-    children.map(
-      (child) =>
-        new Promise((resolvePromise) => {
-          if (child.exitCode !== null || child.signalCode !== null) {
-            resolvePromise();
-            return;
-          }
-          child.once("exit", resolvePromise);
-          child.kill("SIGTERM");
-          setTimeout(() => {
-            if (child.exitCode === null && child.signalCode === null) {
-              child.kill("SIGKILL");
-            }
-          }, 1500).unref();
-        })
-    )
-  );
+  await Promise.all(children.map(stopChildTree));
+}
+
+async function stopChildTree(child) {
+  terminateChildTree(child, "SIGTERM");
+  const exited = await waitForExit(child, 1500);
+  // `synapse up --serve` starts the server as its own child. The top-level
+  // process can exit before every descendant has gone away, so sweep the process
+  // group once more before the next verifier starts Docker.
+  terminateChildTree(child, "SIGKILL");
+  if (!exited) {
+    await waitForExit(child, 1000);
+  }
+}
+
+function waitForExit(child, timeoutMs) {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve(true);
+  }
+
+  return new Promise((resolvePromise) => {
+    const timer = setTimeout(() => {
+      child.off("exit", onExit);
+      resolvePromise(false);
+    }, timeoutMs);
+    timer.unref();
+
+    function onExit() {
+      clearTimeout(timer);
+      resolvePromise(true);
+    }
+
+    child.once("exit", onExit);
+  });
+}
+
+function terminateChildTree(child, signal) {
+  try {
+    if (process.platform !== "win32" && child.pid) {
+      process.kill(-child.pid, signal);
+    } else if (child.exitCode === null && child.signalCode === null) {
+      child.kill(signal);
+    }
+  } catch {
+    // The process or process group may already be gone.
+  }
 }

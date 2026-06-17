@@ -25,9 +25,17 @@ try {
   const tenancyServer = startProcess("tenancy-server", ["apps/server/dist/index.js"], {
     SYNAPSE_SERVER_PORT: String(tenancyServerPort),
     SYNAPSE_MASTER_SECRET: masterSecret,
+    SYNAPSE_GITHUB_APP_ID: "12345",
+    SYNAPSE_GITHUB_APP_CLIENT_ID: "Iv1.fakeclient",
+    SYNAPSE_GITHUB_APP_CLIENT_SECRET: "fake-client-secret",
+    SYNAPSE_GITHUB_APP_PRIVATE_KEY: "-----BEGIN PRIVATE KEY-----\\nfake\\n-----END PRIVATE KEY-----",
     SYNAPSE_GITHUB_WEBHOOK_SECRET: webhookSecret
   });
   await waitForHttp(`http://localhost:${tenancyServerPort}/health`);
+  const tenancyHealthResponse = await fetch(`http://localhost:${tenancyServerPort}/health`);
+  assert.equal(tenancyHealthResponse.ok, true);
+  const tenancyHealth = await tenancyHealthResponse.json();
+  assert.equal(tenancyHealth.githubApp, "configured");
 
   const tenantRepo = "someone/else";
   const tenantKey = deriveProjectKey(masterSecret, tenantRepo);
