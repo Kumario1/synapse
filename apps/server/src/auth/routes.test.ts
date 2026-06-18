@@ -22,9 +22,15 @@ const installRepos: ClaimedRepo[] = [
 
 async function makeCtx(
   overrides: Partial<AuthContext> = {}
-): Promise<{ ctx: AuthContext; projectStore: ProjectStore; close: () => Promise<void> }> {
+): Promise<{
+  ctx: AuthContext;
+  projectStore: ProjectStore;
+  kicked: Array<[string, string]>;
+  close: () => Promise<void>;
+}> {
   const userStore = await createUserStore({ path: ":memory:" });
   const projectStore = await createProjectStore({ path: ":memory:" });
+  const kicked: Array<[string, string]> = [];
   const ctx: AuthContext = {
     creds: { clientId: "Iv1.fakeclient", clientSecret: "fake-client-secret" },
     sessionKey,
@@ -45,11 +51,15 @@ async function makeCtx(
       recentPushes: [],
       recentRepoEvents: []
     }),
+    kickSession: async (repoId: string, sessionId: string) => {
+      kicked.push([repoId, sessionId]);
+    },
     ...overrides
   };
   return {
     ctx,
     projectStore,
+    kicked,
     close: async () => {
       await userStore.close();
       await projectStore.close();
@@ -471,6 +481,91 @@ test("GET /auth/projects/state is 400 without a repoId", async () => {
     );
     assert.equal(result?.status, 400);
     assert.deepEqual(result?.body, { error: "missing_repo" });
+  } finally {
+    await close();
+  }
+});
+
+test("POST /auth/projects/kick lets an Owner kick a Session in a claimed repo", async () => {
+  const { ctx, kicked, close } = await makeCtx();
+  try {
+    const session = signSession("42", sessionKey);
+    const state = await freshInstallState(ctx, session);
+    await resolveAuthRoute(
+      "GET",
+      "/auth/github/setup",
+      new URLSearchParams({ installation_id: "1", code: "c", state }),
+      { [SESSION_COOKIE]: session, synapse_install_state: state },
+      ctx
+    );
+
+    const result = await resolveAuthRoute(
+      "POST",
+      "/auth/projects/kick",
+      new URLSearchParams({ repoId: "o/r1", sessionId: "sess-1" }),
+      { [SESSION_COOKIE]: session },
+      ctx
+    );
+    assert.equal(result?.status, 200);
+    assert.deepEqual(result?.body, { ok: true });
+    assert.deepEqual(kicked, [["o/r1", "sess-1"]]);
+  } finally {
+    await close();
+  }
+});
+
+test("POST /auth/projects/kick denies a non-owner and does not kick", async () => {
+  const { ctx, kicked, close } = await makeCtx();
+  try {
+    // A valid session for an Owner who has NOT claimed o/r1.
+    const session = signSession("99", sessionKey);
+    const result = await resolveAuthRoute(
+      "POST",
+      "/auth/projects/kick",
+      new URLSearchParams({ repoId: "o/r1", sessionId: "sess-1" }),
+      { [SESSION_COOKIE]: session },
+      ctx
+    );
+    assert.equal(result?.status, 403);
+    assert.deepEqual(result?.body, { error: "not_owner" });
+    assert.deepEqual(kicked, []);
+  } finally {
+    await close();
+  }
+});
+
+test("POST /auth/projects/kick is 401 without a session and does not kick", async () => {
+  const { ctx, kicked, close } = await makeCtx();
+  try {
+    const result = await resolveAuthRoute(
+      "POST",
+      "/auth/projects/kick",
+      new URLSearchParams({ repoId: "o/r1", sessionId: "sess-1" }),
+      {},
+      ctx
+    );
+    assert.equal(result?.status, 401);
+    assert.deepEqual(result?.body, { error: "unauthenticated" });
+    assert.deepEqual(kicked, []);
+  } finally {
+    await close();
+  }
+});
+
+test("POST /auth/projects/kick is 400 without a sessionId", async () => {
+  const { ctx, kicked, close } = await makeCtx();
+  try {
+    const session = signSession("42", sessionKey);
+    const result = await resolveAuthRoute(
+      "POST",
+      "/auth/projects/kick",
+      new URLSearchParams({ repoId: "o/r1" }),
+      { [SESSION_COOKIE]: session },
+      ctx
+    );
+    assert.equal(result?.status, 400);
+    assert.deepEqual(result?.body, { error: "missing_params" });
+    assert.deepEqual(kicked, []);
   } finally {
     await close();
   }
