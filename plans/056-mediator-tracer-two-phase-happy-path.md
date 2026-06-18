@@ -23,6 +23,7 @@
 - **Category**: direction (feature)
 - **Planned at**: commit `e1b420b`, 2026-06-17
 - **Issue**: https://github.com/Kumario1/synapse/issues/110 (parent PRD #109; ADR `docs/adr/0002-llm-resolution-mediator-suggest-only.md`)
+- **Executed**: PR #122 on `feat/mediator-tracer`; CI green after verifier/index updates.
 
 ## Why this matters
 
