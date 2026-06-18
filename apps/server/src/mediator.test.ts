@@ -1,18 +1,19 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createEmptyTeamState, type ContractDelta, type TeamState } from "@synapse/protocol";
-import { applyResolutionAck, proposeOnContest } from "./mediator.js";
+import {
+  applyResolutionAck,
+  applyResolutionReject,
+  proposeOnContest,
+  voidOnTimeout
+} from "./mediator.js";
 
 const symbol = { raw: "ts:src/auth/token.ts#getUser" };
 const dependent = { raw: "ts:src/routes/me.ts#handleMe" };
 
 function stateWithKeepDelta(): TeamState {
   const state = createEmptyTeamState("local");
-  state.sessions = [
-    session("alice"),
-    session("bob"),
-    session("mallory")
-  ];
+  state.sessions = [session("alice"), session("bob"), session("mallory")];
   state.unpushedDeltas = [
     {
       id: "delta-1",
@@ -35,12 +36,7 @@ function stateWithKeepDelta(): TeamState {
 
 test("proposeOnContest stores one mechanical keep/adapt proposal", () => {
   const state = stateWithKeepDelta();
-  const proposal = proposeOnContest(
-    state,
-    symbol.raw,
-    "bob",
-    () => "2026-06-17T01:00:00.000Z"
-  );
+  const proposal = proposeOnContest(state, symbol.raw, "bob", () => "2026-06-17T01:00:00.000Z");
 
   assert.ok(proposal);
   assert.equal(state.resolutionProposals?.length, 1);
@@ -95,6 +91,65 @@ test("applyResolutionAck ignores non-party acks", () => {
 
   assert.equal(applyResolutionAck(state, proposal.id, "mallory"), false);
   assert.deepEqual(proposal.acceptedBy, []);
+  assert.equal(proposal.status, "resolving");
+});
+
+test("applyResolutionReject voids the pair and emits dismiss feedback", () => {
+  const state = stateWithKeepDelta();
+  const proposal = proposeOnContest(state, symbol.raw, "bob");
+  assert.ok(proposal);
+
+  assert.equal(applyResolutionAck(state, proposal.id, "alice"), true);
+  assert.equal(proposal.status, "resolving");
+
+  const result = applyResolutionReject(state, proposal.id, "bob");
+  assert.equal(result.changed, true);
+  assert.ok(result.feedback);
+  assert.equal(result.feedback.outcome, "dismissed");
+  assert.equal(result.feedback.conflictId, proposal.id);
+  assert.equal(result.feedback.sessionId, "bob");
+  assert.deepEqual(result.feedback.targetSymbol, symbol);
+  assert.equal(proposal.status, "voided");
+  assert.equal(proposal.voidReason, "rejected");
+  assert.equal(proposal.voidedBy, "bob");
+});
+
+test("applyResolutionAck after a void is a no-op (never resolves)", () => {
+  const state = stateWithKeepDelta();
+  const proposal = proposeOnContest(state, symbol.raw, "bob");
+  assert.ok(proposal);
+
+  assert.equal(applyResolutionAck(state, proposal.id, "alice"), true);
+  assert.equal(applyResolutionReject(state, proposal.id, "bob").changed, true);
+  assert.equal(proposal.status, "voided");
+
+  assert.equal(applyResolutionAck(state, proposal.id, "alice"), false);
+  assert.equal(proposal.status, "voided");
+});
+
+test("voidOnTimeout voids a resolving proposal, then is idempotent", () => {
+  const state = stateWithKeepDelta();
+  const proposal = proposeOnContest(state, symbol.raw, "bob");
+  assert.ok(proposal);
+
+  assert.equal(voidOnTimeout(state, proposal.id), true);
+  assert.equal(proposal.status, "voided");
+  assert.equal(proposal.voidReason, "timeout");
+
+  assert.equal(voidOnTimeout(state, proposal.id), false);
+  assert.equal(proposal.status, "voided");
+});
+
+test("applyResolutionReject ignores non-party and unknown proposals", () => {
+  const state = stateWithKeepDelta();
+  const proposal = proposeOnContest(state, symbol.raw, "bob");
+  assert.ok(proposal);
+
+  assert.equal(applyResolutionReject(state, proposal.id, "mallory").changed, false);
+  assert.equal(proposal.status, "resolving");
+  assert.equal(proposal.voidReason, undefined);
+
+  assert.equal(applyResolutionReject(state, "rp:nope:x:y", "bob").changed, false);
   assert.equal(proposal.status, "resolving");
 });
 

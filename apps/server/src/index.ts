@@ -40,7 +40,12 @@ import {
 } from "./state.js";
 import { getCachedState } from "./state-cache.js";
 import { createStateStore, type StateStoreOps } from "./store.js";
-import { applyResolutionAck, proposeOnContest } from "./mediator.js";
+import {
+  applyResolutionAck,
+  applyResolutionReject,
+  proposeOnContest,
+  voidOnTimeout
+} from "./mediator.js";
 
 const port = Number(process.env.SYNAPSE_SERVER_PORT ?? 4010);
 const host = process.env.SYNAPSE_SERVER_HOST ?? "127.0.0.1";
@@ -526,14 +531,19 @@ async function handleMessage(
 
     if (message.type === "resolution.ack") {
       const startedAt = performance.now();
+      const proposalId = message.payload.proposalId;
       const result = await withRepo(repoId, async () => {
         const current = await getState(repoId);
-        const changed = applyResolutionAck(
-          current,
-          message.payload.proposalId,
-          message.payload.sessionId
-        );
-        return { state: current, changed };
+        if (message.payload.accept) {
+          const changed = applyResolutionAck(current, proposalId, message.payload.sessionId);
+          return { state: current, changed };
+        }
+        const reject = applyResolutionReject(current, proposalId, message.payload.sessionId);
+        if (reject.feedback) {
+          current.conflictFeedback = [reject.feedback, ...current.conflictFeedback].slice(0, 100);
+          store.appendFeedback(repoId, reject.feedback, 100);
+        }
+        return { state: current, changed: reject.changed };
       });
       metrics.count("synapse_messages_total", { type: message.type });
       metrics.observe("synapse_message_apply_ms", performance.now() - startedAt);
@@ -544,6 +554,12 @@ async function handleMessage(
       });
       sendAck(socket, { forId: message.id, ok: true });
       if (result.changed) {
+        // A reject voids the pair; an accept that fully resolves it is also
+        // terminal. Either way the proposal no longer needs its TTL timer.
+        const proposal = result.state.resolutionProposals?.find((p) => p.id === proposalId);
+        if (!proposal || proposal.status !== "resolving") {
+          clearResolutionTimer(proposalId);
+        }
         broadcast(
           repoId,
           envelope("state.snapshot", {
@@ -558,7 +574,7 @@ async function handleMessage(
     const startedAt = performance.now();
     const ops: StateOp[] = [];
     let ackLocks: EditLock[] | undefined;
-    let proposed = false;
+    let proposedId: string | undefined;
     const state = await withRepo(repoId, async () => {
       const current = await getState(repoId);
       applyMessage(current, repoId, message, teeStateStoreOps(ops));
@@ -570,9 +586,12 @@ async function handleMessage(
           Date.now()
         );
         if (ackLocks.length > 0) {
-          proposed =
-            proposeOnContest(current, message.payload.symbolId.raw, message.payload.sessionId) !==
-            null;
+          const proposal = proposeOnContest(
+            current,
+            message.payload.symbolId.raw,
+            message.payload.sessionId
+          );
+          proposedId = proposal?.id;
         }
       }
       return current;
@@ -589,7 +608,7 @@ async function handleMessage(
       broadcastStateChange(repoId, state, ops);
       fanout?.publish(repoId);
     }
-    if (proposed) {
+    if (proposedId) {
       broadcast(
         repoId,
         envelope("state.snapshot", {
@@ -597,6 +616,7 @@ async function handleMessage(
           seq: bumpRepoSeq(repoId)
         })
       );
+      scheduleResolutionTimeout(repoId, proposedId);
     }
   } catch (error) {
     const reason = error instanceof Error ? error.message : "unknown_error";
@@ -875,6 +895,35 @@ function bumpRepoSeq(repoId: string): number {
   const next = currentRepoSeq(repoId) + 1;
   repoSeq.set(repoId, next);
   return next;
+}
+
+// A resolving proposal that is not fully accepted within this TTL is voided and
+// escalated to the Owner (the voided proposal in the broadcast snapshot).
+const RESOLUTION_TTL_MS = Number(process.env.SYNAPSE_RESOLUTION_TTL_MS ?? 300_000);
+const resolutionTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function clearResolutionTimer(id: string): void {
+  const timer = resolutionTimers.get(id);
+  if (timer) {
+    clearTimeout(timer);
+    resolutionTimers.delete(id);
+  }
+}
+
+function scheduleResolutionTimeout(repoId: string, proposalId: string): void {
+  clearResolutionTimer(proposalId);
+  const timer = setTimeout(() => {
+    void withRepo(repoId, async () => {
+      const s = await getState(repoId);
+      const changed = voidOnTimeout(s, proposalId);
+      if (changed) {
+        broadcast(repoId, envelope("state.snapshot", { teamState: s, seq: bumpRepoSeq(repoId) }));
+      }
+      return changed;
+    }).finally(() => resolutionTimers.delete(proposalId));
+  }, RESOLUTION_TTL_MS);
+  timer.unref?.();
+  resolutionTimers.set(proposalId, timer);
 }
 
 function teeStateStoreOps(ops: StateOp[]): StateStoreOps {
