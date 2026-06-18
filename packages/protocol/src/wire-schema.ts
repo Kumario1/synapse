@@ -91,6 +91,31 @@ const contractResolution = z.looseObject({
   createdAt: z.string()
 });
 
+const affectedSite = z.looseObject({
+  symbolId,
+  filePath: z.string()
+});
+
+const direction = z.looseObject({
+  sessionId: z.string().min(1),
+  role: z.enum(["keep", "adapt"]),
+  summary: z.string(),
+  affectedSites: z.array(affectedSite)
+});
+
+const resolutionProposal = z.looseObject({
+  id: z.string().min(1),
+  repoId: z.string().min(1),
+  symbol: symbolId,
+  conflictClass: z.literal("mechanical"),
+  before: signature.nullable(),
+  after: signature.nullable(),
+  status: z.enum(["resolving", "resolved"]),
+  directions: z.array(direction),
+  acceptedBy: z.array(z.string().min(1)),
+  createdAt: z.string()
+});
+
 const sessionSummary = z.looseObject({
   sessionId: z.string().min(1),
   repoId: z.string().min(1),
@@ -158,6 +183,7 @@ const teamState = z.looseObject({
   recentPushes: z.array(recentPush),
   recentRepoEvents: z.array(recentRepoEvent),
   resolutions: z.array(contractResolution),
+  resolutionProposals: z.array(resolutionProposal).default([]),
   sessionSummaries: z.array(sessionSummary),
   conflictFeedback: z.array(conflictFeedback)
 });
@@ -281,6 +307,16 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
     ...envelope,
     type: z.literal("resolution.propose"),
     payload: z.looseObject({ repoId: z.string().min(1), resolution: contractResolution })
+  }),
+  z.looseObject({
+    ...envelope,
+    type: z.literal("resolution.ack"),
+    payload: z.looseObject({
+      repoId: z.string().min(1),
+      sessionId: z.string().min(1),
+      proposalId: z.string().min(1),
+      accept: z.literal(true)
+    })
   }),
   z.looseObject({
     ...envelope,

@@ -13,6 +13,7 @@ import {
   parseClientMessage,
   PROTOCOL_VERSION,
   type ClientMessage,
+  type EditLock,
   type ProtocolVersion,
   type ServerMessage,
   type StateOp,
@@ -39,6 +40,7 @@ import {
 } from "./state.js";
 import { getCachedState } from "./state-cache.js";
 import { createStateStore, type StateStoreOps } from "./store.js";
+import { applyResolutionAck, proposeOnContest } from "./mediator.js";
 
 const port = Number(process.env.SYNAPSE_SERVER_PORT ?? 4010);
 const host = process.env.SYNAPSE_SERVER_HOST ?? "127.0.0.1";
@@ -521,11 +523,58 @@ async function handleMessage(
     }
 
     const repoId = messageRepoId ?? fallbackRepoId;
+
+    if (message.type === "resolution.ack") {
+      const startedAt = performance.now();
+      const result = await withRepo(repoId, async () => {
+        const current = await getState(repoId);
+        const changed = applyResolutionAck(
+          current,
+          message.payload.proposalId,
+          message.payload.sessionId
+        );
+        return { state: current, changed };
+      });
+      metrics.count("synapse_messages_total", { type: message.type });
+      metrics.observe("synapse_message_apply_ms", performance.now() - startedAt);
+      log.debug("message.applied", {
+        type: message.type,
+        repoId,
+        sessions: result.state.sessions.length
+      });
+      sendAck(socket, { forId: message.id, ok: true });
+      if (result.changed) {
+        broadcast(
+          repoId,
+          envelope("state.snapshot", {
+            teamState: result.state,
+            seq: bumpRepoSeq(repoId)
+          })
+        );
+      }
+      return;
+    }
+
     const startedAt = performance.now();
     const ops: StateOp[] = [];
+    let ackLocks: EditLock[] | undefined;
+    let proposed = false;
     const state = await withRepo(repoId, async () => {
       const current = await getState(repoId);
       applyMessage(current, repoId, message, teeStateStoreOps(ops));
+      if (message.type === "edit.intent") {
+        ackLocks = peerLocksForIntent(
+          current,
+          message.payload.sessionId,
+          message.payload.symbolId.raw,
+          Date.now()
+        );
+        if (ackLocks.length > 0) {
+          proposed =
+            proposeOnContest(current, message.payload.symbolId.raw, message.payload.sessionId) !==
+            null;
+        }
+      }
       return current;
     });
     metrics.count("synapse_messages_total", { type: message.type });
@@ -535,19 +584,19 @@ async function handleMessage(
     // For edit.intent, read the post-apply peer locks (state from withRepo already
     // includes this session's just-applied lock — the linearization point) and ship
     // them on the ack so the requester's check evaluates against authoritative state.
-    const ackLocks =
-      message.type === "edit.intent"
-        ? peerLocksForIntent(
-            state,
-            message.payload.sessionId,
-            message.payload.symbolId.raw,
-            Date.now()
-          )
-        : undefined;
     sendAck(socket, { forId: message.id, ok: true, ...(ackLocks ? { locks: ackLocks } : {}) });
     if (ops.length > 0) {
       broadcastStateChange(repoId, state, ops);
       fanout?.publish(repoId);
+    }
+    if (proposed) {
+      broadcast(
+        repoId,
+        envelope("state.snapshot", {
+          teamState: state,
+          seq: bumpRepoSeq(repoId)
+        })
+      );
     }
   } catch (error) {
     const reason = error instanceof Error ? error.message : "unknown_error";

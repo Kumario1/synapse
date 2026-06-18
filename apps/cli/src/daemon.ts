@@ -511,6 +511,49 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
         return;
       }
 
+      if (request.method === "POST" && url.pathname === "/tools/synapse_resolution") {
+        const body = (await readJson(request)) as { accept?: boolean };
+        const proposal = (teamState.resolutionProposals ?? []).find(
+          (candidate) =>
+            candidate.status === "resolving" &&
+            candidate.directions.some((direction) => direction.sessionId === config.sessionId)
+        );
+        const direction = proposal?.directions.find(
+          (candidate) => candidate.sessionId === config.sessionId
+        );
+
+        if (!proposal || !direction) {
+          writeJson(response, 200, {
+            ok: true,
+            proposalId: null,
+            direction: null,
+            degraded: socket?.readyState !== WebSocket.OPEN
+          });
+          return;
+        }
+
+        if (body.accept === true) {
+          sendToServer("resolution.ack", {
+            repoId: config.repoId,
+            sessionId: config.sessionId,
+            proposalId: proposal.id,
+            accept: true
+          });
+        }
+
+        writeJson(response, 200, {
+          ok: true,
+          proposalId: proposal.id,
+          symbol: proposal.symbol,
+          before: proposal.before,
+          after: proposal.after,
+          direction,
+          accepted: proposal.acceptedBy.includes(config.sessionId) || body.accept === true,
+          degraded: socket?.readyState !== WebSocket.OPEN
+        });
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/tools/synapse_check") {
         let checkStartedAt = performance.now();
         const body = (await readJson(request)) as Partial<SynapseCheckRequest>;

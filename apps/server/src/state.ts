@@ -126,6 +126,8 @@ export function applyMessage(
     case "resolution.propose":
       storeResolution(state, repoId, store, message.payload.resolution);
       break;
+    case "resolution.ack":
+      break;
     case "session.summary":
       storeSessionSummary(state, repoId, store, message.payload.summary);
       break;
@@ -155,6 +157,7 @@ export function repoIdFor(message: ClientMessage): string | null {
     case "repo.event":
       return message.payload.repoId;
     case "resolution.propose":
+    case "resolution.ack":
       return message.payload.repoId;
     case "session.summary":
       return message.payload.repoId;
