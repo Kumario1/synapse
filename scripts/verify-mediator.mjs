@@ -20,6 +20,9 @@ const dependentRaw = "ts:src/routes/me.ts#handleMe";
 // Reject case uses a distinct symbol so its proposal id never collides.
 const symbolRawB = "ts:src/auth/token.ts#refresh";
 const dependentRawB = "ts:src/routes/me.ts#handleRefresh";
+// Semantic case: both sides report mutually exclusive signatures.
+const symbolRawS = "ts:src/auth/token.ts#semanticGetUser";
+const dependentRawS = "ts:src/routes/me.ts#handleSemanticGetUser";
 // Timeout case runs against a second short-TTL server, with its own symbol.
 const symbolRawC = "ts:src/auth/token.ts#revoke";
 const dependentRawC = "ts:src/routes/me.ts#handleRevoke";
@@ -194,6 +197,82 @@ try {
   assert.ok(feedback, "expected dismiss feedback for the rejected proposal");
   assert.equal(feedback.outcome, "dismissed", "reject is recorded as dismiss feedback");
 
+  // --- Semantic case: divergent signatures escalate to Owner winner choice.
+  const aliceDeltaSId = "alice-delta-semantic";
+  alice.send(
+    contractDeltaEnvelope(
+      aliceDeltaSId,
+      "delta-semantic-alice",
+      symbolRawS,
+      dependentRawS,
+      "alice",
+      { params: [], returns: "User | null", raw: "() => User | null" }
+    )
+  );
+  await readUntil(
+    alice,
+    (message) => message.type === "ack" && message.payload.forId === aliceDeltaSId
+  );
+
+  const bobDeltaSId = "bob-delta-semantic";
+  bob.send(
+    contractDeltaEnvelope(bobDeltaSId, "delta-semantic-bob", symbolRawS, dependentRawS, "bob", {
+      params: [{ name: "strict", type: "boolean", optional: false }],
+      returns: "User",
+      raw: "(strict: boolean) => User"
+    })
+  );
+  await readUntil(
+    bob,
+    (message) => message.type === "ack" && message.payload.forId === bobDeltaSId
+  );
+
+  const aliceIntentSId = "alice-intent-semantic";
+  alice.send(intentEnvelope(aliceIntentSId, "alice", symbolRawS));
+  await readUntil(
+    alice,
+    (message) => message.type === "ack" && message.payload.forId === aliceIntentSId
+  );
+
+  const bobIntentSId = "bob-intent-semantic";
+  bob.send(intentEnvelope(bobIntentSId, "bob", symbolRawS));
+  await readUntil(
+    bob,
+    (message) => message.type === "ack" && message.payload.forId === bobIntentSId
+  );
+
+  const semanticSnapshot = await readUntil(
+    bob,
+    (message) =>
+      message.type === "state.snapshot" &&
+      (message.payload.teamState.resolutionProposals ?? []).some(
+        (p) => p.symbol.raw === symbolRawS && p.status === "awaiting_owner"
+      )
+  );
+  const semantic = (semanticSnapshot.payload.teamState.resolutionProposals ?? []).find(
+    (p) => p.symbol.raw === symbolRawS
+  );
+  assert.ok(semantic, "expected a semantic proposal");
+  assert.equal(semantic.conflictClass, "semantic", "divergent signatures are semantic");
+  assert.equal(semantic.status, "awaiting_owner", "semantic proposals wait for the Owner");
+  assert.deepEqual(semantic.directions, [], "semantic proposals do not fabricate directions");
+  assert.equal(semantic.after, null, "semantic proposals do not fabricate a merged signature");
+  assert.ok(semantic.candidates?.includes("alice"), "alice is a semantic candidate");
+  assert.ok(semantic.candidates?.includes("bob"), "bob is a semantic candidate");
+  await assert.rejects(
+    readUntil(
+      bob,
+      (message) =>
+        message.type === "state.snapshot" &&
+        (message.payload.teamState.resolutionProposals ?? []).some(
+          (p) => p.id === semantic.id && p.status === "resolved"
+        ),
+      1000
+    ),
+    /timed out/,
+    "semantic proposal must not auto-resolve before owner choice"
+  );
+
   alice.socket.close();
   bob.socket.close();
 
@@ -259,7 +338,7 @@ try {
   carol.socket.close();
   dave.socket.close();
 
-  console.log("Mediator verification passed (resolve + reject + timeout):");
+  console.log("Mediator verification passed (resolve + reject + semantic + timeout):");
   console.log(
     JSON.stringify(
       {
@@ -272,6 +351,12 @@ try {
           proposalId: proposalB.id,
           status: voidedB.status,
           voidReason: voidedB.voidReason
+        },
+        semantic: {
+          proposalId: semantic.id,
+          status: semantic.status,
+          candidates: semantic.candidates,
+          after: semantic.after
         },
         timeout: {
           proposalId: proposalC.id,
@@ -291,7 +376,9 @@ function contractDeltaEnvelope(
   id,
   deltaId = "delta-1",
   symbol = symbolRaw,
-  dependent = dependentRaw
+  dependent = dependentRaw,
+  sessionId = "alice",
+  after = { params: [], returns: "User | null", raw: "() => User | null" }
 ) {
   return {
     v: 2,
@@ -302,11 +389,11 @@ function contractDeltaEnvelope(
       delta: {
         id: deltaId,
         repoId,
-        sessionId: "alice",
+        sessionId,
         symbolId: { raw: symbol },
         changeKind: "signature_changed",
         before: { params: [], returns: "User", raw: "() => User" },
-        after: { params: [], returns: "User | null", raw: "() => User | null" },
+        after,
         summary: "getUser can return null",
         filePath: "src/auth/token.ts",
         baseSha: "abc123",

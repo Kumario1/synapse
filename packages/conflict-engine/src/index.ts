@@ -119,7 +119,8 @@ export function evaluateConflicts(context: ConflictCheckContext): Conflict[] {
             detail:
               `${counterpart.memberLogin} and you both changed ${targetSymbol.raw} to different contracts: ` +
               `theirs ${renderSignature(delta.after)} vs yours ${renderSignature(selfDelta.after)}.`,
-            suggestion: "Your changes are incompatible — agree on one final contract before continuing.",
+            suggestion:
+              "Your changes are incompatible — agree on one final contract before continuing.",
             change,
             selfChange: contractChangeFor(selfDelta),
             selfSessionId: context.selfSessionId
@@ -304,8 +305,7 @@ function dependencyHopMap(hops: DependencyHop[]): Map<string, number> {
 function activeOtherSessions(sessions: Session[], selfSessionId: string): Session[] {
   return sessions.filter(
     (session) =>
-      session.id !== selfSessionId &&
-      (session.status === "active" || session.status === "idle")
+      session.id !== selfSessionId && (session.status === "active" || session.status === "idle")
   );
 }
 
@@ -368,6 +368,11 @@ export {
   type ResolutionRequest,
   type ResolutionSide
 } from "./explain.js";
-export { affectedSitesFromDelta, buildMechanicalDirections } from "./mediator.js";
+export {
+  affectedSitesFromDelta,
+  buildMechanicalDirections,
+  classifyCollision,
+  type ConflictClass
+} from "./mediator.js";
 
 export type { Conflict };
