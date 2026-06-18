@@ -21,6 +21,7 @@
 - **Depends on**: plan 056 (mediator tracer, DONE) and plan 057 (void/escalation, DONE).
 - **Category**: direction (feature)
 - **Planned at**: commit `c381efb`, 2026-06-18
+- **Executed**: PR #124 on `feat/mediator-classify`, implementation commit `d414a25`.
 - **Issue**: https://github.com/Kumario1/synapse/issues/112 (parent PRD #109; ADR-0002)
 
 ## Why this matters
