@@ -101,7 +101,8 @@ const authContext: AuthContext | null =
           projectStore,
           listInstallationReposForUser: (installationId, userToken) =>
             listInstallationReposForUser(installationId, userToken),
-          readRoomState: (repoId: string) => withRepo(repoId, () => getState(repoId))
+          readRoomState: (repoId: string) => withRepo(repoId, () => getState(repoId)),
+          kickSession: (repoId: string, sessionId: string) => kickSession(repoId, sessionId)
         } satisfies AuthContext;
       })()
     : null;
@@ -343,6 +344,11 @@ interface RateWindow {
 }
 
 const socketRates = new WeakMap<WebSocket, RateWindow>();
+
+// The sessionId a socket last acted as — used to close the right daemon's socket
+// on an owner kick. Populated as soon as the socket sends any session-bearing
+// message. ponytail: last-writer-wins; a daemon is one session per socket.
+const socketSession = new WeakMap<WebSocket, string>();
 const webhookRate: RateWindow = { windowStartedAt: 0, count: 0 };
 const httpReadRate: RateWindow = { windowStartedAt: 0, count: 0 };
 
@@ -495,6 +501,11 @@ async function handleMessage(
     return;
   }
   const message: ClientMessage = validated.message;
+
+  const actingSessionId = (message.payload as { sessionId?: unknown }).sessionId;
+  if (typeof actingSessionId === "string") {
+    socketSession.set(socket, actingSessionId);
+  }
 
   try {
     const messageRepoId = repoIdFor(message);
@@ -751,6 +762,34 @@ function broadcast<TType extends ServerMessage["type"]>(
 ): void {
   for (const client of roomClients.get(repoId) ?? []) {
     send(client, { ...message, v: socketVersion(client) });
+  }
+}
+
+// Owner kick: force-end an agent Session over an authenticated HTTP route (never a
+// browser WS message). Reuses the session.end teardown (ends the session, clears
+// filesEditing, releases its edit locks), broadcasts the new Room state, then closes
+// the kicked daemon's socket(s). A clean close lets the daemon's backoff reconnect
+// as a fresh session — kick is an interrupt, not a ban.
+async function kickSession(repoId: string, sessionId: string): Promise<void> {
+  const ops: StateOp[] = [];
+  const state = await withRepo(repoId, async () => {
+    const current = await getState(repoId);
+    applyMessage(
+      current,
+      repoId,
+      clientEnvelope("session.end", { repoId, sessionId }),
+      teeStateStoreOps(ops)
+    );
+    return current;
+  });
+  if (ops.length > 0) {
+    broadcastStateChange(repoId, state, ops);
+    fanout?.publish(repoId);
+  }
+  for (const socket of roomClients.get(repoId) ?? []) {
+    if (socketSession.get(socket) === sessionId) {
+      socket.close(4001, "kicked");
+    }
   }
 }
 

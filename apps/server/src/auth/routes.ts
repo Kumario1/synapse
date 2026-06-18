@@ -45,6 +45,7 @@ export interface AuthContext {
     userToken: string
   ) => Promise<ClaimedRepo[]>;
   readRoomState: (repoId: string) => Promise<unknown>;
+  kickSession: (repoId: string, sessionId: string) => Promise<void>;
 }
 
 export interface RouteResult {
@@ -254,6 +255,27 @@ export async function resolveAuthRoute(
     }
     const state = await ctx.readRoomState(repoId);
     return { status: 200, body: state };
+  }
+
+  // Owner kick: force-end an agent Session in a Project the Owner owns. HTTP only,
+  // cookie-authed, authorized by ownership — never a browser WS message. repoId and
+  // sessionId ride the query string (resolveAuthRoute has no request body).
+  if (method === "POST" && pathname === "/auth/projects/kick") {
+    const owner = requireOwner(cookies, ctx);
+    if (!owner) {
+      return { status: 401, body: { error: "unauthenticated" } };
+    }
+    const repoId = query.get("repoId");
+    const sessionId = query.get("sessionId");
+    if (!repoId || !sessionId) {
+      return { status: 400, body: { error: "missing_params" } };
+    }
+    const project = await ctx.projectStore.getProject(owner.userId, repoId);
+    if (!project) {
+      return { status: 403, body: { error: "not_owner" } };
+    }
+    await ctx.kickSession(repoId, sessionId);
+    return { status: 200, body: { ok: true } };
   }
 
   return { status: 404, body: { error: "not_found" } };
