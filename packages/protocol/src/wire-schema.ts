@@ -110,9 +110,11 @@ const resolutionProposal = z.looseObject({
   conflictClass: z.literal("mechanical"),
   before: signature.nullable(),
   after: signature.nullable(),
-  status: z.enum(["resolving", "resolved"]),
+  status: z.enum(["resolving", "resolved", "voided"]),
   directions: z.array(direction),
   acceptedBy: z.array(z.string().min(1)),
+  voidReason: z.enum(["rejected", "timeout"]).optional(),
+  voidedBy: z.string().optional(),
   createdAt: z.string()
 });
 
@@ -315,7 +317,7 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
       repoId: z.string().min(1),
       sessionId: z.string().min(1),
       proposalId: z.string().min(1),
-      accept: z.literal(true)
+      accept: z.boolean()
     })
   }),
   z.looseObject({
