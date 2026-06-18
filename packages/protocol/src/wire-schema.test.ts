@@ -5,6 +5,7 @@ import {
   createEmptyTeamState,
   PROTOCOL_VERSION,
   type ContractDelta,
+  type ResolutionProposal,
   type StateOp
 } from "./index.js";
 import { parseClientMessage, parseServerMessage } from "./wire-schema.js";
@@ -25,6 +26,34 @@ const validDelta: ContractDelta = {
   dependents: [{ raw: "ts:src/auth/login.ts#login" }],
   createdAt: new Date().toISOString(),
   pushedAt: null
+};
+
+const validProposal: ResolutionProposal = {
+  id: "rp:ts:src/auth/token.ts#validate:alice:bob",
+  repoId: "local",
+  symbol: validDelta.symbolId,
+  conflictClass: "mechanical",
+  before: validDelta.before,
+  after: validDelta.after,
+  status: "resolving",
+  directions: [
+    {
+      sessionId: "alice",
+      role: "keep",
+      summary: "Keep your change to ts:src/auth/token.ts#validate.",
+      affectedSites: []
+    },
+    {
+      sessionId: "bob",
+      role: "adapt",
+      summary: "Update 1 call-site(s) to match ts:src/auth/token.ts#validate's new signature.",
+      affectedSites: [
+        { symbolId: { raw: "ts:src/auth/login.ts#login" }, filePath: "src/auth/login.ts" }
+      ]
+    }
+  ],
+  acceptedBy: [],
+  createdAt: base.ts
 };
 
 test("wire schema literal stays in lockstep with PROTOCOL_VERSION", () => {
@@ -106,6 +135,16 @@ test("accepts every well-formed message type the daemon sends", () => {
         detail: "Decision: keep HMAC project keys."
       }
     },
+    {
+      ...base,
+      type: "resolution.ack",
+      payload: {
+        repoId: "local",
+        sessionId: "alice",
+        proposalId: validProposal.id,
+        accept: true
+      }
+    },
     { ...base, type: "query.briefing", payload: { repoId: "local" } }
   ];
 
@@ -179,6 +218,21 @@ test("accepts valid server snapshots", () => {
     ...base,
     type: "state.snapshot",
     payload: { teamState: createEmptyTeamState("local"), seq: 1 }
+  });
+  assert.equal(result.ok, true, result.ok ? "" : result.error);
+});
+
+test("accepts mediator proposals in server snapshots", () => {
+  const result = parseServerMessage({
+    ...base,
+    type: "state.snapshot",
+    payload: {
+      teamState: {
+        ...createEmptyTeamState("local"),
+        resolutionProposals: [validProposal]
+      },
+      seq: 2
+    }
   });
   assert.equal(result.ok, true, result.ok ? "" : result.error);
 });

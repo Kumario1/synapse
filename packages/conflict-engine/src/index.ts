@@ -368,5 +368,6 @@ export {
   type ResolutionRequest,
   type ResolutionSide
 } from "./explain.js";
+export { affectedSitesFromDelta, buildMechanicalDirections } from "./mediator.js";
 
 export type { Conflict };

@@ -188,6 +188,30 @@ export async function runMcp(rawArgs: string[]): Promise<void> {
   );
 
   server.registerTool(
+    "synapse_resolution",
+    {
+      title: "Surface Synapse Resolution Direction",
+      description:
+        "Surface the pending resolution Direction for this session; pass accept:true to accept.",
+      inputSchema: {
+        port: z.number().int().positive().optional(),
+        accept: z.boolean().optional()
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false
+      }
+    },
+    async (args) =>
+      jsonResult(
+        await daemonPost(args.port ?? defaultPort, "synapse_resolution", {
+          accept: args.accept === true
+        })
+      )
+  );
+
+  server.registerTool(
     "synapse_report",
     {
       title: "Report Synapse Contract Changes",
