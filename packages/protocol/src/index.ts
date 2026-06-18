@@ -17,9 +17,7 @@ export const PROTOCOL_VERSION = 2 as const;
  */
 export const MIN_SUPPORTED_PROTOCOL_VERSION = 1 as const;
 
-export type ProtocolNegotiation =
-  | { ok: true; agreed: number }
-  | { ok: false; reason: string };
+export type ProtocolNegotiation = { ok: true; agreed: number } | { ok: false; reason: string };
 
 /**
  * Negotiate the wire version at connection time (plan M15). The client
@@ -73,12 +71,7 @@ export function deriveProjectKey(masterSecret: string, repoId: string): string {
 
 export type Severity = "none" | "info" | "warn";
 
-export type AgentType =
-  | "claude-code"
-  | "cursor"
-  | "cline"
-  | "aider"
-  | "other";
+export type AgentType = "claude-code" | "cursor" | "cline" | "aider" | "other";
 
 export type SymbolKind =
   | "function"
@@ -278,7 +271,7 @@ export interface Direction {
   affectedSites: AffectedSite[];
 }
 
-export type ResolutionProposalStatus = "resolving" | "resolved";
+export type ResolutionProposalStatus = "resolving" | "resolved" | "voided";
 
 /**
  * A coordinated, two-phase proposal to resolve a contested symbol. Transient
@@ -298,6 +291,10 @@ export interface ResolutionProposal {
   directions: Direction[];
   /** sessionIds that have accepted. status flips to "resolved" when both have. */
   acceptedBy: string[];
+  /** Why the pair was voided (reject or TTL). Absent until voided. */
+  voidReason?: "rejected" | "timeout";
+  /** The session whose reject voided the pair (reject only). */
+  voidedBy?: string;
   createdAt: string;
 }
 
@@ -794,10 +791,7 @@ export type ClientMessage =
         detail?: string;
       }
     >
-  | WireEnvelope<
-      "resolution.propose",
-      { repoId: string; resolution: ContractResolution }
-    >
+  | WireEnvelope<"resolution.propose", { repoId: string; resolution: ContractResolution }>
   | WireEnvelope<
       "resolution.ack",
       { repoId: string; sessionId: string; proposalId: string; accept: true }
@@ -831,11 +825,7 @@ export function applyStateOp(teamState: TeamState, op: StateOp): void {
       upsertBy(teamState.sessions, op.session, (session) => session.id);
       return;
     case "upsertEditLock":
-      upsertBy(
-        teamState.editLocks,
-        op.lock,
-        (lock) => `${lock.sessionId}\0${lock.symbolId.raw}`
-      );
+      upsertBy(teamState.editLocks, op.lock, (lock) => `${lock.sessionId}\0${lock.symbolId.raw}`);
       return;
     case "deleteEditLock":
       teamState.editLocks = teamState.editLocks.filter(
@@ -849,7 +839,9 @@ export function applyStateOp(teamState: TeamState, op: StateOp): void {
       upsertBy(teamState.unpushedDeltas, op.delta, (delta) => delta.id);
       return;
     case "deleteDelta":
-      teamState.unpushedDeltas = teamState.unpushedDeltas.filter((delta) => delta.id !== op.deltaId);
+      teamState.unpushedDeltas = teamState.unpushedDeltas.filter(
+        (delta) => delta.id !== op.deltaId
+      );
       return;
     case "appendPush":
       teamState.recentPushes = prependCapped(
@@ -879,9 +871,7 @@ export function applyStateOp(teamState: TeamState, op: StateOp): void {
       return;
     case "appendSummary":
       teamState.sessionSummaries = prependCapped(
-        teamState.sessionSummaries.filter(
-          (summary) => summary.sessionId !== op.summary.sessionId
-        ),
+        teamState.sessionSummaries.filter((summary) => summary.sessionId !== op.summary.sessionId),
         op.summary,
         op.cap
       );

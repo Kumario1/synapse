@@ -187,7 +187,11 @@ test("rejects malformed messages with a path-bearing error", () => {
       label: "repo event detail over the 2000-char cap"
     },
     {
-      value: { ...base, type: "contract.delta", payload: { delta: { ...validDelta, symbolId: {} } } },
+      value: {
+        ...base,
+        type: "contract.delta",
+        payload: { delta: { ...validDelta, symbolId: {} } }
+      },
       label: "delta without a symbol id"
     },
     {
@@ -232,6 +236,41 @@ test("accepts mediator proposals in server snapshots", () => {
         resolutionProposals: [validProposal]
       },
       seq: 2
+    }
+  });
+  assert.equal(result.ok, true, result.ok ? "" : result.error);
+});
+
+test("accepts a resolution.ack with accept: false (reject)", () => {
+  const result = parseClientMessage({
+    ...base,
+    type: "resolution.ack",
+    payload: {
+      repoId: "local",
+      sessionId: "bob",
+      proposalId: validProposal.id,
+      accept: false
+    }
+  });
+  assert.equal(result.ok, true, result.ok ? "" : result.error);
+});
+
+test("accepts a voided proposal in server snapshots", () => {
+  const voidedProposal: ResolutionProposal = {
+    ...validProposal,
+    status: "voided",
+    voidReason: "rejected",
+    voidedBy: "bob"
+  };
+  const result = parseServerMessage({
+    ...base,
+    type: "state.snapshot",
+    payload: {
+      teamState: {
+        ...createEmptyTeamState("local"),
+        resolutionProposals: [voidedProposal]
+      },
+      seq: 3
     }
   });
   assert.equal(result.ok, true, result.ok ? "" : result.error);

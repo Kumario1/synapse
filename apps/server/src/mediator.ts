@@ -1,5 +1,6 @@
 import { buildMechanicalDirections } from "@synapse/conflict-engine";
-import type { ResolutionProposal, TeamState } from "@synapse/protocol";
+import type { ConflictFeedback, ResolutionProposal, TeamState } from "@synapse/protocol";
+import { randomUUID } from "node:crypto";
 
 /** Deterministic proposal id for a contested pair, so we do not double-propose. */
 export function proposalId(
@@ -59,7 +60,7 @@ export function applyResolutionAck(
   sessionId: string
 ): boolean {
   const proposal = state.resolutionProposals?.find((candidate) => candidate.id === proposalId);
-  if (!proposal || proposal.status === "resolved") {
+  if (!proposal || proposal.status !== "resolving") {
     return false;
   }
   if (!proposal.directions.some((direction) => direction.sessionId === sessionId)) {
@@ -76,5 +77,63 @@ export function applyResolutionAck(
   if (allAccepted) {
     proposal.status = "resolved";
   }
+  return true;
+}
+
+export interface RejectResult {
+  changed: boolean;
+  feedback?: ConflictFeedback;
+}
+
+/**
+ * Record a reject from one party. Voids the coordinated pair (terminal) and
+ * returns conflict feedback (dismiss) for the caller to persist. No-op unless
+ * the proposal is still `resolving` and the rejecter is a party.
+ */
+export function applyResolutionReject(
+  state: TeamState,
+  proposalId: string,
+  sessionId: string,
+  now: () => string = () => new Date().toISOString()
+): RejectResult {
+  const proposal = state.resolutionProposals?.find((p) => p.id === proposalId);
+  if (!proposal || proposal.status !== "resolving") {
+    return { changed: false };
+  }
+  if (!proposal.directions.some((d) => d.sessionId === sessionId)) {
+    return { changed: false };
+  }
+  proposal.status = "voided";
+  proposal.voidReason = "rejected";
+  proposal.voidedBy = sessionId;
+  const feedback: ConflictFeedback = {
+    id: randomUUID(),
+    repoId: state.repoId,
+    conflictId: proposal.id,
+    sessionId,
+    memberId: sessionId,
+    outcome: "dismissed",
+    targetSymbol: proposal.symbol,
+    createdAt: now()
+  };
+  return { changed: true, feedback };
+}
+
+/**
+ * Void a proposal whose TTL elapsed before both sides accepted. Terminal.
+ * No-op unless the proposal is still `resolving`.
+ */
+export function voidOnTimeout(
+  state: TeamState,
+  proposalId: string,
+  now: () => string = () => new Date().toISOString()
+): boolean {
+  const proposal = state.resolutionProposals?.find((p) => p.id === proposalId);
+  if (!proposal || proposal.status !== "resolving") {
+    return false;
+  }
+  proposal.status = "voided";
+  proposal.voidReason = "timeout";
+  void now;
   return true;
 }
