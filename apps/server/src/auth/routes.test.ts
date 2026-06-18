@@ -20,17 +20,17 @@ const installRepos: ClaimedRepo[] = [
   { fullName: "o/r2", pushAccess: false }
 ];
 
-async function makeCtx(
-  overrides: Partial<AuthContext> = {}
-): Promise<{
+async function makeCtx(overrides: Partial<AuthContext> = {}): Promise<{
   ctx: AuthContext;
   projectStore: ProjectStore;
   kicked: Array<[string, string]>;
+  picked: Array<[string, string, string]>;
   close: () => Promise<void>;
 }> {
   const userStore = await createUserStore({ path: ":memory:" });
   const projectStore = await createProjectStore({ path: ":memory:" });
   const kicked: Array<[string, string]> = [];
+  const picked: Array<[string, string, string]> = [];
   const ctx: AuthContext = {
     creds: { clientId: "Iv1.fakeclient", clientSecret: "fake-client-secret" },
     sessionKey,
@@ -54,12 +54,16 @@ async function makeCtx(
     kickSession: async (repoId: string, sessionId: string) => {
       kicked.push([repoId, sessionId]);
     },
+    pickResolutionWinner: async (repoId: string, proposalId: string, winnerSessionId: string) => {
+      picked.push([repoId, proposalId, winnerSessionId]);
+    },
     ...overrides
   };
   return {
     ctx,
     projectStore,
     kicked,
+    picked,
     close: async () => {
       await userStore.close();
       await projectStore.close();
@@ -566,6 +570,102 @@ test("POST /auth/projects/kick is 400 without a sessionId", async () => {
     assert.equal(result?.status, 400);
     assert.deepEqual(result?.body, { error: "missing_params" });
     assert.deepEqual(kicked, []);
+  } finally {
+    await close();
+  }
+});
+
+test("POST /auth/projects/resolve-winner lets an Owner pick a winner in a claimed repo", async () => {
+  const { ctx, picked, close } = await makeCtx();
+  try {
+    const session = signSession("42", sessionKey);
+    const state = await freshInstallState(ctx, session);
+    await resolveAuthRoute(
+      "GET",
+      "/auth/github/setup",
+      new URLSearchParams({ installation_id: "1", code: "c", state }),
+      { [SESSION_COOKIE]: session, synapse_install_state: state },
+      ctx
+    );
+
+    const result = await resolveAuthRoute(
+      "POST",
+      "/auth/projects/resolve-winner",
+      new URLSearchParams({
+        repoId: "o/r1",
+        proposalId: "rp:ts:a.ts#f:alice:bob",
+        winnerSessionId: "alice"
+      }),
+      { [SESSION_COOKIE]: session },
+      ctx
+    );
+    assert.equal(result?.status, 200);
+    assert.deepEqual(result?.body, { ok: true });
+    assert.deepEqual(picked, [["o/r1", "rp:ts:a.ts#f:alice:bob", "alice"]]);
+  } finally {
+    await close();
+  }
+});
+
+test("POST /auth/projects/resolve-winner denies a non-owner and does not pick", async () => {
+  const { ctx, picked, close } = await makeCtx();
+  try {
+    const session = signSession("99", sessionKey);
+    const result = await resolveAuthRoute(
+      "POST",
+      "/auth/projects/resolve-winner",
+      new URLSearchParams({
+        repoId: "o/r1",
+        proposalId: "rp:ts:a.ts#f:alice:bob",
+        winnerSessionId: "alice"
+      }),
+      { [SESSION_COOKIE]: session },
+      ctx
+    );
+    assert.equal(result?.status, 403);
+    assert.deepEqual(result?.body, { error: "not_owner" });
+    assert.deepEqual(picked, []);
+  } finally {
+    await close();
+  }
+});
+
+test("POST /auth/projects/resolve-winner is 401 without a session and does not pick", async () => {
+  const { ctx, picked, close } = await makeCtx();
+  try {
+    const result = await resolveAuthRoute(
+      "POST",
+      "/auth/projects/resolve-winner",
+      new URLSearchParams({
+        repoId: "o/r1",
+        proposalId: "rp:ts:a.ts#f:alice:bob",
+        winnerSessionId: "alice"
+      }),
+      {},
+      ctx
+    );
+    assert.equal(result?.status, 401);
+    assert.deepEqual(result?.body, { error: "unauthenticated" });
+    assert.deepEqual(picked, []);
+  } finally {
+    await close();
+  }
+});
+
+test("POST /auth/projects/resolve-winner is 400 without winner params", async () => {
+  const { ctx, picked, close } = await makeCtx();
+  try {
+    const session = signSession("42", sessionKey);
+    const result = await resolveAuthRoute(
+      "POST",
+      "/auth/projects/resolve-winner",
+      new URLSearchParams({ repoId: "o/r1", proposalId: "rp:ts:a.ts#f:alice:bob" }),
+      { [SESSION_COOKIE]: session },
+      ctx
+    );
+    assert.equal(result?.status, 400);
+    assert.deepEqual(result?.body, { error: "missing_params" });
+    assert.deepEqual(picked, []);
   } finally {
     await close();
   }

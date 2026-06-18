@@ -1,4 +1,4 @@
-import { buildMechanicalDirections } from "@synapse/conflict-engine";
+import { buildMechanicalDirections, classifyCollision } from "@synapse/conflict-engine";
 import type { ConflictFeedback, ResolutionProposal, TeamState } from "@synapse/protocol";
 import { randomUUID } from "node:crypto";
 
@@ -13,7 +13,7 @@ export function proposalId(
 
 /**
  * Called at the contested moment. Finds the keep-side delta in unpushedDeltas,
- * builds a mechanical proposal, stores it transiently, and returns it.
+ * classifies the collision, stores a transient proposal, and returns it.
  */
 export function proposeOnContest(
   state: TeamState,
@@ -34,20 +34,64 @@ export function proposeOnContest(
     return null;
   }
 
+  const adaptDelta = state.unpushedDeltas.find(
+    (delta) => delta.symbolId.raw === symbolRaw && delta.sessionId === adaptSessionId
+  );
+  const conflictClass = classifyCollision(keepDelta, adaptDelta);
   const proposal: ResolutionProposal = {
     id,
     repoId: state.repoId,
     symbol: keepDelta.symbolId,
-    conflictClass: "mechanical",
+    conflictClass,
     before: keepDelta.before,
-    after: keepDelta.after,
-    status: "resolving",
-    directions: buildMechanicalDirections(keepDelta.sessionId, adaptSessionId, keepDelta),
+    after: conflictClass === "mechanical" ? keepDelta.after : null,
+    status: conflictClass === "mechanical" ? "resolving" : "awaiting_owner",
+    directions:
+      conflictClass === "mechanical"
+        ? buildMechanicalDirections(keepDelta.sessionId, adaptSessionId, keepDelta)
+        : [],
+    candidates: conflictClass === "semantic" ? [keepDelta.sessionId, adaptSessionId] : undefined,
     acceptedBy: [],
     createdAt: now()
   };
   state.resolutionProposals = [...proposals, proposal];
   return proposal;
+}
+
+/**
+ * The Owner picks the winner of a semantic conflict. The winner keeps its
+ * signature; the loser adapts to it using the deterministic call-site list.
+ */
+export function applyWinnerChoice(
+  state: TeamState,
+  proposalId: string,
+  winnerSessionId: string
+): boolean {
+  const proposal = state.resolutionProposals?.find((candidate) => candidate.id === proposalId);
+  if (!proposal || proposal.status !== "awaiting_owner") {
+    return false;
+  }
+  if (!proposal.candidates?.includes(winnerSessionId)) {
+    return false;
+  }
+
+  const loserSessionId = proposal.candidates.find((sessionId) => sessionId !== winnerSessionId);
+  if (!loserSessionId) {
+    return false;
+  }
+
+  const winnerDelta = state.unpushedDeltas.find(
+    (delta) => delta.symbolId.raw === proposal.symbol.raw && delta.sessionId === winnerSessionId
+  );
+  if (!winnerDelta) {
+    return false;
+  }
+
+  proposal.directions = buildMechanicalDirections(winnerSessionId, loserSessionId, winnerDelta);
+  proposal.after = winnerDelta.after;
+  proposal.status = "resolving";
+  proposal.candidates = undefined;
+  return true;
 }
 
 /**
