@@ -4,6 +4,7 @@ import { createEmptyTeamState, type ContractDelta, type TeamState } from "@synap
 import {
   applyResolutionAck,
   applyResolutionReject,
+  applyWinnerChoice,
   proposeOnContest,
   voidOnTimeout
 } from "./mediator.js";
@@ -34,13 +35,42 @@ function stateWithKeepDelta(): TeamState {
   return state;
 }
 
+function stateWithDivergentDeltas(): TeamState {
+  const state = stateWithKeepDelta();
+  state.unpushedDeltas = [
+    state.unpushedDeltas[0],
+    {
+      id: "delta-2",
+      repoId: "local",
+      sessionId: "bob",
+      symbolId: symbol,
+      changeKind: "signature_changed",
+      before: { params: [], returns: "User", raw: "() => User" },
+      after: {
+        params: [{ name: "strict", type: "boolean", optional: false }],
+        returns: "User",
+        raw: "(strict: boolean) => User"
+      },
+      summary: "getUser requires strict mode",
+      filePath: "src/auth/token.ts",
+      baseSha: "abc123",
+      dependents: [],
+      createdAt: "2026-06-17T00:01:00.000Z",
+      pushedAt: null
+    } satisfies ContractDelta
+  ];
+  return state;
+}
+
 test("proposeOnContest stores one mechanical keep/adapt proposal", () => {
   const state = stateWithKeepDelta();
   const proposal = proposeOnContest(state, symbol.raw, "bob", () => "2026-06-17T01:00:00.000Z");
 
   assert.ok(proposal);
   assert.equal(state.resolutionProposals?.length, 1);
+  assert.equal(proposal.conflictClass, "mechanical");
   assert.equal(proposal.status, "resolving");
+  assert.equal(proposal.candidates, undefined);
   assert.equal(proposal.repoId, "local");
   assert.equal(proposal.symbol.raw, symbol.raw);
   assert.deepEqual(proposal.before, state.unpushedDeltas[0].before);
@@ -60,6 +90,81 @@ test("proposeOnContest stores one mechanical keep/adapt proposal", () => {
       }
     ]
   );
+});
+
+test("proposeOnContest escalates divergent deltas to an owner decision", () => {
+  const state = stateWithDivergentDeltas();
+  const proposal = proposeOnContest(state, symbol.raw, "bob", () => "2026-06-17T01:00:00.000Z");
+
+  assert.ok(proposal);
+  assert.equal(proposal.conflictClass, "semantic");
+  assert.equal(proposal.status, "awaiting_owner");
+  assert.deepEqual(proposal.directions, []);
+  assert.deepEqual(proposal.candidates, ["alice", "bob"]);
+  assert.deepEqual(proposal.before, state.unpushedDeltas[0].before);
+  assert.equal(proposal.after, null);
+});
+
+test("applyWinnerChoice moves a semantic proposal to resolving with keep/adapt roles", () => {
+  const state = stateWithDivergentDeltas();
+  const proposal = proposeOnContest(state, symbol.raw, "bob");
+  assert.ok(proposal);
+  const aliceDelta = state.unpushedDeltas[0];
+
+  assert.equal(applyWinnerChoice(state, proposal.id, "alice"), true);
+  assert.equal(proposal.status, "resolving");
+  assert.equal(proposal.candidates, undefined);
+  assert.strictEqual(proposal.after, aliceDelta.after);
+  assert.deepEqual(
+    proposal.directions.map((direction) => ({
+      sessionId: direction.sessionId,
+      role: direction.role,
+      affectedSites: direction.affectedSites
+    })),
+    [
+      { sessionId: "alice", role: "keep", affectedSites: [] },
+      {
+        sessionId: "bob",
+        role: "adapt",
+        affectedSites: [{ symbolId: dependent, filePath: "src/routes/me.ts" }]
+      }
+    ]
+  );
+  assert.equal(applyWinnerChoice(state, proposal.id, "alice"), false);
+});
+
+test("applyWinnerChoice ignores sessions that are not candidates", () => {
+  const state = stateWithDivergentDeltas();
+  const proposal = proposeOnContest(state, symbol.raw, "bob");
+  assert.ok(proposal);
+
+  assert.equal(applyWinnerChoice(state, proposal.id, "mallory"), false);
+  assert.equal(proposal.status, "awaiting_owner");
+  assert.deepEqual(proposal.directions, []);
+  assert.deepEqual(proposal.candidates, ["alice", "bob"]);
+  assert.equal(proposal.after, null);
+});
+
+test("applyResolutionAck does not resolve a semantic proposal before owner choice", () => {
+  const state = stateWithDivergentDeltas();
+  const proposal = proposeOnContest(state, symbol.raw, "bob");
+  assert.ok(proposal);
+
+  assert.equal(applyResolutionAck(state, proposal.id, "alice"), false);
+  assert.deepEqual(proposal.acceptedBy, []);
+  assert.equal(proposal.status, "awaiting_owner");
+});
+
+test("post-pick acks resolve through the existing resolving phase", () => {
+  const state = stateWithDivergentDeltas();
+  const proposal = proposeOnContest(state, symbol.raw, "bob");
+  assert.ok(proposal);
+  assert.equal(applyWinnerChoice(state, proposal.id, "alice"), true);
+
+  assert.equal(applyResolutionAck(state, proposal.id, "alice"), true);
+  assert.equal(proposal.status, "resolving");
+  assert.equal(applyResolutionAck(state, proposal.id, "bob"), true);
+  assert.equal(proposal.status, "resolved");
 });
 
 test("proposeOnContest is idempotent for the same pair", () => {

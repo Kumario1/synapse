@@ -43,6 +43,7 @@ import { createStateStore, type StateStoreOps } from "./store.js";
 import {
   applyResolutionAck,
   applyResolutionReject,
+  applyWinnerChoice,
   proposeOnContest,
   voidOnTimeout
 } from "./mediator.js";
@@ -109,7 +110,19 @@ const authContext: AuthContext | null =
           listInstallationReposForUser: (installationId, userToken) =>
             listInstallationReposForUser(installationId, userToken),
           readRoomState: (repoId: string) => withRepo(repoId, () => getState(repoId)),
-          kickSession: (repoId: string, sessionId: string) => kickSession(repoId, sessionId)
+          kickSession: (repoId: string, sessionId: string) => kickSession(repoId, sessionId),
+          pickResolutionWinner: (repoId, proposalId, winnerSessionId) =>
+            withRepo(repoId, async () => {
+              const state = await getState(repoId);
+              const changed = applyWinnerChoice(state, proposalId, winnerSessionId);
+              if (changed) {
+                broadcast(
+                  repoId,
+                  envelope("state.snapshot", { teamState: state, seq: bumpRepoSeq(repoId) })
+                );
+                scheduleResolutionTimeout(repoId, proposalId);
+              }
+            }).then(() => undefined)
         } satisfies AuthContext;
       })()
     : null;
@@ -575,6 +588,7 @@ async function handleMessage(
     const ops: StateOp[] = [];
     let ackLocks: EditLock[] | undefined;
     let proposedId: string | undefined;
+    let proposedStatus: "resolving" | "resolved" | "voided" | "awaiting_owner" | undefined;
     const state = await withRepo(repoId, async () => {
       const current = await getState(repoId);
       applyMessage(current, repoId, message, teeStateStoreOps(ops));
@@ -592,6 +606,7 @@ async function handleMessage(
             message.payload.sessionId
           );
           proposedId = proposal?.id;
+          proposedStatus = proposal?.status;
         }
       }
       return current;
@@ -616,7 +631,9 @@ async function handleMessage(
           seq: bumpRepoSeq(repoId)
         })
       );
-      scheduleResolutionTimeout(repoId, proposedId);
+      if (proposedStatus === "resolving") {
+        scheduleResolutionTimeout(repoId, proposedId);
+      }
     }
   } catch (error) {
     const reason = error instanceof Error ? error.message : "unknown_error";

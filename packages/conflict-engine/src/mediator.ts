@@ -1,4 +1,24 @@
 import type { AffectedSite, ContractDelta, Direction, SymbolId } from "@synapse/protocol";
+import { compareSignatures } from "./compare.js";
+
+export type ConflictClass = "mechanical" | "semantic";
+
+/**
+ * Deterministic classification of a contested symbol. Semantic means both sides
+ * changed the contract to mutually exclusive signatures; otherwise the loser
+ * can mechanically adapt to the keep side's call-site list.
+ */
+export function classifyCollision(
+  keepDelta: ContractDelta,
+  adaptDelta: ContractDelta | undefined
+): ConflictClass {
+  if (!adaptDelta) {
+    return "mechanical";
+  }
+
+  const comparison = compareSignatures(keepDelta.after, adaptDelta.after);
+  return comparison.compatibility === "identical" ? "mechanical" : "semantic";
+}
 
 /** Call-sites a contesting side must update = the keep delta's dependents. */
 export function affectedSitesFromDelta(keepDelta: ContractDelta): AffectedSite[] {

@@ -46,6 +46,11 @@ export interface AuthContext {
   ) => Promise<ClaimedRepo[]>;
   readRoomState: (repoId: string) => Promise<unknown>;
   kickSession: (repoId: string, sessionId: string) => Promise<void>;
+  pickResolutionWinner: (
+    repoId: string,
+    proposalId: string,
+    winnerSessionId: string
+  ) => Promise<void>;
 }
 
 export interface RouteResult {
@@ -275,6 +280,25 @@ export async function resolveAuthRoute(
       return { status: 403, body: { error: "not_owner" } };
     }
     await ctx.kickSession(repoId, sessionId);
+    return { status: 200, body: { ok: true } };
+  }
+
+  if (method === "POST" && pathname === "/auth/projects/resolve-winner") {
+    const owner = requireOwner(cookies, ctx);
+    if (!owner) {
+      return { status: 401, body: { error: "unauthenticated" } };
+    }
+    const repoId = query.get("repoId");
+    const proposalId = query.get("proposalId");
+    const winnerSessionId = query.get("winnerSessionId");
+    if (!repoId || !proposalId || !winnerSessionId) {
+      return { status: 400, body: { error: "missing_params" } };
+    }
+    const project = await ctx.projectStore.getProject(owner.userId, repoId);
+    if (!project) {
+      return { status: 403, body: { error: "not_owner" } };
+    }
+    await ctx.pickResolutionWinner(repoId, proposalId, winnerSessionId);
     return { status: 200, body: { ok: true } };
   }
 

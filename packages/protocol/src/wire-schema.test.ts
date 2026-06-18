@@ -241,6 +241,29 @@ test("accepts mediator proposals in server snapshots", () => {
   assert.equal(result.ok, true, result.ok ? "" : result.error);
 });
 
+test("accepts semantic mediator proposals awaiting owner choice", () => {
+  const semanticProposal: ResolutionProposal = {
+    ...validProposal,
+    conflictClass: "semantic",
+    after: null,
+    status: "awaiting_owner",
+    directions: [],
+    candidates: ["alice", "bob"]
+  };
+  const result = parseServerMessage({
+    ...base,
+    type: "state.snapshot",
+    payload: {
+      teamState: {
+        ...createEmptyTeamState("local"),
+        resolutionProposals: [semanticProposal]
+      },
+      seq: 3
+    }
+  });
+  assert.equal(result.ok, true, result.ok ? "" : result.error);
+});
+
 test("accepts a resolution.ack with accept: false (reject)", () => {
   const result = parseClientMessage({
     ...base,

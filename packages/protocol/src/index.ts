@@ -271,22 +271,25 @@ export interface Direction {
   affectedSites: AffectedSite[];
 }
 
-export type ResolutionProposalStatus = "resolving" | "resolved" | "voided";
+export type ResolutionProposalStatus = "resolving" | "resolved" | "voided" | "awaiting_owner";
 
 /**
  * A coordinated, two-phase proposal to resolve a contested symbol. Transient
  * (not persisted): it lives in TeamState while a pair is being reconciled and
- * is broadcast in state.snapshot. Tracer scope: mechanical class + happy path.
+ * is broadcast in state.snapshot. Mechanical conflicts move directly to
+ * resolving; semantic conflicts wait for the Owner to choose the winning side.
  */
 export interface ResolutionProposal {
   /** Deterministic id, stable for the same contested pair: see mediator. */
   id: string;
   repoId: string;
   symbol: SymbolId;
-  conflictClass: "mechanical";
+  conflictClass: "mechanical" | "semantic";
   before: Signature | null;
   after: Signature | null;
   status: ResolutionProposalStatus;
+  /** The two contesting sessionIds awaiting the Owner's winner choice (semantic only). */
+  candidates?: string[];
   /** One Direction per side (keep + adapt). */
   directions: Direction[];
   /** sessionIds that have accepted. status flips to "resolved" when both have. */
