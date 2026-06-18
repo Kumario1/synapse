@@ -60,6 +60,7 @@ try {
       "synapse_pr_brief",
       "synapse_push",
       "synapse_report",
+      "synapse_resolution",
       "synapse_session",
       "synapse_whatsup",
       "synapse_why"
@@ -81,6 +82,14 @@ try {
     resources.resources.every((resource) => resource.mimeType === "application/json"),
     "Synapse context resources should be JSON"
   );
+
+  const resolution = await callJson(client, "synapse_resolution", {
+    port: bobPort
+  });
+  assert.equal(resolution.ok, true);
+  assert.equal(resolution.proposalId, null);
+  assert.equal(resolution.direction, null);
+  assert.equal(resolution.degraded, false);
 
   const session = await callJson(client, "synapse_session", {
     port: bobPort,

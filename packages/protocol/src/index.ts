@@ -260,6 +260,47 @@ export interface ContractResolution extends ProposedResolution {
   createdAt: string;
 }
 
+/** A downstream call-site that must be updated to match a contract change. */
+export interface AffectedSite {
+  symbolId: SymbolId;
+  filePath: string;
+}
+
+export type ResolutionRole = "keep" | "adapt";
+
+/** One side's scoped direction in a coordinated resolution. */
+export interface Direction {
+  sessionId: string;
+  role: ResolutionRole;
+  /** Templated, deterministic prose (no LLM in this slice). */
+  summary: string;
+  /** For an "adapt" role: the call-sites to update. Empty for "keep". */
+  affectedSites: AffectedSite[];
+}
+
+export type ResolutionProposalStatus = "resolving" | "resolved";
+
+/**
+ * A coordinated, two-phase proposal to resolve a contested symbol. Transient
+ * (not persisted): it lives in TeamState while a pair is being reconciled and
+ * is broadcast in state.snapshot. Tracer scope: mechanical class + happy path.
+ */
+export interface ResolutionProposal {
+  /** Deterministic id, stable for the same contested pair: see mediator. */
+  id: string;
+  repoId: string;
+  symbol: SymbolId;
+  conflictClass: "mechanical";
+  before: Signature | null;
+  after: Signature | null;
+  status: ResolutionProposalStatus;
+  /** One Direction per side (keep + adapt). */
+  directions: Direction[];
+  /** sessionIds that have accepted. status flips to "resolved" when both have. */
+  acceptedBy: string[];
+  createdAt: string;
+}
+
 export type ContractDeltaSummary = Pick<
   ContractDelta,
   "id" | "symbolId" | "changeKind" | "summary" | "filePath" | "createdAt"
@@ -380,6 +421,8 @@ export interface TeamState {
   recentRepoEvents: RecentRepoEvent[];
   /** Canonical, shared contract resolutions, keyed by symbol + inputsHash. */
   resolutions: ContractResolution[];
+  /** Transient two-phase mediator proposals, broadcast in snapshots only. */
+  resolutionProposals?: ResolutionProposal[];
   /** Narrative summaries of ended sessions (most recent first). */
   sessionSummaries: SessionSummary[];
   /** Explicit warning feedback, most recent first, used later for threshold tuning. */
@@ -755,6 +798,10 @@ export type ClientMessage =
       "resolution.propose",
       { repoId: string; resolution: ContractResolution }
     >
+  | WireEnvelope<
+      "resolution.ack",
+      { repoId: string; sessionId: string; proposalId: string; accept: true }
+    >
   | WireEnvelope<"session.summary", { repoId: string; summary: SessionSummary }>
   | WireEnvelope<"conflict.feedback", { repoId: string; feedback: ConflictFeedback }>
   | WireEnvelope<"query.briefing", { repoId: string; since?: string }>;
@@ -878,6 +925,7 @@ export function createEmptyTeamState(repoId: string): TeamState {
     recentPushes: [],
     recentRepoEvents: [],
     resolutions: [],
+    resolutionProposals: [],
     sessionSummaries: [],
     conflictFeedback: []
   };
