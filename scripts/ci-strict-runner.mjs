@@ -53,6 +53,7 @@ export const groups = {
     command("node", "scripts/verify-whatsup.mjs"),
     command("node", "scripts/verify-why.mjs"),
     command("node", "scripts/verify-atomic-intent.mjs"),
+    command("node", "scripts/verify-mediator.mjs"),
     command("node", "scripts/verify-delta-broadcast.mjs"),
     command("node", "scripts/verify-protocol-compat.mjs"),
     command("node", "scripts/verify-pr-brief.mjs"),
