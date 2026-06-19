@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createEmptyTeamState, type RecallMatch, type TeamState } from "@synapse/protocol";
-import { buildOnboardResponse, mergeRecallIntoOnboard, recentWhySources } from "./briefings.js";
+import {
+  buildOnboardResponse,
+  buildWhatsupResponse,
+  mergeRecallIntoOnboard,
+  recentWhySources,
+  sessionStartBriefing
+} from "./briefings.js";
 
 const now = "2026-06-11T00:00:00.000Z";
 const later = "2026-06-11T01:00:00.000Z";
@@ -76,6 +82,56 @@ test("recall can answer for a room whose lexical floor is empty", () => {
   assert.ok(!merged.briefing.includes("No recorded team history yet"));
 });
 
+test("session start surfaces teammate live edit regions and excludes self", () => {
+  const state = createEmptyTeamState("local");
+  state.sessions.push(session("alice"), session("bob"));
+  state.editLocks.push(
+    lock("alice", "ts:src/auth/token.ts#validate", "src/auth/token.ts"),
+    lock("bob", "ts:src/util/other.ts#foo", "src/util/other.ts")
+  );
+
+  const context = sessionStartBriefing(buildWhatsupResponse(state, { degraded: false }), "bob");
+
+  assert.ok(context?.includes("Teammates' live edit regions:"));
+  assert.ok(context?.includes("alice: ts:src/auth/token.ts#validate in src/auth/token.ts"));
+  assert.ok(!context?.includes("bob: ts:src/util/other.ts#foo"));
+});
+
+test("whatsup omits expired locks and locks held by inactive sessions", () => {
+  const state = createEmptyTeamState("local");
+  state.sessions.push(
+    session("alice"),
+    session("bob"),
+    session("carol"),
+    session("mallory", "idle"),
+    session("eve", "ended")
+  );
+  state.editLocks.push(
+    lock("alice", "ts:src/auth/token.ts#validate", "src/auth/token.ts"),
+    lock("carol", "ts:src/stale.ts#old", "src/stale.ts", "1970-01-01T00:00:00.000Z", 1),
+    lock("mallory", "ts:src/idle.ts#paused", "src/idle.ts"),
+    lock("eve", "ts:src/ended.ts#done", "src/ended.ts")
+  );
+
+  const briefing = buildWhatsupResponse(state, { degraded: false });
+
+  assert.deepEqual(
+    briefing.editLocks.map((editLock) => editLock.symbolId.raw),
+    ["ts:src/auth/token.ts#validate"]
+  );
+  assert.ok(briefing.summary.some((line) => line === "1 active edit lock"));
+});
+
+test("session start stays silent when there are no teammate live edit regions", () => {
+  const state = createEmptyTeamState("local");
+  state.sessions.push(session("bob"));
+  state.editLocks.push(lock("bob", "ts:src/util/other.ts#foo", "src/util/other.ts"));
+
+  const context = sessionStartBriefing(buildWhatsupResponse(state, { degraded: false }), "bob");
+
+  assert.equal(context, null);
+});
+
 function recallMatch(title: string): RecallMatch {
   return {
     kind: "session_summary",
@@ -84,6 +140,41 @@ function recallMatch(title: string): RecallMatch {
     reference: `ref-${title}`,
     createdAt: now,
     score: 0.9
+  };
+}
+
+function session(
+  id: string,
+  status: "active" | "idle" | "ended" = "active"
+): TeamState["sessions"][number] {
+  return {
+    id,
+    repoId: "local",
+    memberId: id,
+    memberLogin: id,
+    agentType: "other",
+    filesOpen: [],
+    filesEditing: [],
+    lastTask: null,
+    startedAt: now,
+    lastSeen: later,
+    status
+  };
+}
+
+function lock(
+  sessionId: string,
+  symbolRaw: string,
+  filePath: string,
+  acquiredAt = new Date().toISOString(),
+  ttlSec = 90
+): TeamState["editLocks"][number] {
+  return {
+    sessionId,
+    symbolId: { raw: symbolRaw },
+    filePath,
+    acquiredAt,
+    ttlSec
   };
 }
 
