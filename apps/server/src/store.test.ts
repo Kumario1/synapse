@@ -74,8 +74,18 @@ for (const backend of backends) {
     // A realistic sequence: session joins, takes a lock, reports a delta,
     // a push lands (clearing live state), a summary and feedback arrive.
     applyMessage(state, repoId, sessionStart(repoId, "alice"), handle.store);
-    applyMessage(state, repoId, editIntent(repoId, "alice", "ts:src/a.ts#f", "src/a.ts"), handle.store);
-    applyMessage(state, repoId, contractDelta(repoId, "alice", "d1", "ts:src/a.ts#f", "src/a.ts"), handle.store);
+    applyMessage(
+      state,
+      repoId,
+      editIntent(repoId, "alice", "ts:src/a.ts#f", "src/a.ts"),
+      handle.store
+    );
+    applyMessage(
+      state,
+      repoId,
+      contractDelta(repoId, "alice", "d1", "ts:src/a.ts#f", "src/a.ts"),
+      handle.store
+    );
     applyMessage(state, repoId, pushNotify(repoId, "bob", ["src/other.ts"]), handle.store);
     applyMessage(state, repoId, summaryMessage(repoId, "alice"), handle.store);
     applyMessage(state, repoId, feedbackMessage(repoId, "f1"), handle.store);
@@ -137,7 +147,11 @@ for (const backend of backends) {
     assert.ok(loaded);
     assert.equal(loaded.recentPushes.length, 50);
     assert.deepEqual(loaded.recentPushes, state.recentPushes, "cap kept the same 50, same order");
-    assert.deepEqual(loaded.conflictFeedback, state.conflictFeedback, "retry replaced and moved front");
+    assert.deepEqual(
+      loaded.conflictFeedback,
+      state.conflictFeedback,
+      "retry replaced and moved front"
+    );
     await handle.store.close();
     await handle.cleanup();
   });
@@ -148,7 +162,12 @@ for (const backend of backends) {
     const state = createEmptyTeamState(repoId);
 
     applyMessage(state, repoId, sessionStart(repoId, "alice"), handle.store);
-    applyMessage(state, repoId, contractDelta(repoId, "alice", "d1", "ts:src/a.ts#f", "src/a.ts"), handle.store);
+    applyMessage(
+      state,
+      repoId,
+      contractDelta(repoId, "alice", "d1", "ts:src/a.ts#f", "src/a.ts"),
+      handle.store
+    );
     // The push touches the delta's file → memory clears it; store must too.
     applyMessage(state, repoId, pushNotify(repoId, "alice", ["src/a.ts"]), handle.store);
 
@@ -156,6 +175,7 @@ for (const backend of backends) {
     const loaded = await handle.store.load(repoId);
     assert.ok(loaded);
     assert.equal(loaded.unpushedDeltas.length, 0, "pushed delta removed from the store");
+    assert.equal(loaded.reservations.length, 0, "pushed reservation removed from the store");
     assert.deepEqual(loaded, state);
     await handle.store.close();
     await handle.cleanup();
@@ -210,7 +230,12 @@ function sessionStart(repoId: string, sessionId: string): ClientMessage {
   return message("session.start", { session: session(repoId, sessionId) });
 }
 
-function editIntent(repoId: string, sessionId: string, symbolRaw: string, filePath: string): ClientMessage {
+function editIntent(
+  repoId: string,
+  sessionId: string,
+  symbolRaw: string,
+  filePath: string
+): ClientMessage {
   return message("edit.intent", {
     repoId,
     sessionId,

@@ -2,18 +2,9 @@ import { spawnSync } from "node:child_process";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join, relative } from "node:path";
-import {
-  extractGoContracts,
-  extractGoDependencyGraph
-} from "@synapse/analyzer-go";
-import {
-  extractPythonContracts,
-  extractPythonDependencyGraph
-} from "@synapse/analyzer-py";
-import {
-  extractTypeScriptContracts,
-  extractTypeScriptDependencyGraph
-} from "@synapse/analyzer-ts";
+import { extractGoContracts, extractGoDependencyGraph } from "@synapse/analyzer-go";
+import { extractPythonContracts, extractPythonDependencyGraph } from "@synapse/analyzer-py";
+import { extractTypeScriptContracts, extractTypeScriptDependencyGraph } from "@synapse/analyzer-ts";
 import {
   contractChangeFor,
   emptyDependencyGraph,
@@ -80,6 +71,8 @@ export interface SourceFileContent extends SourceFileFingerprint {
   source: string;
 }
 
+export const RESERVATION_RADIUS = 2;
+
 /** Run the analyzer-py venv setup script, resolved from the installed package. */
 export function setupPythonAnalyzerVenv(): void {
   try {
@@ -88,10 +81,14 @@ export function setupPythonAnalyzerVenv(): void {
     const script = join(dirname(packageJson), "scripts", "setup-venv.mjs");
     const result = spawnSync(process.execPath, [script], { stdio: "inherit" });
     if (result.status !== 0) {
-      console.warn("synapse: Python analyzer setup skipped; .py files will use file-level detection.");
+      console.warn(
+        "synapse: Python analyzer setup skipped; .py files will use file-level detection."
+      );
     }
   } catch {
-    console.warn("synapse: Python analyzer package not found; .py files will use file-level detection.");
+    console.warn(
+      "synapse: Python analyzer package not found; .py files will use file-level detection."
+    );
   }
 }
 
@@ -106,7 +103,9 @@ export function setupGoAnalyzerBinary(): void {
       console.warn("synapse: Go analyzer setup skipped; .go files will use file-level detection.");
     }
   } catch {
-    console.warn("synapse: Go analyzer package not found; .go files will use file-level detection.");
+    console.warn(
+      "synapse: Go analyzer package not found; .go files will use file-level detection."
+    );
   }
 }
 export interface CheckTarget {
@@ -161,7 +160,10 @@ export function selfSignatures(targets: CheckTarget[]): Map<string, Signature | 
 }
 
 /** The checking agent's own unpushed change per symbol, for both-sides analysis. */
-export function selfChanges(state: TeamState, selfSessionId: string): Map<string, ContractChange | null> {
+export function selfChanges(
+  state: TeamState,
+  selfSessionId: string
+): Map<string, ContractChange | null> {
   const changes = new Map<string, ContractChange | null>();
   for (const delta of state.unpushedDeltas) {
     if (delta.sessionId === selfSessionId && delta.pushedAt === null) {
@@ -179,6 +181,22 @@ export interface DaemonGraph {
   neighborsOf(symbolRaw: string): { symbol: string; signature: string }[];
   /** Symbols that directly depend on `symbolRaw`, suitable for fix handoff hints. */
   dependentsOf(symbolRaw: string): AffectedSite[];
+}
+
+export function reservationSeedForSymbol(
+  symbolId: ContractDelta["symbolId"],
+  graph: DaemonGraph,
+  extraDependents: ContractDelta["symbolId"][] = []
+): { radius: number; symbols: ContractDelta["symbolId"][] } {
+  return {
+    radius: RESERVATION_RADIUS,
+    symbols: uniqueSymbolIds([
+      symbolId,
+      ...graph.graph.dependenciesOf(symbolId, RESERVATION_RADIUS).map((hop) => hop.symbolId),
+      ...graph.dependentsOf(symbolId.raw).map((site) => site.symbolId),
+      ...extraDependents
+    ])
+  };
 }
 
 export interface AffectedSite {
@@ -364,6 +382,19 @@ export function affectedSitesForSymbols(symbolIds: ContractDelta["symbolId"][]):
   }
 
   return sites.sort((a, b) => a.symbolId.raw.localeCompare(b.symbolId.raw));
+}
+
+function uniqueSymbolIds(symbolIds: ContractDelta["symbolId"][]): ContractDelta["symbolId"][] {
+  const seen = new Set<string>();
+  const uniqueSymbols: ContractDelta["symbolId"][] = [];
+  for (const symbolId of symbolIds) {
+    if (seen.has(symbolId.raw)) {
+      continue;
+    }
+    seen.add(symbolId.raw);
+    uniqueSymbols.push(symbolId);
+  }
+  return uniqueSymbols;
 }
 
 export function filePathForSymbolRaw(symbolRaw: string): string | null {

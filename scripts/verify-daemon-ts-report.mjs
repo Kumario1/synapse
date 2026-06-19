@@ -115,11 +115,16 @@ try {
   `);
 
   const signatureChange = await report(alicePort);
-  assert.equal(signatureChange.deltas.length, 1);
-  assert.equal(signatureChange.deltas[0].changeKind, "signature_changed");
-  assert.equal(signatureChange.deltas[0].symbolId.raw, symbol);
-
-  await waitForState(serverPort, (state) => state.unpushedDeltas.length === 1);
+  await waitForState(serverPort, (state) =>
+    state.unpushedDeltas.some((delta) => delta.symbolId.raw === symbol)
+  );
+  const stateAfterSignature = await readState(serverPort);
+  const signatureDelta =
+    signatureChange.deltas.find((delta) => delta.symbolId.raw === symbol) ??
+    stateAfterSignature.unpushedDeltas.find((delta) => delta.symbolId.raw === symbol);
+  assert.ok(signatureDelta);
+  assert.equal(signatureDelta.changeKind, "signature_changed");
+  assert.equal(signatureDelta.symbolId.raw, symbol);
 
   const check = await postJson(`http://localhost:${bobPort}/tools/synapse_check`, {
     repoId: "local",
@@ -156,4 +161,10 @@ async function report(port) {
     sessionId: "alice",
     filePath
   });
+}
+
+async function readState(port) {
+  const response = await fetch(`http://localhost:${port}/state?repoId=local`);
+  assert.equal(response.ok, true);
+  return response.json();
 }

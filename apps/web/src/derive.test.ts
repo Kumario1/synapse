@@ -36,6 +36,7 @@ const baseState: TeamState = {
     }
   ],
   editLocks: [],
+  reservations: [],
   unpushedDeltas: [],
   recentPushes: [],
   recentRepoEvents: [],
@@ -112,7 +113,9 @@ test("contested lock plus delta marks the server to symbol edge", () => {
 
   assert.deepEqual(deriveContestedSymbols(state), new Set(["src/api.ts#loadRoom"]));
   assert.deepEqual(
-    deriveGraph(state).edges.find((edge) => edge.from === "server" && edge.to === "src/api.ts#loadRoom"),
+    deriveGraph(state).edges.find(
+      (edge) => edge.from === "server" && edge.to === "src/api.ts#loadRoom"
+    ),
     { from: "server", to: "src/api.ts#loadRoom", contested: true }
   );
 });
@@ -148,7 +151,10 @@ test("ended sessions are excluded from graph and contention", () => {
   const graph = deriveGraph(state);
   assert.deepEqual(deriveContestedSymbols(state), new Set());
   assert.deepEqual(graph.sessions, [baseState.sessions[0]]);
-  assert.equal(graph.edges.some((edge) => edge.from === "s2" && edge.to === "server"), false);
+  assert.equal(
+    graph.edges.some((edge) => edge.from === "s2" && edge.to === "server"),
+    false
+  );
   assert.deepEqual(graph.edges, [
     { from: "s1", to: "server", contested: false },
     { from: "server", to: "src/api.ts#loadRoom", contested: false }

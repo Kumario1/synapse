@@ -6,7 +6,8 @@ import test from "node:test";
 import {
   affectedSitesForSymbols,
   buildDependencyGraph,
-  filePathForSymbolRaw
+  filePathForSymbolRaw,
+  reservationSeedForSymbol
 } from "./analysis.js";
 import type { RuntimeConfig } from "./config.js";
 
@@ -51,6 +52,38 @@ void test("dependentsOf returns direct downstream symbols with file paths", asyn
 
     assert.deepEqual(graph.dependentsOf("ts:src/dep.ts#changed"), [
       { symbolId: { raw: "ts:src/caller.ts#render" }, filePath: "src/caller.ts" }
+    ]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+void test("reservationSeedForSymbol includes the edited symbol and downstream dependents", async () => {
+  const root = await mkdtemp(join(tmpdir(), "synapse-reservation-"));
+  try {
+    await mkdir(join(root, "src"));
+    await writeFile(
+      join(root, "src/dep.ts"),
+      "export function changed(input: string): string { return input; }\n"
+    );
+    await writeFile(
+      join(root, "src/caller.ts"),
+      [
+        "import { changed } from './dep';",
+        "export function render(value: string): string {",
+        "  return changed(value);",
+        "}",
+        ""
+      ].join("\n")
+    );
+
+    const graph = await buildDependencyGraph(testConfig(root));
+    const seed = reservationSeedForSymbol({ raw: "ts:src/dep.ts#changed" }, graph);
+
+    assert.equal(seed.radius, 2);
+    assert.deepEqual(seed.symbols, [
+      { raw: "ts:src/dep.ts#changed" },
+      { raw: "ts:src/caller.ts#render" }
     ]);
   } finally {
     await rm(root, { force: true, recursive: true });

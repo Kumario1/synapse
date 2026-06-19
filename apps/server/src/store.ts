@@ -7,6 +7,7 @@ import {
   type ContractDelta,
   type ContractResolution,
   type EditLock,
+  type Reservation,
   type RecentPush,
   type RecentRepoEvent,
   type Session,
@@ -33,6 +34,8 @@ export interface StateStoreOps {
   upsertEditLock(repoId: string, lock: EditLock): void;
   deleteEditLock(repoId: string, sessionId: string, symbolRaw: string): void;
   deleteEditLocksForSession(repoId: string, sessionId: string): void;
+  upsertReservation(repoId: string, reservation: Reservation): void;
+  deleteReservation(repoId: string, sessionId: string): void;
   upsertDelta(repoId: string, delta: ContractDelta): void;
   deleteDelta(repoId: string, deltaId: string): void;
   deleteSession(repoId: string, sessionId: string): void;
@@ -64,6 +67,8 @@ export const noopStateStore: StateStoreOps = {
   upsertEditLock: () => {},
   deleteEditLock: () => {},
   deleteEditLocksForSession: () => {},
+  upsertReservation: () => {},
+  deleteReservation: () => {},
   upsertDelta: () => {},
   deleteDelta: () => {},
   deleteSession: () => {},
@@ -88,6 +93,7 @@ export const noopStateStore: StateStoreOps = {
 export const ENTITY_TABLES = {
   sessions: { keys: ["id"], newestFirst: false, field: "sessions" },
   edit_locks: { keys: ["session_id", "symbol_raw"], newestFirst: false, field: "editLocks" },
+  reservations: { keys: ["session_id"], newestFirst: false, field: "reservations" },
   deltas: { keys: ["id"], newestFirst: false, field: "unpushedDeltas" },
   pushes: { keys: ["id"], newestFirst: true, field: "recentPushes" },
   repo_events: { keys: ["id"], newestFirst: true, field: "recentRepoEvents" },
@@ -147,6 +153,16 @@ export class SqliteStateStore implements StateStore {
   deleteEditLocksForSession(repoId: string, sessionId: string): void {
     this.db
       .prepare("DELETE FROM edit_locks WHERE repo_id = ? AND session_id = ?")
+      .run(repoId, sessionId);
+  }
+
+  upsertReservation(repoId: string, reservation: Reservation): void {
+    this.upsertRow("reservations", repoId, [reservation.sessionId], reservation);
+  }
+
+  deleteReservation(repoId: string, sessionId: string): void {
+    this.db
+      .prepare("DELETE FROM reservations WHERE repo_id = ? AND session_id = ?")
       .run(repoId, sessionId);
   }
 
@@ -264,7 +280,9 @@ export class SqliteStateStore implements StateStore {
     const keyPredicate = spec.keys.map((key) => `${key} = ?`).join(" AND ");
     // Delete + insert (not upsert) so a re-sent key takes a fresh rowid and
     // moves to the front, exactly like the in-memory unshift-after-filter.
-    this.db.prepare(`DELETE FROM ${table} WHERE repo_id = ? AND ${keyPredicate}`).run(repoId, ...keys);
+    this.db
+      .prepare(`DELETE FROM ${table} WHERE repo_id = ? AND ${keyPredicate}`)
+      .run(repoId, ...keys);
     this.db
       .prepare(
         `INSERT INTO ${table} (repo_id, ${spec.keys.join(", ")}, payload)
@@ -313,6 +331,9 @@ export class SqliteStateStore implements StateStore {
         }
         for (const lock of snapshot.editLocks ?? []) {
           this.upsertEditLock(row.repo_id, lock);
+        }
+        for (const reservation of snapshot.reservations ?? []) {
+          this.upsertReservation(row.repo_id, reservation);
         }
         for (const delta of snapshot.unpushedDeltas ?? []) {
           this.upsertDelta(row.repo_id, delta);

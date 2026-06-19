@@ -82,22 +82,26 @@ test("recall can answer for a room whose lexical floor is empty", () => {
   assert.ok(!merged.briefing.includes("No recorded team history yet"));
 });
 
-test("session start surfaces teammate live edit regions and excludes self", () => {
+test("session start surfaces teammate live reservations and excludes self", () => {
   const state = createEmptyTeamState("local");
   state.sessions.push(session("alice"), session("bob"));
-  state.editLocks.push(
-    lock("alice", "ts:src/auth/token.ts#validate", "src/auth/token.ts"),
-    lock("bob", "ts:src/util/other.ts#foo", "src/util/other.ts")
+  state.reservations.push(
+    reservation("alice", ["ts:src/auth/token.ts#validate", "ts:src/auth/login.ts#login"]),
+    reservation("bob", ["ts:src/util/other.ts#foo"])
   );
 
   const context = sessionStartBriefing(buildWhatsupResponse(state, { degraded: false }), "bob");
 
-  assert.ok(context?.includes("Teammates' live edit regions:"));
-  assert.ok(context?.includes("alice: ts:src/auth/token.ts#validate in src/auth/token.ts"));
+  assert.ok(context?.includes("Teammates' live reservations:"));
+  assert.ok(
+    context?.includes(
+      "alice: 2 symbols, radius 2 - ts:src/auth/token.ts#validate; ts:src/auth/login.ts#login"
+    )
+  );
   assert.ok(!context?.includes("bob: ts:src/util/other.ts#foo"));
 });
 
-test("whatsup omits expired locks and locks held by inactive sessions", () => {
+test("whatsup omits expired reservations and reservations held by inactive sessions", () => {
   const state = createEmptyTeamState("local");
   state.sessions.push(
     session("alice"),
@@ -106,26 +110,26 @@ test("whatsup omits expired locks and locks held by inactive sessions", () => {
     session("mallory", "idle"),
     session("eve", "ended")
   );
-  state.editLocks.push(
-    lock("alice", "ts:src/auth/token.ts#validate", "src/auth/token.ts"),
-    lock("carol", "ts:src/stale.ts#old", "src/stale.ts", "1970-01-01T00:00:00.000Z", 1),
-    lock("mallory", "ts:src/idle.ts#paused", "src/idle.ts"),
-    lock("eve", "ts:src/ended.ts#done", "src/ended.ts")
+  state.reservations.push(
+    reservation("alice", ["ts:src/auth/token.ts#validate"]),
+    reservation("carol", ["ts:src/stale.ts#old"], "1970-01-01T00:00:00.000Z", 1),
+    reservation("mallory", ["ts:src/idle.ts#paused"]),
+    reservation("eve", ["ts:src/ended.ts#done"])
   );
 
   const briefing = buildWhatsupResponse(state, { degraded: false });
 
   assert.deepEqual(
-    briefing.editLocks.map((editLock) => editLock.symbolId.raw),
+    briefing.reservations.flatMap((item) => item.symbols.map((symbol) => symbol.raw)),
     ["ts:src/auth/token.ts#validate"]
   );
-  assert.ok(briefing.summary.some((line) => line === "1 active edit lock"));
+  assert.ok(briefing.summary.some((line) => line === "1 active reservation"));
 });
 
-test("session start stays silent when there are no teammate live edit regions", () => {
+test("session start ignores raw edit locks when there are no teammate live reservations", () => {
   const state = createEmptyTeamState("local");
-  state.sessions.push(session("bob"));
-  state.editLocks.push(lock("bob", "ts:src/util/other.ts#foo", "src/util/other.ts"));
+  state.sessions.push(session("alice"), session("bob"));
+  state.editLocks.push(lock("alice", "ts:src/util/other.ts#foo", "src/util/other.ts"));
 
   const context = sessionStartBriefing(buildWhatsupResponse(state, { degraded: false }), "bob");
 
@@ -176,6 +180,39 @@ function lock(
     acquiredAt,
     ttlSec
   };
+}
+
+function reservation(
+  sessionId: string,
+  symbolRaws: string[],
+  acquiredAt = new Date().toISOString(),
+  ttlSec = 90
+): TeamState["reservations"][number] {
+  const symbols = symbolRaws.map((raw) => ({ raw }));
+  const rootSymbol = symbols[0];
+  return {
+    repoId: "local",
+    sessionId,
+    radius: 2,
+    symbols,
+    roots: [
+      {
+        symbolId: rootSymbol,
+        filePath: filePathForSymbol(rootSymbol.raw),
+        acquiredAt,
+        ttlSec,
+        radius: 2,
+        symbols
+      }
+    ],
+    updatedAt: acquiredAt
+  };
+}
+
+function filePathForSymbol(raw: string): string {
+  const marker = raw.indexOf(":");
+  const hash = raw.lastIndexOf("#");
+  return raw.slice(marker + 1, hash);
 }
 
 function populatedState(): TeamState {

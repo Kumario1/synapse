@@ -12,7 +12,7 @@ import {
   type TeamState
 } from "@synapse/protocol";
 import { resolutionInputsHash, resolutionSidesForSymbol } from "@synapse/conflict-engine";
-import { applyMessage, dueForSweep, pruneStaleSessions } from "./state.js";
+import { applyMessage, dueForSweep, pruneExpiredLocks, pruneStaleSessions } from "./state.js";
 
 const symbol = "ts:src/auth/token.ts#validate";
 
@@ -56,7 +56,11 @@ test("a contract.delta for the symbol invalidates a stale resolution", () => {
     state,
     "local",
     deltaMessage(
-      delta({ id: "bob-2", sessionId: "bob", after: sig("validate(input: string): Promise<Token | null>") })
+      delta({
+        id: "bob-2",
+        sessionId: "bob",
+        after: sig("validate(input: string): Promise<Token | null>")
+      })
     )
   );
 
@@ -73,7 +77,13 @@ test("an unrelated re-report that yields the same pair keeps the resolution", ()
   applyMessage(
     state,
     "local",
-    deltaMessage(delta({ id: "bob-repeat", sessionId: "bob", after: sig("validate(input: string): Promise<Token>") }))
+    deltaMessage(
+      delta({
+        id: "bob-repeat",
+        sessionId: "bob",
+        after: sig("validate(input: string): Promise<Token>")
+      })
+    )
   );
 
   assert.equal(state.resolutions.length, 1);
@@ -157,11 +167,15 @@ test("edit.intent caps locks per session and evicts the oldest lock", () => {
   const aliceLocks = state.editLocks.filter((lock) => lock.sessionId === "alice");
   assert.equal(aliceLocks.length, 200);
   assert.equal(
-    state.editLocks.some((lock) => lock.sessionId === "alice" && lock.symbolId.raw === editSymbol(0)),
+    state.editLocks.some(
+      (lock) => lock.sessionId === "alice" && lock.symbolId.raw === editSymbol(0)
+    ),
     false
   );
   assert.equal(
-    state.editLocks.some((lock) => lock.sessionId === "alice" && lock.symbolId.raw === editSymbol(200)),
+    state.editLocks.some(
+      (lock) => lock.sessionId === "alice" && lock.symbolId.raw === editSymbol(200)
+    ),
     true
   );
 
@@ -174,12 +188,96 @@ test("edit.intent caps locks per session and evicts the oldest lock", () => {
   );
 });
 
+test("contract.delta accretes reservations and push or TTL releases roots", () => {
+  const state = createEmptyTeamState("local");
+  const neighbor = "ts:src/auth/login.ts#login";
+  const secondRoot = "ts:src/auth/token.ts#parse";
+  const expiredAt = "1970-01-01T00:00:00.000Z";
+
+  applyMessage(state, "local", sessionStartMessage("alice", "main"));
+  applyMessage(state, "local", editIntentForSymbol("alice", symbol, "src/auth/token.ts"));
+  applyMessage(
+    state,
+    "local",
+    deltaMessage(
+      delta({
+        id: "alice-token",
+        sessionId: "alice",
+        after: sig("validate(input: string): Result<Token>"),
+        reservationSymbols: [symbol, neighbor]
+      })
+    )
+  );
+
+  assert.deepEqual(
+    state.reservations[0].symbols.map((item) => item.raw),
+    [symbol, neighbor]
+  );
+
+  applyMessage(
+    state,
+    "local",
+    editIntentForSymbol("alice", secondRoot, "src/auth/parse.ts"),
+    undefined,
+    expiredAt
+  );
+  applyMessage(
+    state,
+    "local",
+    deltaMessage(
+      delta({
+        id: "alice-parse",
+        sessionId: "alice",
+        after: sig("parse(input: string): Token"),
+        symbolRaw: secondRoot,
+        filePath: "src/auth/parse.ts",
+        reservationSymbols: [secondRoot]
+      })
+    ),
+    undefined,
+    expiredAt
+  );
+
+  assert.deepEqual(
+    state.reservations[0].symbols.map((item) => item.raw),
+    [symbol, neighbor, secondRoot]
+  );
+
+  applyMessage(state, "local", {
+    v: PROTOCOL_VERSION,
+    type: "push.notify",
+    id: "push-token",
+    ts: now,
+    payload: {
+      repoId: "local",
+      memberId: "alice",
+      sha: "abc",
+      summary: "pushed token",
+      files: ["src/auth/token.ts"],
+      symbols: [{ raw: symbol }]
+    }
+  });
+
+  assert.deepEqual(
+    state.reservations[0].symbols.map((item) => item.raw),
+    [secondRoot]
+  );
+
+  pruneExpiredLocks(state);
+
+  assert.equal(state.reservations.length, 0);
+});
+
 const now = "2026-06-07T00:00:00.000Z";
 
 function withDivergentDeltas(): TeamState {
   const state = createEmptyTeamState("local");
   state.unpushedDeltas.push(
-    delta({ id: "alice-1", sessionId: "alice", after: sig("validate(input: string): Result<Token>") }),
+    delta({
+      id: "alice-1",
+      sessionId: "alice",
+      after: sig("validate(input: string): Result<Token>")
+    }),
     delta({ id: "bob-1", sessionId: "bob", after: sig("validate(input: string): Promise<Token>") })
   );
   return state;
@@ -224,21 +322,37 @@ function resolution(inputsHash: string, rationale: string): ContractResolution {
   };
 }
 
-function delta(input: { id: string; sessionId: string; after: Signature }): ContractDelta {
+function delta(input: {
+  id: string;
+  sessionId: string;
+  after: Signature;
+  symbolRaw?: string;
+  filePath?: string;
+  reservationSymbols?: string[];
+}): ContractDelta {
+  const raw = input.symbolRaw ?? symbol;
   return {
     id: input.id,
     repoId: "local",
     sessionId: input.sessionId,
-    symbolId: { raw: symbol },
+    symbolId: { raw },
     changeKind: "signature_changed",
     before: sig("validate(input: string): boolean"),
     after: input.after,
-    summary: "changed validate",
-    filePath: "src/auth/token.ts",
+    summary: `changed ${raw}`,
+    filePath: input.filePath ?? "src/auth/token.ts",
     baseSha: "local",
     dependents: [],
     createdAt: now,
-    pushedAt: null
+    pushedAt: null,
+    ...(input.reservationSymbols
+      ? {
+          reservation: {
+            radius: 2,
+            symbols: input.reservationSymbols.map((value) => ({ raw: value }))
+          }
+        }
+      : {})
   };
 }
 
@@ -289,11 +403,7 @@ function repoEventMessage(index: number): ClientMessage {
   };
 }
 
-function feedbackMessage(
-  id: string,
-  outcome: "acted" | "dismissed",
-  index: number
-): ClientMessage {
+function feedbackMessage(id: string, outcome: "acted" | "dismissed", index: number): ClientMessage {
   return {
     v: PROTOCOL_VERSION,
     type: "conflict.feedback",
@@ -318,16 +428,30 @@ function feedbackMessage(
 }
 
 function editIntentMessage(sessionId: string, index: number): ClientMessage {
+  return editIntentForSymbol(
+    sessionId,
+    editSymbol(index),
+    `src/edit-${index}.ts`,
+    `edit-${sessionId}-${index}`
+  );
+}
+
+function editIntentForSymbol(
+  sessionId: string,
+  symbolRaw: string,
+  filePath: string,
+  id = `edit-${sessionId}-${symbolRaw}`
+): ClientMessage {
   return {
     v: PROTOCOL_VERSION,
     type: "edit.intent",
-    id: `edit-${sessionId}-${index}`,
-    ts: timestamp(index),
+    id,
+    ts: now,
     payload: {
       repoId: "local",
       sessionId,
-      symbolId: { raw: editSymbol(index) },
-      filePath: `src/edit-${index}.ts`
+      symbolId: { raw: symbolRaw },
+      filePath
     }
   };
 }
@@ -450,7 +574,9 @@ function lockFor(sessionId: string): EditLock {
 
 test("pruneStaleSessions ends a session that missed heartbeats past the TTL", () => {
   const state = createEmptyTeamState("local");
-  state.sessions.push(staleSession({ lastSeen: new Date(sweepNow - FIVE_MIN_MS - 1).toISOString() }));
+  state.sessions.push(
+    staleSession({ lastSeen: new Date(sweepNow - FIVE_MIN_MS - 1).toISOString() })
+  );
   state.editLocks.push(lockFor("alice"));
 
   pruneStaleSessions(state, undefined, sweepNow);
@@ -508,7 +634,13 @@ test("session.heartbeat does not refresh an ended session before prune", () => {
     endedAt
   );
 
-  applyMessage(state, "local", heartbeatMessage("alice", "feature-x", "still running"), undefined, heartbeatAt);
+  applyMessage(
+    state,
+    "local",
+    heartbeatMessage("alice", "feature-x", "still running"),
+    undefined,
+    heartbeatAt
+  );
 
   assert.equal(state.sessions[0].status, "ended");
   assert.equal(state.sessions[0].lastSeen, endedAt);
@@ -520,7 +652,9 @@ test("session.heartbeat does not refresh an ended session before prune", () => {
 
 test("SYNAPSE_SESSION_SWEEP=0 disables the sweep", () => {
   const state = createEmptyTeamState("local");
-  state.sessions.push(staleSession({ lastSeen: new Date(sweepNow - FIVE_MIN_MS - 1).toISOString() }));
+  state.sessions.push(
+    staleSession({ lastSeen: new Date(sweepNow - FIVE_MIN_MS - 1).toISOString() })
+  );
 
   const previous = process.env.SYNAPSE_SESSION_SWEEP;
   process.env.SYNAPSE_SESSION_SWEEP = "0";
@@ -540,7 +674,9 @@ test("SYNAPSE_SESSION_SWEEP=0 disables the sweep", () => {
 
 test("a returning daemon's session.start revives a session the sweep ended", () => {
   const state = createEmptyTeamState("local");
-  state.sessions.push(staleSession({ lastSeen: new Date(sweepNow - FIVE_MIN_MS - 1).toISOString() }));
+  state.sessions.push(
+    staleSession({ lastSeen: new Date(sweepNow - FIVE_MIN_MS - 1).toISOString() })
+  );
 
   pruneStaleSessions(state, undefined, sweepNow);
   assert.equal(state.sessions[0].status, "ended");
@@ -558,8 +694,23 @@ test("kick (session.end) ends the session, clears edits, releases its locks; a f
   const state = createEmptyTeamState("local");
   applyMessage(state, "local", sessionStartMessage("alice", "main"));
   applyMessage(state, "local", editIntentMessage("alice", 0));
+  applyMessage(
+    state,
+    "local",
+    deltaMessage(
+      delta({
+        id: "alice-edit",
+        sessionId: "alice",
+        after: sig("symbol0(): string"),
+        symbolRaw: editSymbol(0),
+        filePath: "src/edit-0.ts",
+        reservationSymbols: [editSymbol(0)]
+      })
+    )
+  );
   assert.equal(state.sessions[0].status, "active");
   assert.ok(state.editLocks.some((lock) => lock.sessionId === "alice"));
+  assert.ok(state.reservations.some((reservation) => reservation.sessionId === "alice"));
 
   applyMessage(state, "local", {
     v: PROTOCOL_VERSION,
@@ -574,6 +725,10 @@ test("kick (session.end) ends the session, clears edits, releases its locks; a f
   assert.ok(
     !state.editLocks.some((lock) => lock.sessionId === "alice"),
     "the kicked session's edit locks are released"
+  );
+  assert.ok(
+    !state.reservations.some((reservation) => reservation.sessionId === "alice"),
+    "the kicked session's reservation is released"
   );
 
   // A reconnecting daemon returns as a fresh Session — kick is an interrupt, not a ban.

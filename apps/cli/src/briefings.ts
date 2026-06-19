@@ -7,6 +7,8 @@ import type {
   SynapseWhyResponse,
   SynapseWhySource,
   SynapseWhySourceKind,
+  Reservation,
+  ReservationRoot,
   TeamState
 } from "@synapse/protocol";
 
@@ -50,21 +52,17 @@ export function sessionStartBriefing(
   const sessionLabelById = new Map(
     briefing.sessions.map((session) => [session.id, session.memberLogin ?? session.id])
   );
-  const locksBySession = new Map<string, typeof briefing.editLocks>();
-  for (const lock of briefing.editLocks) {
-    if (lock.sessionId === selfSessionId) {
-      continue;
+  const reservationLines = briefing.reservations.flatMap((reservation) => {
+    if (reservation.sessionId === selfSessionId) {
+      return [];
     }
-    const locks = locksBySession.get(lock.sessionId) ?? [];
-    locks.push(lock);
-    locksBySession.set(lock.sessionId, locks);
-  }
-  const liveRegionLines = [...locksBySession].flatMap(([sessionId, locks]) => {
-    const label = sessionLabelById.get(sessionId) ?? sessionId;
-    return locks.map((lock) => `  • ${label}: ${lock.symbolId.raw} in ${lock.filePath}`);
+    const label = sessionLabelById.get(reservation.sessionId) ?? reservation.sessionId;
+    return [
+      `  • ${label}: ${reservation.symbols.length} symbol${reservation.symbols.length === 1 ? "" : "s"}, radius ${reservation.radius} - ${reservationSymbolList(reservation)}`
+    ];
   });
-  if (liveRegionLines.length > 0) {
-    sections.push(`Teammates' live edit regions:\n${liveRegionLines.join("\n")}`);
+  if (reservationLines.length > 0) {
+    sections.push(`Teammates' live reservations:\n${reservationLines.join("\n")}`);
   }
 
   const summaries = briefing.sessionSummaries.filter(
@@ -84,6 +82,45 @@ export function sessionStartBriefing(
   }
 
   return `📋 Synapse catch-up for ${briefing.repoId}:\n${sections.join("\n\n")}`;
+}
+
+function reservationSymbolList(reservation: Reservation): string {
+  const symbols = reservation.symbols.map((symbol) => symbol.raw);
+  const shown = symbols.slice(0, 5).join("; ");
+  const remaining = symbols.length - 5;
+  return remaining > 0 ? `${shown}; +${remaining} more` : shown;
+}
+
+function activeReservation(reservation: Reservation, now = Date.now()): Reservation | null {
+  const roots = reservation.roots.filter((root) => reservationRootIsActive(root, now));
+  if (roots.length === 0) {
+    return null;
+  }
+
+  return {
+    ...reservation,
+    roots,
+    radius: Math.max(...roots.map((root) => root.radius)),
+    symbols: uniqueSymbols(roots.flatMap((root) => root.symbols))
+  };
+}
+
+function reservationRootIsActive(root: ReservationRoot, now: number): boolean {
+  const acquiredAt = Date.parse(root.acquiredAt);
+  return Number.isNaN(acquiredAt) || now - acquiredAt <= root.ttlSec * 1000;
+}
+
+function uniqueSymbols(symbols: Reservation["symbols"]): Reservation["symbols"] {
+  const seen = new Set<string>();
+  const result: Reservation["symbols"] = [];
+  for (const symbol of symbols) {
+    if (seen.has(symbol.raw)) {
+      continue;
+    }
+    seen.add(symbol.raw);
+    result.push(symbol);
+  }
+  return result;
 }
 
 export function buildWhatsupResponse(
@@ -106,6 +143,12 @@ export function buildWhatsupResponse(
   const activeEditLocks = state.editLocks.filter(
     (lock) => liveRegionSessionIds.has(lock.sessionId) && editLockIsActive(lock)
   );
+  const activeReservations = state.reservations
+    .filter((reservation) => liveRegionSessionIds.has(reservation.sessionId))
+    .flatMap((reservation) => {
+      const active = activeReservation(reservation);
+      return active ? [active] : [];
+    });
   const unpushedDeltas = [...state.unpushedDeltas]
     .filter((delta) => delta.pushedAt === null)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -129,6 +172,7 @@ export function buildWhatsupResponse(
       `${activeSessions.length} active session${activeSessions.length === 1 ? "" : "s"}`,
       `${unpushedDeltas.length} unpushed contract delta${unpushedDeltas.length === 1 ? "" : "s"}`,
       `${activeEditLocks.length} active edit lock${activeEditLocks.length === 1 ? "" : "s"}`,
+      `${activeReservations.length} active reservation${activeReservations.length === 1 ? "" : "s"}`,
       `${recentPushes.length} recent push${recentPushes.length === 1 ? "" : "es"}`,
       `${recentRepoEvents.length} GitHub repo event${recentRepoEvents.length === 1 ? "" : "s"}`,
       `${resolutions.length} shared resolution${resolutions.length === 1 ? "" : "s"}`,
@@ -159,6 +203,7 @@ export function buildWhatsupResponse(
       createdAt: delta.createdAt
     })),
     editLocks: activeEditLocks.slice(0, limit),
+    reservations: activeReservations.slice(0, limit),
     recentPushes: recentPushes.slice(0, limit),
     recentRepoEvents: recentRepoEvents.slice(0, limit),
     resolutions: resolutions.slice(0, limit),
@@ -275,9 +320,7 @@ export function mergeRecallIntoWhy(
   limit?: number
 ): SynapseWhyResponse {
   const cap = clampWhyLimit(limit);
-  const seen = new Set(
-    response.sources.map((source) => source.reference ?? source.title)
-  );
+  const seen = new Set(response.sources.map((source) => source.reference ?? source.title));
   const added: SynapseWhySource[] = [];
   for (const match of matches) {
     const key = match.reference ?? match.title;
@@ -433,7 +476,9 @@ export function buildOnboardResponse(
   if (activity.recentPushes.length > 0) {
     sections.push(
       `Recent pushes:\n${activity.recentPushes
-        .map((push) => `  • ${push.memberId}: ${push.summary} (${push.filesAffected.length} file(s))`)
+        .map(
+          (push) => `  • ${push.memberId}: ${push.summary} (${push.filesAffected.length} file(s))`
+        )
         .join("\n")}`
     );
   }
@@ -624,7 +669,8 @@ function scoreWhySource(source: SynapseWhySource, terms: string[]): number {
     return 1;
   }
 
-  const text = `${source.kind} ${source.title} ${source.summary} ${source.reference ?? ""}`.toLowerCase();
+  const text =
+    `${source.kind} ${source.title} ${source.summary} ${source.reference ?? ""}`.toLowerCase();
   return terms.reduce((score, term) => score + (text.includes(term) ? term.length : 0), 0);
 }
 

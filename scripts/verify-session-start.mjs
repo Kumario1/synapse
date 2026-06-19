@@ -76,6 +76,7 @@ try {
     (s) =>
       s.unpushedDeltas.some((d) => d.symbolId.raw === aliceSymbol) &&
       s.unpushedDeltas.some((d) => d.symbolId.raw === bobSymbol) &&
+      s.reservations.some((reservation) => reservation.sessionId === "alice") &&
       s.recentPushes.length >= 1
   );
   // Bob's daemon cache must reflect the shared state before it briefs.
@@ -83,7 +84,11 @@ try {
     bobPort,
     (s) =>
       s.unpushedDeltas.some((d) => d.symbolId.raw === aliceSymbol) &&
-      s.editLocks.some((lock) => lock.sessionId === "alice" && lock.symbolId.raw === aliceSymbol) &&
+      s.reservations.some(
+        (reservation) =>
+          reservation.sessionId === "alice" &&
+          reservation.symbols.some((symbol) => symbol.raw === aliceSymbol)
+      ) &&
       s.recentPushes.length >= 1
   );
 
@@ -95,11 +100,8 @@ try {
   assert.ok(context.includes("Synapse catch-up"), "briefing has a heading");
   assert.ok(context.includes(aliceSymbol), "briefing surfaces alice's unpushed change");
   assert.ok(context.includes("alice"), "briefing names the teammate");
-  assert.ok(context.includes("Teammates' live edit regions"), "briefing surfaces live regions");
-  assert.ok(
-    context.includes(`${aliceSymbol} in ${aliceFile}`),
-    "briefing surfaces alice's active lock"
-  );
+  assert.ok(context.includes("Teammates' live reservations"), "briefing surfaces reservations");
+  assert.ok(context.includes(`radius 2 - ${aliceSymbol}`), "briefing surfaces alice's reservation");
   assert.ok(context.includes("Recent pushes"), "briefing surfaces the recent push");
   assert.ok(!context.includes(bobSymbol), "briefing excludes the reader's own change");
 

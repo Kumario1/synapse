@@ -22,6 +22,7 @@ export function emptyRoomState(repoId: string): TeamState {
     repoId,
     sessions: [],
     editLocks: [],
+    reservations: [],
     unpushedDeltas: [],
     recentPushes: [],
     recentRepoEvents: [],
@@ -54,7 +55,11 @@ export async function kickSession(repoId: string, sessionId: string): Promise<bo
   }
 }
 
-export function resolveWinnerUrl(repoId: string, proposalId: string, winnerSessionId: string): string {
+export function resolveWinnerUrl(
+  repoId: string,
+  proposalId: string,
+  winnerSessionId: string
+): string {
   return (
     `/auth/projects/resolve-winner?repoId=${encodeURIComponent(repoId)}` +
     `&proposalId=${encodeURIComponent(proposalId)}` +

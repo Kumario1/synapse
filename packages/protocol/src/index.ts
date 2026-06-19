@@ -139,6 +139,8 @@ export interface ContractDelta {
   dependents: SymbolId[];
   createdAt: string;
   pushedAt: string | null;
+  /** Deterministically derived live Reservation region for this edit root. */
+  reservation?: ReservationSeed;
 }
 
 export interface SymbolChange {
@@ -338,6 +340,32 @@ export interface EditLock {
   ttlSec: number;
 }
 
+/** Derived Reservation region carried by a reported edit. */
+export interface ReservationSeed {
+  /** Dependency graph radius used to derive `symbols`. */
+  radius: number;
+  /** Edited root symbol plus dependency-graph neighbors. */
+  symbols: SymbolId[];
+}
+
+/** One edited root's contribution to a per-session Reservation. */
+export interface ReservationRoot extends ReservationSeed {
+  symbolId: SymbolId;
+  filePath: string;
+  acquiredAt: string;
+  ttlSec: number;
+}
+
+/** Durable, queryable per-session region derived from reported edits. */
+export interface Reservation {
+  repoId: string;
+  sessionId: string;
+  radius: number;
+  symbols: SymbolId[];
+  roots: ReservationRoot[];
+  updatedAt: string;
+}
+
 export interface RecentPush {
   id: string;
   repoId: string;
@@ -418,6 +446,7 @@ export interface TeamState {
   repoId: string;
   sessions: Session[];
   editLocks: EditLock[];
+  reservations: Reservation[];
   unpushedDeltas: ContractDelta[];
   recentPushes: RecentPush[];
   recentRepoEvents: RecentRepoEvent[];
@@ -626,6 +655,7 @@ export interface SynapseWhatsupResponse {
   sessions: WhatsupSessionSummary[];
   unpushedDeltas: WhatsupDeltaSummary[];
   editLocks: EditLock[];
+  reservations: Reservation[];
   recentPushes: RecentPush[];
   recentRepoEvents: RecentRepoEvent[];
   resolutions: ContractResolution[];
@@ -818,6 +848,8 @@ export type StateOp =
   | { op: "upsertEditLock"; lock: EditLock }
   | { op: "deleteEditLock"; sessionId: string; symbolRaw: string }
   | { op: "deleteEditLocksForSession"; sessionId: string }
+  | { op: "upsertReservation"; reservation: Reservation }
+  | { op: "deleteReservation"; sessionId: string }
   | { op: "upsertDelta"; delta: ContractDelta }
   | { op: "deleteDelta"; deltaId: string }
   | { op: "appendPush"; push: RecentPush; cap: number }
@@ -842,6 +874,14 @@ export function applyStateOp(teamState: TeamState, op: StateOp): void {
       return;
     case "deleteEditLocksForSession":
       teamState.editLocks = teamState.editLocks.filter((lock) => lock.sessionId !== op.sessionId);
+      return;
+    case "upsertReservation":
+      upsertBy(teamState.reservations, op.reservation, (reservation) => reservation.sessionId);
+      return;
+    case "deleteReservation":
+      teamState.reservations = teamState.reservations.filter(
+        (reservation) => reservation.sessionId !== op.sessionId
+      );
       return;
     case "upsertDelta":
       upsertBy(teamState.unpushedDeltas, op.delta, (delta) => delta.id);
@@ -919,6 +959,7 @@ export function createEmptyTeamState(repoId: string): TeamState {
     repoId,
     sessions: [],
     editLocks: [],
+    reservations: [],
     unpushedDeltas: [],
     recentPushes: [],
     recentRepoEvents: [],
