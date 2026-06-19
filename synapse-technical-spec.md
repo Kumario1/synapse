@@ -1,6 +1,6 @@
 # Synapse — Technical Specification
 
-> v0.1 · 2026-06-05 · Companion to `synapse-build-plan.md` (roadmap) and `synapse-context.md` (vision).
+> v0.2 · 2026-06-19 · Companion to `synapse-build-plan.md` (roadmap) and `synapse-context.md` (vision).
 > This is the engineering contract: data structures, protocols, algorithms. Detailed enough to
 > implement from. Decisions are locked per the build plan's Decisions Log.
 
@@ -75,15 +75,23 @@ redis:        live sessions, edit locks (TTL), pub/sub fan-out
 
 ## 2. Identity & Auth
 
-- **`synapse login`** → browser OAuth against the team's GitHub OAuth App (client id/secret in server
-  env). Returns a Synapse session token (JWT) stored in `~/.synapse/credentials`.
-- Identity = GitHub login → `Member`. This maps cleanly to commit authorship and PR authorship.
-- **GitHub App** (separate from the OAuth App) is installed on the org's repos to deliver webhooks
-  (`push`, `pull_request`, reviews) and read commit metadata. It does **not** grant Synapse the right
-  to read working-tree code — that stays local (see §11).
-- **`synapse join`** (run inside a cloned repo): verifies login, links `repo → team`, confirms the
-  working tree is synced to a known commit, installs Claude Code hooks, registers the local MCP
-  server, and starts the daemon. Target <5s.
+Auth shipped along **two distinct trust boundaries** (ADR-0001). There is no `synapse login` command
+and no JWT/credentials file — that earlier OAuth-token design was reversed before it shipped.
+
+- **Human boundary (browser ↔ server):** **Sign in with GitHub** (`GET /auth/github`). Identity =
+  GitHub login. The session is a hand-rolled stateless signed cookie (`HMAC-SHA256` over `{uid, iat}`,
+  key derived from the GitHub App client secret — no sessions table, no hosted auth provider). It
+  establishes Owner identity only; it never authorizes a daemon room. Live only when the GitHub App
+  env is fully configured. See §8b and §11 for the full model.
+- **Machine boundary (daemon ↔ server):** a per-repo `project-key`
+  (`deriveProjectKey(SYNAPSE_MASTER_SECRET, repoId)`) or an optional `shared-token`, validated at the
+  WS handshake and on `/state`; unset = open.
+- **GitHub App** is installed on a repo to **claim** it (`GET /auth/projects/add` → install →
+  `GET /auth/github/setup`), which mints that repo's `project-key` and makes its webhooks (`push`,
+  `pull_request`, reviews) live. It does **not** grant Synapse the right to read working-tree code —
+  that stays local (see §11).
+- **`synapse join`** (run inside a cloned repo): writes the local config, installs Claude Code hooks,
+  registers the local MCP server, and prepares the analyzer sidecars. Target <5s.
 
 Current implementation: `synapse join` writes `.synapse/config.json` with `repoId`, `serverUrl`,
 `daemonPort`, `member`, `sessionId`, `agentType`, and `worktreeRoot`. The daemon and local CLI
@@ -413,9 +421,10 @@ with the matching server-message schema and ignores malformed frames with a warn
 crashing or poisoning the warm cache. The daemon's local HTTP tool endpoints also cap JSON bodies at
 1MB before concatenation, answer malformed JSON with 400, and answer oversized JSON with 413.
 
-> Auth (current): when `SYNAPSE_AUTH_TOKEN` is set, the WSS handshake and `GET /state` require a
-> matching token (`?token=` or `Authorization: Bearer`, constant-time compared). Unset = open. GitHub
-> OAuth + per-connection JWT is the planned upgrade (§15.6).
+> Auth (current): the WSS handshake and `GET /state` require the per-repo `project-key`
+> (`SYNAPSE_MASTER_SECRET`) or an optional `shared-token` (`SYNAPSE_AUTH_TOKEN`), passed as `?token=`
+> or `Authorization: Bearer` and constant-time compared. Unset = open. The browser/Owner boundary is a
+> separate GitHub sign-in cookie session (§2, §8b) — the two never cross.
 
 The warm cache means `synapse_check` is normally answered **locally** against the replica + local
 graph. The server is the fan-out hub + source of truth, not in the hot path.
@@ -665,8 +674,10 @@ restarts and feeds Layer II/III. Once a delta's `pushed_at` is set, it's out of 
    external production-repo profiling are still open.
 5. **Self-host packaging** — 🟡 partial: the Python sidecar uses a **shipped venv created on `join`**
    (`setup-venv.mjs`, pinned deps). A container/binary bundle is a later option.
-6. **Wire-protocol auth** — 🟡 partial: an **optional shared token** gates WSS + `/state` (PR #21).
-   Short-lived per-connection JWT via GitHub OAuth (with rotation) is the planned upgrade.
+6. **Wire-protocol auth** — ✅ shipped: a per-repo `project-key` (HMAC of `SYNAPSE_MASTER_SECRET` and
+   `repoId`, minted at repo claim) or an optional `shared-token` gates WSS + `/state` (constant-time
+   compared). The browser/Owner boundary is a separate GitHub sign-in cookie session (ADR-0001). The
+   earlier per-connection JWT direction was dropped.
 
 ```
 
