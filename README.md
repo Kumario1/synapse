@@ -44,7 +44,7 @@
   </tr>
   <tr>
     <td><b>Team briefings</b></td>
-    <td><code>synapse whatsup</code> gives a deterministic team-state briefing from the daemon's warm cache; <code>synapse pr-brief</code> turns local state plus GitHub webhook history into a PR handoff.</td>
+    <td><code>synapse whatsup</code> gives a deterministic team-state briefing from the daemon's warm cache, including teammates' live edit regions at session start; <code>synapse pr-brief</code> turns local state plus GitHub webhook history into a PR handoff.</td>
   </tr>
   <tr>
     <td><b>Memory search</b></td>
@@ -160,7 +160,7 @@ Use the Quick Start above to bring up the host (`synapse up --serve --tunnel`) a
 
 ## Works with any agent, not just Claude Code
 
-Claude Code gets `PreToolUse` / `PostToolUse` / `SessionStart` hooks that fire `synapse_check` before edits, `synapse_report` after edits, and a `synapse_whatsup` catch-up at session start. A file-based pre-check records the current contract snapshot locally, so the first post-edit report can emit the real before -> after delta without requiring a separate baseline call. Every other agent gets the **same behavior** through MCP — `synapse join` (and `synapse connect`) sets it up automatically:
+Claude Code gets `PreToolUse` / `PostToolUse` / `SessionStart` hooks that fire `synapse_check` before edits, `synapse_report` after edits, and a `synapse_whatsup` catch-up at session start, including active teammates' live edit regions. A file-based pre-check records the current contract snapshot locally, so the first post-edit report can emit the real before -> after delta without requiring a separate baseline call. Every other agent gets the **same behavior** through MCP — `synapse join` (and `synapse connect`) sets it up automatically:
 
 ```bash
 synapse connect                        # wire up every supported agent
