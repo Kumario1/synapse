@@ -1,4 +1,12 @@
-import { buildMechanicalDirections, classifyCollision } from "@synapse/conflict-engine";
+import {
+  applyMediatorResolutionProse,
+  buildMechanicalDirections,
+  buildMediatorResolutionRequest,
+  classifyCollision,
+  type MediatorResolutionProse,
+  type MediatorResolutionProvider,
+  type MediatorResolutionRequest
+} from "@synapse/conflict-engine";
 import type { ConflictFeedback, ResolutionProposal, TeamState } from "@synapse/protocol";
 import { randomUUID } from "node:crypto";
 
@@ -94,6 +102,79 @@ export function applyWinnerChoice(
   return true;
 }
 
+export function buildResolutionProseRequest(
+  state: TeamState,
+  proposalId: string
+): MediatorResolutionRequest | null {
+  const proposal = state.resolutionProposals?.find((candidate) => candidate.id === proposalId);
+  if (!proposal || proposal.status !== "resolving") {
+    return null;
+  }
+
+  const keepDirection = proposal.directions.find((direction) => direction.role === "keep");
+  const adaptDirection = proposal.directions.find((direction) => direction.role === "adapt");
+  if (!keepDirection || !adaptDirection) {
+    return null;
+  }
+
+  const keepDelta = state.unpushedDeltas.find(
+    (delta) =>
+      delta.symbolId.raw === proposal.symbol.raw && delta.sessionId === keepDirection.sessionId
+  );
+  if (!keepDelta) {
+    return null;
+  }
+
+  const adaptDelta = state.unpushedDeltas.find(
+    (delta) =>
+      delta.symbolId.raw === proposal.symbol.raw && delta.sessionId === adaptDirection.sessionId
+  );
+  return buildMediatorResolutionRequest(proposal, keepDelta, adaptDelta);
+}
+
+export function applyResolutionProse(
+  state: TeamState,
+  request: MediatorResolutionRequest,
+  prose: MediatorResolutionProse | null
+): boolean {
+  const proposal = state.resolutionProposals?.find(
+    (candidate) => candidate.id === request.proposalId
+  );
+  if (!proposal) {
+    return false;
+  }
+
+  const currentRequest = buildResolutionProseRequest(state, request.proposalId);
+  if (!currentRequest || !sameResolutionRequest(currentRequest, request)) {
+    return false;
+  }
+
+  return applyMediatorResolutionProse(proposal, request, prose);
+}
+
+export async function enrichResolutionProse(
+  state: TeamState,
+  proposalId: string,
+  provider: MediatorResolutionProvider | null
+): Promise<boolean> {
+  if (!provider) {
+    return false;
+  }
+
+  const request = buildResolutionProseRequest(state, proposalId);
+  if (!request) {
+    return false;
+  }
+
+  let prose: MediatorResolutionProse | null;
+  try {
+    prose = await provider.proposeResolution(request);
+  } catch {
+    return false;
+  }
+  return applyResolutionProse(state, request, prose);
+}
+
 /**
  * Record an accept. Returns true only when the proposal changed and the caller
  * should broadcast a fresh snapshot.
@@ -180,4 +261,11 @@ export function voidOnTimeout(
   proposal.voidReason = "timeout";
   void now;
   return true;
+}
+
+function sameResolutionRequest(
+  left: MediatorResolutionRequest,
+  right: MediatorResolutionRequest
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }

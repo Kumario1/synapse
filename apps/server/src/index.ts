@@ -20,6 +20,7 @@ import {
   type TeamState,
   type WireEnvelope
 } from "@synapse/protocol";
+import type { MediatorResolutionProse } from "@synapse/conflict-engine";
 import { WebSocket, WebSocketServer } from "ws";
 import { createEmbeddingProvider } from "./embeddings.js";
 import { exchangeCodeForToken, fetchGitHubUser } from "./auth/github-oauth.js";
@@ -44,9 +45,12 @@ import {
   applyResolutionAck,
   applyResolutionReject,
   applyWinnerChoice,
+  applyResolutionProse,
+  buildResolutionProseRequest,
   proposeOnContest,
   voidOnTimeout
 } from "./mediator.js";
+import { createOpenRouterMediatorProvider } from "./mediator-openrouter.js";
 
 const port = Number(process.env.SYNAPSE_SERVER_PORT ?? 4010);
 const host = process.env.SYNAPSE_SERVER_HOST ?? "127.0.0.1";
@@ -111,8 +115,9 @@ const authContext: AuthContext | null =
             listInstallationReposForUser(installationId, userToken),
           readRoomState: (repoId: string) => withRepo(repoId, () => getState(repoId)),
           kickSession: (repoId: string, sessionId: string) => kickSession(repoId, sessionId),
-          pickResolutionWinner: (repoId, proposalId, winnerSessionId) =>
-            withRepo(repoId, async () => {
+          pickResolutionWinner: (repoId, proposalId, winnerSessionId) => {
+            let shouldEnrich = false;
+            return withRepo(repoId, async () => {
               const state = await getState(repoId);
               const changed = applyWinnerChoice(state, proposalId, winnerSessionId);
               if (changed) {
@@ -121,8 +126,14 @@ const authContext: AuthContext | null =
                   envelope("state.snapshot", { teamState: state, seq: bumpRepoSeq(repoId) })
                 );
                 scheduleResolutionTimeout(repoId, proposalId);
+                shouldEnrich = true;
               }
-            }).then(() => undefined)
+            }).then(() => {
+              if (shouldEnrich) {
+                void enrichMediatorProposal(repoId, proposalId);
+              }
+            });
+          }
         } satisfies AuthContext;
       })()
     : null;
@@ -155,6 +166,7 @@ const memory =
         return vectorMemory;
       })()
     : null;
+const mediatorResolutionProvider = createOpenRouterMediatorProvider();
 
 const instanceId = randomUUID();
 const fanout = process.env.SYNAPSE_REDIS_URL
@@ -633,6 +645,7 @@ async function handleMessage(
       );
       if (proposedStatus === "resolving") {
         scheduleResolutionTimeout(repoId, proposedId);
+        void enrichMediatorProposal(repoId, proposedId);
       }
     }
   } catch (error) {
@@ -941,6 +954,45 @@ function scheduleResolutionTimeout(repoId: string, proposalId: string): void {
   }, RESOLUTION_TTL_MS);
   timer.unref?.();
   resolutionTimers.set(proposalId, timer);
+}
+
+async function enrichMediatorProposal(repoId: string, proposalId: string): Promise<void> {
+  if (!mediatorResolutionProvider) {
+    return;
+  }
+
+  const request = await withRepo(repoId, async () => {
+    const state = await getState(repoId);
+    return buildResolutionProseRequest(state, proposalId);
+  });
+  if (!request) {
+    return;
+  }
+
+  let prose: MediatorResolutionProse | null;
+  try {
+    prose = await mediatorResolutionProvider.proposeResolution(request);
+  } catch {
+    return;
+  }
+  if (!prose) {
+    return;
+  }
+
+  const result = await withRepo(repoId, async () => {
+    const state = await getState(repoId);
+    const changed = applyResolutionProse(state, request, prose);
+    return { state, changed };
+  });
+  if (!result.changed) {
+    return;
+  }
+
+  broadcast(
+    repoId,
+    envelope("state.snapshot", { teamState: result.state, seq: bumpRepoSeq(repoId) })
+  );
+  fanout?.publish(repoId);
 }
 
 function teeStateStoreOps(ops: StateOp[]): StateStoreOps {

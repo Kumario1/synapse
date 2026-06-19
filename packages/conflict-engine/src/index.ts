@@ -370,9 +370,15 @@ export {
 } from "./explain.js";
 export {
   affectedSitesFromDelta,
+  applyMediatorResolutionProse,
   buildMechanicalDirections,
+  buildMediatorResolutionRequest,
   classifyCollision,
-  type ConflictClass
+  groundedMediatorAdaptSummary,
+  type ConflictClass,
+  type MediatorResolutionProse,
+  type MediatorResolutionProvider,
+  type MediatorResolutionRequest
 } from "./mediator.js";
 
 export type { Conflict };

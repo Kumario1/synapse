@@ -265,7 +265,7 @@ export type ResolutionRole = "keep" | "adapt";
 export interface Direction {
   sessionId: string;
   role: ResolutionRole;
-  /** Templated, deterministic prose (no LLM in this slice). */
+  /** Deterministic prose by default; adapt summaries may be LLM-enriched. */
   summary: string;
   /** For an "adapt" role: the call-sites to update. Empty for "keep". */
   affectedSites: AffectedSite[];
@@ -278,6 +278,8 @@ export type ResolutionProposalStatus = "resolving" | "resolved" | "voided" | "aw
  * (not persisted): it lives in TeamState while a pair is being reconciled and
  * is broadcast in state.snapshot. Mechanical conflicts move directly to
  * resolving; semantic conflicts wait for the Owner to choose the winning side.
+ * Proposal class/status/signatures stay deterministic or Owner-driven; optional
+ * mediator LLM prose can only rewrite an adapt Direction.summary.
  */
 export interface ResolutionProposal {
   /** Deterministic id, stable for the same contested pair: see mediator. */
