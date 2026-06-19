@@ -5,6 +5,7 @@ import {
   createEmptyTeamState,
   PROTOCOL_VERSION,
   type ContractDelta,
+  type Reservation,
   type ResolutionProposal,
   type StateOp
 } from "./index.js";
@@ -26,6 +27,24 @@ const validDelta: ContractDelta = {
   dependents: [{ raw: "ts:src/auth/login.ts#login" }],
   createdAt: new Date().toISOString(),
   pushedAt: null
+};
+
+const validReservation: Reservation = {
+  repoId: "local",
+  sessionId: "alice",
+  radius: 2,
+  symbols: [{ raw: "ts:src/auth/token.ts#validate" }, { raw: "ts:src/auth/login.ts#login" }],
+  roots: [
+    {
+      symbolId: { raw: "ts:src/auth/token.ts#validate" },
+      filePath: "src/auth/token.ts",
+      acquiredAt: base.ts,
+      ttlSec: 90,
+      radius: 2,
+      symbols: [{ raw: "ts:src/auth/token.ts#validate" }, { raw: "ts:src/auth/login.ts#login" }]
+    }
+  ],
+  updatedAt: base.ts
 };
 
 const validProposal: ResolutionProposal = {
@@ -226,6 +245,21 @@ test("accepts valid server snapshots", () => {
   assert.equal(result.ok, true, result.ok ? "" : result.error);
 });
 
+test("accepts reservations in server snapshots", () => {
+  const result = parseServerMessage({
+    ...base,
+    type: "state.snapshot",
+    payload: {
+      teamState: {
+        ...createEmptyTeamState("local"),
+        reservations: [validReservation]
+      },
+      seq: 1
+    }
+  });
+  assert.equal(result.ok, true, result.ok ? "" : result.error);
+});
+
 test("accepts mediator proposals in server snapshots", () => {
   const result = parseServerMessage({
     ...base,
@@ -310,6 +344,10 @@ test("accepts valid server deltas", () => {
         {
           op: "upsertDelta",
           delta: validDelta
+        },
+        {
+          op: "upsertReservation",
+          reservation: validReservation
         }
       ]
     }
@@ -367,6 +405,7 @@ test("applies state ops to converge with an equivalent snapshot", () => {
       },
       cap: 50
     },
+    { op: "upsertReservation", reservation: validReservation },
     { op: "deleteEditLock", sessionId: "alice", symbolRaw: "ts:a.ts#f" }
   ];
 
@@ -378,6 +417,7 @@ test("applies state ops to converge with an equivalent snapshot", () => {
     ...createEmptyTeamState("local"),
     sessions: [session],
     unpushedDeltas: [validDelta],
+    reservations: [validReservation],
     recentPushes: [
       {
         id: "push-1",

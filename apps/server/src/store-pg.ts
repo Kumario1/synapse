@@ -5,6 +5,7 @@ import {
   type ContractDelta,
   type ContractResolution,
   type EditLock,
+  type Reservation,
   type RecentPush,
   type RecentRepoEvent,
   type Session,
@@ -91,6 +92,17 @@ export class PostgresStateStore implements StateStore {
     ]);
   }
 
+  upsertReservation(repoId: string, reservation: Reservation): void {
+    this.upsertRow("reservations", repoId, [reservation.sessionId], reservation);
+  }
+
+  deleteReservation(repoId: string, sessionId: string): void {
+    this.enqueue("DELETE FROM synapse_reservations WHERE repo_id = $1 AND session_id = $2", [
+      repoId,
+      sessionId
+    ]);
+  }
+
   upsertDelta(repoId: string, delta: ContractDelta): void {
     this.upsertRow("deltas", repoId, [delta.id], delta);
   }
@@ -100,7 +112,10 @@ export class PostgresStateStore implements StateStore {
   }
 
   deleteSession(repoId: string, sessionId: string): void {
-    this.enqueue("DELETE FROM synapse_sessions WHERE repo_id = $1 AND id = $2", [repoId, sessionId]);
+    this.enqueue("DELETE FROM synapse_sessions WHERE repo_id = $1 AND id = $2", [
+      repoId,
+      sessionId
+    ]);
   }
 
   appendPush(repoId: string, push: RecentPush, cap: number): void {

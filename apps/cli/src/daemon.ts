@@ -60,11 +60,13 @@ import {
   isGoLike,
   isPythonLike,
   markGraphDirty,
+  reservationSeedForSymbol,
   resolveCheckTargets,
   selfChanges,
   selfSignatures,
   type AffectedSite,
-  type AnalysisCache
+  type AnalysisCache,
+  type DaemonGraph
 } from "./analysis.js";
 import {
   buildOnboardResponse,
@@ -129,7 +131,10 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
   // when the server's correlated ack arrives (see the receive loop). A check
   // must never hang, so each waiter also has a timeout that resolves null →
   // caller falls back to the local mirror.
-  const pendingAcks = new Map<string, { resolve: (locks: EditLock[] | null) => void; timer: NodeJS.Timeout }>();
+  const pendingAcks = new Map<
+    string,
+    { resolve: (locks: EditLock[] | null) => void; timer: NodeJS.Timeout }
+  >();
   const INTENT_SYNC_MS = Number(process.env.SYNAPSE_INTENT_SYNC_MS ?? 150);
 
   const sendEnvelope = (message: ClientMessage): boolean => {
@@ -589,7 +594,10 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
             ? teamState
             : { ...teamState, editLocks: [...teamState.editLocks, ...authoritativeLocks] };
 
-        const { graph, neighborsOf, dependentsOf } = await buildDependencyGraph(config, analysisCache);
+        const { graph, neighborsOf, dependentsOf } = await buildDependencyGraph(
+          config,
+          analysisCache
+        );
         const rawConflicts = evaluateConflicts({
           selfSessionId: config.sessionId,
           targets,
@@ -655,12 +663,7 @@ export async function startDaemon(config: RuntimeConfig): Promise<void> {
           sendToServer
         );
         const withAffectedSites = attachAffectedSites(resolved, dependentsOf);
-        await seedContractSnapshotsForFiles(
-          config,
-          contractSnapshots,
-          body,
-          analysisCache
-        );
+        await seedContractSnapshotsForFiles(config, contractSnapshots, body, analysisCache);
 
         writeJson(response, 200, {
           verdict: verdictFor(conflicts),
@@ -892,7 +895,9 @@ async function buildSessionSummary(
   const myDeltas = state.unpushedDeltas.filter(
     (delta) => delta.sessionId === config.sessionId && delta.pushedAt === null
   );
-  const symbols = [...new Map(myDeltas.map((delta) => [delta.symbolId.raw, delta.symbolId])).values()];
+  const symbols = [
+    ...new Map(myDeltas.map((delta) => [delta.symbolId.raw, delta.symbolId])).values()
+  ];
 
   let summary = deterministicSessionSummary(config.member, resolvedTask, myDeltas);
   let source = "deterministic";
@@ -1021,7 +1026,10 @@ async function attachResolutions(
       }
 
       const symbol = conflict.targetSymbol.raw;
-      const sides = labelSides(resolutionSidesForSymbol(teamState.unpushedDeltas, symbol), teamState);
+      const sides = labelSides(
+        resolutionSidesForSymbol(teamState.unpushedDeltas, symbol),
+        teamState
+      );
       const inputsHash = resolutionInputsHash(symbol, sides);
 
       // (1) Convergence: a resolution for this exact pair already exists.
@@ -1090,9 +1098,7 @@ function labelSides(sides: ResolutionSide[], state: TeamState): ResolutionSide[]
 function withResolution(conflict: Conflict, resolution: ProposedResolution): Conflict {
   return {
     ...conflict,
-    analysis: conflict.analysis
-      ? { ...conflict.analysis, resolution }
-      : conflict.analysis
+    analysis: conflict.analysis ? { ...conflict.analysis, resolution } : conflict.analysis
   };
 }
 
@@ -1107,7 +1113,10 @@ function toProposed(resolution: ContractResolution): ProposedResolution {
   };
 }
 
-async function readFileContext(config: RuntimeConfig, filePath: string): Promise<string | undefined> {
+async function readFileContext(
+  config: RuntimeConfig,
+  filePath: string
+): Promise<string | undefined> {
   try {
     return await readFile(await resolveWorktreePath(config.worktreeRoot, filePath), "utf8");
   } catch {
@@ -1125,9 +1134,10 @@ function contractParses(proposedContract: string | null): boolean {
     return false;
   }
 
-  const isDeclaration = /^\s*(export\s+)?(declare\s+)?(function|class|interface|type|enum|const)\b/u.test(
-    proposedContract
-  );
+  const isDeclaration =
+    /^\s*(export\s+)?(declare\s+)?(function|class|interface|type|enum|const)\b/u.test(
+      proposedContract
+    );
   const source = isDeclaration
     ? proposedContract.replace(/^\s*(export\s+)?/u, "export ")
     : `export type __Resolution = ${proposedContract};`;
@@ -1175,14 +1185,21 @@ async function reportContractChanges(
   }
 
   const filePath = body.filePath;
+  const analyzable = isAnalyzable(filePath);
+  let dependencyGraph: DaemonGraph | null = null;
   // Every reported edit (tool call or watcher event) can change dependency
   // edges — the warm-check graph cache must not outlive it.
-  if (isAnalyzable(filePath)) {
+  if (analyzable) {
     markGraphDirty(cache);
+    dependencyGraph = await buildDependencyGraph(config, cache);
   }
 
-  if (body.symbolId || !isAnalyzable(filePath)) {
+  if (body.symbolId || !analyzable) {
     const symbolId = body.symbolId ?? symbolForFile(filePath);
+    const dependents =
+      body.dependents ??
+      dependencyGraph?.dependentsOf(symbolId.raw).map((site) => site.symbolId) ??
+      [];
     return [
       createContractDelta(config, {
         symbolId,
@@ -1192,7 +1209,8 @@ async function reportContractChanges(
         after: null,
         summary: body.summary ?? `Updated ${symbolId.raw}`,
         baseSha: body.baseSha,
-        dependents: body.dependents
+        dependents,
+        reservation: reservationSeedForReport(symbolId, dependencyGraph, dependents)
       })
     ];
   }
@@ -1225,20 +1243,55 @@ async function reportContractChanges(
           ? `Renamed ${change.symbolId.raw} to ${change.after.id.raw}`
           : summarizeSymbolChange(change.changeKind, change.symbolId.raw)),
       baseSha: body.baseSha,
-      dependents: body.dependents
+      dependents:
+        body.dependents ??
+        dependencyGraph?.dependentsOf(change.symbolId.raw).map((site) => site.symbolId),
+      reservation: reservationSeedForReport(
+        change.symbolId,
+        dependencyGraph,
+        body.dependents ??
+          dependencyGraph?.dependentsOf(change.symbolId.raw).map((site) => site.symbolId) ??
+          []
+      )
     })
   );
 }
 
+function reservationSeedForReport(
+  symbolId: ContractDelta["symbolId"],
+  graph: DaemonGraph | null,
+  dependents: ContractDelta["dependents"]
+): ContractDelta["reservation"] {
+  if (graph) {
+    return reservationSeedForSymbol(symbolId, graph, dependents);
+  }
+
+  return {
+    radius: 0,
+    symbols: uniqueSymbols([symbolId, ...dependents])
+  };
+}
+
+function uniqueSymbols(symbols: ContractDelta["symbolId"][]): ContractDelta["symbolId"][] {
+  const seen = new Set<string>();
+  const result: ContractDelta["symbolId"][] = [];
+  for (const symbol of symbols) {
+    if (seen.has(symbol.raw)) {
+      continue;
+    }
+    seen.add(symbol.raw);
+    result.push(symbol);
+  }
+  return result;
+}
+
 function createContractDelta(
   config: RuntimeConfig,
-  input: Pick<
-    ContractDelta,
-    "symbolId" | "changeKind" | "before" | "after" | "filePath"
-  > & {
+  input: Pick<ContractDelta, "symbolId" | "changeKind" | "before" | "after" | "filePath"> & {
     summary: string;
     baseSha?: string;
     dependents?: ContractDelta["dependents"];
+    reservation?: ContractDelta["reservation"];
   }
 ): ContractDelta {
   return {
@@ -1254,7 +1307,8 @@ function createContractDelta(
     baseSha: input.baseSha ?? "local",
     dependents: input.dependents ?? [],
     createdAt: new Date().toISOString(),
-    pushedAt: null
+    pushedAt: null,
+    ...(input.reservation ? { reservation: input.reservation } : {})
   };
 }
 
@@ -1320,7 +1374,9 @@ function buildInsightsResponse(
     `${activeSessions} active session${activeSessions === 1 ? "" : "s"}, ${unpushedDeltas} unpushed delta${unpushedDeltas === 1 ? "" : "s"}, ${activeEditLocks} active edit lock${activeEditLocks === 1 ? "" : "s"}.`
   ];
   if (topRulesByFeedback[0]) {
-    summary.push(`Noisiest feedback rule: ${topRulesByFeedback[0].name} (${topRulesByFeedback[0].count}).`);
+    summary.push(
+      `Noisiest feedback rule: ${topRulesByFeedback[0].name} (${topRulesByFeedback[0].count}).`
+    );
   }
   if (resolutionProposals.length > 0) {
     summary.push(
@@ -1380,7 +1436,10 @@ function summarizeDelta(delta: ContractDelta): ContractDeltaSummary {
   };
 }
 
-function summarizeSymbolChange(changeKind: ContractDelta["changeKind"], rawSymbolId: string): string {
+function summarizeSymbolChange(
+  changeKind: ContractDelta["changeKind"],
+  rawSymbolId: string
+): string {
   switch (changeKind) {
     case "added":
       return `Added ${rawSymbolId}`;

@@ -314,11 +314,28 @@ interface RecentRepoEvent {
   createdAt: string;
 }
 
+interface Reservation {
+  repoId: string;
+  sessionId: string;
+  radius: number; // current deterministic radius is 2
+  symbols: SymbolId[]; // edited roots plus dependency-graph neighbors
+  roots: Array<{
+    symbolId: SymbolId;
+    filePath: string;
+    acquiredAt: string;
+    ttlSec: number;
+    radius: number;
+    symbols: SymbolId[];
+  }>;
+  updatedAt: string;
+}
+
 interface TeamState {
   // what a daemon's warm cache replicates
   repoId: string;
   sessions: Session[];
   editLocks: EditLock[];
+  reservations: Reservation[];
   unpushedDeltas: ContractDelta[]; // pushedAt === null
   recentPushes: RecentPush[]; // last 24h
   recentRepoEvents: RecentRepoEvent[]; // PR/review/comment activity for Layer II
@@ -328,10 +345,11 @@ interface TeamState {
 }
 ```
 
-> Current implementation: `TeamState` also carries `resolutions` (shared contract resolutions, keyed
-> by `symbol + inputsHash`), `sessionSummaries` (Layer II narratives produced on session end), and
-> `conflictFeedback` (explicit acted/dismissed telemetry). The server holds it in memory and persists
-> it through a `StateStore` (SQLite) so a restart resumes it.
+> Current implementation: `TeamState` also carries `reservations` (per-session derived edit regions),
+> `resolutions` (shared contract resolutions, keyed by `symbol + inputsHash`), `sessionSummaries`
+> (Layer II narratives produced on session end), and `conflictFeedback` (explicit acted/dismissed
+> telemetry). The server holds it in memory and persists it through a `StateStore` (SQLite or
+> Postgres) so a restart resumes it.
 
 ---
 
@@ -365,7 +383,7 @@ resolution. It also exposes read-only resources for passive context: `synapse://
 explicit acted/dismissed telemetry for a surfaced conflict but does not change detection.
 `synapse_insights` aggregates local coordination health from that same warm cache. `synapse_whatsup`
 is deterministic today: it reads the daemon's warm cache and returns active sessions, unpushed deltas,
-edit locks, recent pushes, shared resolutions, and recent feedback. `synapse_pr_brief` turns local
+edit locks, live Reservations, recent pushes, shared resolutions, and recent feedback. `synapse_pr_brief` turns local
 state plus GitHub webhook history into a base/head PR handoff. `synapse_why` is also deterministic
 today: it ranks matching session summaries, repo events, pushes, resolutions, conflict feedback,
 unpushed deltas, and active sessions by question terms, then returns a source-cited answer. When
@@ -434,7 +452,8 @@ graph. The server is the fan-out hub + source of truth, not in the hot path.
 Current implementation accepts GitHub events at `POST /webhooks/github`.
 
 - `push`: converts changed files into the existing `push.notify` state mutation, records a
-  `RecentPush`, clears matching live deltas/locks, and broadcasts the resulting state change.
+  `RecentPush`, clears matching live deltas, locks, and Reservation roots, and broadcasts the
+  resulting state change.
 - `pull_request`, `pull_request_review`, `issue_comment`: converts the payload into `repo.event`,
   records recent repo activity, and surfaces it in `whatsup`, `pr-brief`, and `SessionStart`
   catch-ups.
