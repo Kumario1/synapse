@@ -10,7 +10,7 @@
 
 ---
 
-## Build Status (updated 2026-06-09)
+## Build Status (updated 2026-06-19)
 
 The core agent-coordination loop is implemented and runs as an installed tool. Status by area:
 
@@ -29,7 +29,7 @@ The core agent-coordination loop is implemented and runs as an installed tool. S
 | Hot-path latency benchmark — file-only pre-edit path | ✅ Done | `verify:hot-path-latency`, `verify:large-repo-latency`, `verify:repo-latency` |
 | **Redis** live state + pub/sub (multi-instance fan-out) | ✅ Done | optional via `SYNAPSE_REDIS_URL`; `StateStore` (SQLite/Postgres) remains the durable record, Redis is purely the wake-up signal |
 | **Postgres** durable store (multi-instance) | ✅ Done | optional via `SYNAPSE_DATABASE_URL`; implements the same `StateStore` interface as SQLite, with advisory-locked schema init |
-| **GitHub OAuth + per-connection JWT** | ⬜ Planned | shared-token is the interim |
+| **GitHub sign-in + per-repo ownership** | ✅ Done | ADR-0001: Sign in with GitHub (signed cookie session), claim a repo by installing the GitHub App, per-repo `project-key` for the daemon. The earlier per-connection JWT plan was dropped |
 | PR / review ingestion into briefings | ✅ Done | `pull_request`, `pull_request_review`, and `issue_comment` webhooks |
 | Memory Layer III — `synapse_why` + pgvector RAG | ✅ Done | deterministic state search always; hybrid pgvector recall when `SYNAPSE_DATABASE_URL` + an embeddings endpoint are configured, degrades cleanly otherwise |
 | Telemetry / acted-on feedback | ✅ Done | explicit `synapse_feedback` capture, plus adaptive severity demotes chronically-dismissed warning rules to `info` |
@@ -272,10 +272,11 @@ on session start (`SessionStart` hook) ✅; PR/review/comment ingestion into bri
 Deterministic `synapse_why` over existing team state ✅; pgvector decision store, RAG ranking, Slack
 ingestion, and onboarding mode remain ahead.
 
-**Cross-cutting (start early):** auth/multi-tenancy (✅ optional shared-token auth, PR #21; GitHub
-OAuth + JWT still ahead), self-host packaging (Docker compose — not yet), explicit feedback telemetry
-capture ✅, and a tiny eval harness for "did we correctly flag/ignore this conflict?" on recorded
-scenarios.
+**Cross-cutting (start early):** auth/multi-tenancy (✅ per-repo `project-key`/shared-token for the
+daemon plus GitHub sign-in + GitHub-App repo ownership for Owners, ADR-0001 — the earlier per-connection
+JWT plan was dropped), self-host packaging (✅ `docker-compose.yml`; Postgres/Redis behind the `saas`
+profile), explicit feedback telemetry capture ✅, and a tiny eval harness for "did we correctly
+flag/ignore this conflict?" on recorded scenarios.
 Current eval harness: `npm run eval:conflicts` runs recorded JSON scenarios through the deterministic
 conflict engine and asserts verdicts, rules, recommendations, compatibility, and resolutions.
 Current latency harnesses: `npm run verify:hot-path-latency` measures the file-only PreToolUse path
