@@ -577,6 +577,9 @@ export interface SynapseInsightsResponse {
     activeSessions: number;
     unpushedDeltas: number;
     activeEditLocks: number;
+    resolutionResolving: number;
+    resolutionResolved: number;
+    resolutionEscalated: number;
   };
   topRulesByFeedback: SynapseInsightsBucket[];
   topConflictTargets: SynapseInsightsBucket[];

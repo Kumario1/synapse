@@ -1,4 +1,4 @@
-import type { Session, TeamState } from "@synapse/protocol";
+import type { ResolutionProposal, Session, TeamState } from "@synapse/protocol";
 
 export interface FlowEdge {
   from: string;
@@ -77,4 +77,23 @@ export function deriveGraph(state: TeamState): FlowGraph {
   ];
 
   return { sessions, symbols, edges };
+}
+
+export interface ResolutionOverview {
+  proposals: ResolutionProposal[];
+  resolving: ResolutionProposal[];
+  resolved: ResolutionProposal[];
+  escalated: ResolutionProposal[];
+}
+
+export function deriveResolutionOverview(state: TeamState): ResolutionOverview {
+  const proposals = state.resolutionProposals ?? [];
+  return {
+    proposals,
+    resolving: proposals.filter((proposal) => proposal.status === "resolving"),
+    resolved: proposals.filter((proposal) => proposal.status === "resolved"),
+    escalated: proposals.filter(
+      (proposal) => proposal.status === "awaiting_owner" || proposal.status === "voided"
+    )
+  };
 }
