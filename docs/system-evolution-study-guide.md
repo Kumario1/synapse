@@ -2,7 +2,7 @@
 
 This guide explains how Synapse works today and how it got here commit by commit. It is written for study: each entry names the problem the commit addressed, how the implementation solved it, and how that changed the system.
 
-Source of truth used for this guide: `git log --reverse`, `README.md`, `synapse-build-plan.md`, and `synapse-technical-spec.md`.
+Source of truth used for this guide: `git log --reverse`, `README.md`, `synapse-build-plan.md`, and `synapse-technical-spec.md`. The commit-by-commit log below runs through `7e9409c` (plan 031 era). Work that landed after that — the hosted GitHub-App auth model and the resolution mediator — is summarized at milestone level in [Later Milestones](#later-milestones-after-7e9409c) rather than per-commit.
 
 ## Current System
 
@@ -639,6 +639,25 @@ Problem: PR handoffs required stitching together local session state and GitHub 
 ### 7e9409c - Fix PR brief webhook verifier repo fixture
 
 Problem: The PR-brief verifier failed in CI because its webhook fixture used a `repository.full_name` that no longer matched the local repo binding introduced by the webhook identity hardening. Solution: updated the fixture payload to match the repo binding. System impact: verification now exercises the hardened repository identity path instead of failing on inconsistent test data.
+
+## Later Milestones (after 7e9409c)
+
+These shipped after the per-commit log above. They are grouped by theme; see `plans/README.md` and `docs/adr/` for the authoritative records.
+
+### Session liveness & task intent (plans 032–033, 039)
+Sessions now persist their declared task intent and a last-seen liveness timestamp, and ended sessions stop refreshing `lastSeen`. System impact: team state distinguishes live, idle, and ended agents instead of treating any recent socket as active.
+
+### Coordination & governance hardening (plans 035, 036, 038, 040–044, 048)
+The edit-intent path became server-authoritative: `synapse_check` gets the server's peer locks back on the `edit.intent` ack, narrowing the time-of-check/time-of-use race (036). Supporting work added gate-state prune sweeps (038), rate limiting on `/state` and `/recall` (040), per-session edit-lock caps (044), webhook-to-signed-repo binding in tenancy mode (043), strict PR quality gates with one required aggregate check (035, 041), an ESLint + Prettier baseline (042), and branch protection on `main` (048).
+
+### Web app (plans 037, 049, 054, 055)
+`apps/web` is a Vite + React SPA: a marketing landing page plus a live dashboard (who's online, edit signals/locks, a daemon↔server↔symbol flow graph, a ship trail). It later gained an Owner dashboard over claimed Projects and owner-authorized session kick. System impact: the server's existing `state.snapshot`/`state.delta` stream now has a human-facing read surface.
+
+### Hosted GitHub-App auth (ADR-0001; plans 050–053)
+Synapse pivoted to a hosted, multi-tenant model with GitHub-only ownership. An Owner signs in with GitHub (signed cookie session), claims a repo by installing the GitHub App, and the server mints that repo's `project-key` for the daemon. The human (cookie) and machine (`project-key`) trust boundaries never cross. System impact: replaced the earlier OAuth-login/JWT direction (never shipped) with two clean, separate credentials.
+
+### Resolution mediator (ADR-0002; plans 056–060)
+When two live agents contest the same symbol, the server opens a suggest-only two-phase `keep`/`adapt` proposal at the contested `edit.intent`. It classifies the collision as **mechanical** (resolved deterministically once both sides accept) or **semantic** (escalated to the Owner as `awaiting_owner`, resolved via `POST /auth/projects/resolve-winner`). A reject or TTL timeout voids the pair. When configured, the LLM may rephrase only the losing side's `adapt` prose — it never changes verdicts, signatures, status, or code. Counts surface in `synapse insights` and the Owner dashboard.
 
 ## How To Study The Code From Here
 

@@ -8,7 +8,7 @@ import {
 } from "./onboarding";
 
 test("INSTALL_COMMAND is the global npm install", () => {
-  assert.equal(INSTALL_COMMAND, "npm install -g synapse");
+  assert.equal(INSTALL_COMMAND, "npm install -g @kumario/synapse");
 });
 
 test("serverWsUrl converts https to wss", () => {

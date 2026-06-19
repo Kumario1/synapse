@@ -1,6 +1,6 @@
 import type { Project } from "./auth";
 
-export const INSTALL_COMMAND = "npm install -g synapse";
+export const INSTALL_COMMAND = "npm install -g @kumario/synapse";
 
 export function serverWsUrl(origin: string = window.location.origin): string {
   return origin.replace(/^http/, "ws"); // https→wss, http→ws
