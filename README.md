@@ -160,7 +160,7 @@ Use the Quick Start above to bring up the host (`synapse up --serve --tunnel`) a
 
 ## Works with any agent, not just Claude Code
 
-Claude Code gets `PreToolUse` / `PostToolUse` / `SessionStart` hooks that fire `synapse_check` before edits, `synapse_report` after edits, and a `synapse_whatsup` catch-up at session start, including active teammates' live Reservations. A file-based pre-check records the current contract snapshot locally, so the first post-edit report can emit the real before -> after delta and accrete that session's Reservation from the edited symbol plus deterministic dependency neighbors. Every other agent gets the **same behavior** through MCP — `synapse join` (and `synapse connect`) sets it up automatically:
+Claude Code gets `PreToolUse` / `PostToolUse` / `SessionStart` hooks that fire `synapse_check` before edits, `synapse_report` after edits, and a `synapse_whatsup` catch-up at session start, including active teammates' live Reservations. A file-based pre-check records the current contract snapshot locally, so the first post-edit report can emit the real before -> after delta and accrete that session's Reservation from the edited symbol plus deterministic dependency neighbors. The PreToolUse hook blocks only the live same-symbol edit-lock case (`same_symbol_active`); unpushed deltas and dependency-radius conflicts stay advisory. Every other agent gets the **same behavior** through MCP — `synapse join` (and `synapse connect`) sets it up automatically:
 
 ```bash
 synapse connect                        # wire up every supported agent
@@ -220,7 +220,7 @@ packages/
   conflict-engine/  pure conflict evaluator
 ```
 
-The server is single-process with an in-memory hot path backed by a durable store. The daemon keeps raw code local. Detection is deterministic; humans decide — Synapse warns inline, never auto-blocks.
+The server is single-process with an in-memory hot path backed by a durable store. The daemon keeps raw code local. Detection is deterministic; Synapse blocks only a live same-symbol edit-lock collision and keeps every dependency-radius or unpushed-contract conflict advisory.
 
 ---
 

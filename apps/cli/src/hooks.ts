@@ -264,10 +264,11 @@ async function runUserPromptHook(
 }
 
 /**
- * Build the Claude Code `PreToolUse` response that surfaces a conflict. Default
- * is `ask` so the developer decides (proceed/adjust/ping) — the "agents query,
- * humans decide" principle — never an auto-block. Set `SYNAPSE_HOOK_NONBLOCKING=1`
- * to instead inject the heads-up as context and proceed without a prompt.
+ * Build the Claude Code `PreToolUse` response that surfaces a conflict. Most
+ * conflicts stay advisory as `ask`, while a live same-symbol edit lock denies
+ * the edit so two sessions do not write the same symbol at once. Set
+ * `SYNAPSE_HOOK_NONBLOCKING=1` to inject the heads-up as context and proceed
+ * without a prompt.
  */
 function preToolUseDecision(filePath: string, result: SynapseCheckResponse): unknown {
   const heading = `⚠ Synapse: ${result.conflicts.length} potential conflict(s) before editing ${filePath}`;
@@ -291,6 +292,7 @@ function preToolUseDecision(filePath: string, result: SynapseCheckResponse): unk
     return [line, ...actionLines];
   });
   const message = [heading, ...lines].join("\n");
+  const blocksEdit = result.conflicts.some((conflict) => conflict.rule === "same_symbol_active");
 
   if (process.env.SYNAPSE_HOOK_NONBLOCKING === "1") {
     return {
@@ -305,7 +307,7 @@ function preToolUseDecision(filePath: string, result: SynapseCheckResponse): unk
   return {
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
-      permissionDecision: "ask",
+      permissionDecision: blocksEdit ? "deny" : "ask",
       permissionDecisionReason: message
     }
   };
@@ -387,4 +389,3 @@ async function readStdin(): Promise<string> {
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-

@@ -83,6 +83,52 @@ try {
   ]);
   await waitForState(serverPort, (s) => s.sessions.length === 2);
 
+  // --- Phase 2 assert: a live same-symbol lock denies Bob's hook pre. ---
+  await check(alicePort, "alice");
+  await waitForState(serverPort, (s) =>
+    s.editLocks.some((lock) => lock.sessionId === "alice" && lock.symbolId.raw === symbol)
+  );
+
+  const denyOut = await runHookStage("pre", bobRoot, join(bobRoot, filePath));
+  assert.ok(denyOut, "hook pre emitted a decision for an active same-symbol lock");
+  const deny = denyOut.hookSpecificOutput;
+  assert.equal(deny.hookEventName, "PreToolUse");
+  assert.equal(deny.permissionDecision, "deny", "same_symbol_active blocks the edit");
+  assert.ok(
+    deny.permissionDecisionReason.includes("same_symbol_active"),
+    "deny reason names the same_symbol_active rule"
+  );
+  assert.ok(deny.permissionDecisionReason.includes("alice"), "deny reason names the holder");
+  assert.ok(deny.permissionDecisionReason.includes(symbol), "deny reason names the symbol");
+
+  const nonblockingOut = await runHookStage("pre", bobRoot, join(bobRoot, filePath), {
+    SYNAPSE_HOOK_NONBLOCKING: "1"
+  });
+  assert.ok(nonblockingOut, "nonblocking hook still emits context");
+  const nonblocking = nonblockingOut.hookSpecificOutput;
+  assert.equal(nonblocking.hookEventName, "PreToolUse");
+  assert.equal(
+    nonblocking.permissionDecision,
+    "allow",
+    "nonblocking mode downgrades deny to allow"
+  );
+  assert.ok(
+    nonblocking.additionalContext.includes("same_symbol_active"),
+    "nonblocking context names the same_symbol_active rule"
+  );
+
+  await session(alicePort, "alice", "end");
+  await waitForState(
+    serverPort,
+    (s) => !s.editLocks.some((lock) => lock.sessionId === "alice" && lock.symbolId.raw === symbol)
+  );
+  const afterEnd = await runHookStage("pre", bobRoot, join(bobRoot, filePath));
+  assert.notEqual(
+    afterEnd?.hookSpecificOutput?.permissionDecision,
+    "deny",
+    "ended holder session no longer denies the edit"
+  );
+
   // Baselines, then each side rewrites validate to its own incompatible contract.
   await report(alicePort, "alice");
   await report(bobPort, "bob");
@@ -100,7 +146,7 @@ try {
   assert.ok(preOut, "hook pre emitted a decision for a conflicting edit");
   const out = preOut.hookSpecificOutput;
   assert.equal(out.hookEventName, "PreToolUse");
-  assert.equal(out.permissionDecision, "ask", "warn surfaces as ask — the developer decides");
+  assert.equal(out.permissionDecision, "ask", "contract_divergent remains advisory");
   assert.ok(out.permissionDecisionReason.includes("Synapse"), "reason is a Synapse heads-up");
   assert.ok(
     out.permissionDecisionReason.includes("contract_divergent"),
@@ -157,6 +203,8 @@ try {
     JSON.stringify(
       {
         join: "ok",
+        deny: denyOut,
+        nonblocking: nonblockingOut,
         pre: preOut,
         post: "reported extra.ts and preseed.ts deltas",
         userPrompt: `lastTask set to "${prompt}"`
@@ -216,12 +264,29 @@ async function report(port, sessionId) {
   });
 }
 
+async function check(port, sessionId) {
+  return postJson(`http://localhost:${port}/tools/synapse_check`, {
+    repoId: "local",
+    sessionId,
+    files: [filePath],
+    symbols: [{ raw: symbol }]
+  });
+}
+
+async function session(port, sessionId, action) {
+  return postJson(`http://localhost:${port}/tools/synapse_session`, {
+    repoId: "local",
+    sessionId,
+    action
+  });
+}
+
 /** Invoke `synapse hook <stage>` exactly as Claude Code does: hook JSON on stdin. */
-function runHookStage(stage, worktreeRoot, absFilePath) {
+function runHookStage(stage, worktreeRoot, absFilePath, env = {}) {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(process.execPath, [cli, "hook", stage], {
       cwd: worktreeRoot,
-      env: { ...process.env, INIT_CWD: worktreeRoot },
+      env: { ...process.env, INIT_CWD: worktreeRoot, ...env },
       stdio: ["pipe", "pipe", "pipe"]
     });
     let stdout = "";
@@ -294,4 +359,3 @@ function runCli(args, cwd) {
     );
   });
 }
-
