@@ -2,7 +2,13 @@ import { useEffect, useState } from "react";
 import type { TeamState } from "@synapse/protocol";
 import { Button } from "@/components/ui/button";
 import { fetchProjects, type Project } from "@/auth";
-import { emptyRoomState, fetchOwnedRoomState, kickSession, toSnapshot } from "@/projects";
+import {
+  chooseResolutionWinner,
+  emptyRoomState,
+  fetchOwnedRoomState,
+  kickSession,
+  toSnapshot
+} from "@/projects";
 import type { FeedStatus } from "@/feed";
 import Dashboard from "@/Dashboard";
 
@@ -92,6 +98,16 @@ function SelectedRoom({ repoId }: { repoId: string }) {
         snapshot={toSnapshot(state, seq, status)}
         onKick={(session) => {
           void kickSession(repoId, session.id).then(() => {});
+        }}
+        onChooseWinner={(proposal, winnerSessionId) => {
+          void chooseResolutionWinner(repoId, proposal.id, winnerSessionId).then(async (ok) => {
+            if (!ok) return;
+            const next = await fetchOwnedRoomState(repoId);
+            if (!next) return;
+            setState(next);
+            setSeq((current) => current + 1);
+            setStatus("open");
+          });
         }}
       />
     </div>

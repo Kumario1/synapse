@@ -26,6 +26,7 @@ export function emptyRoomState(repoId: string): TeamState {
     recentPushes: [],
     recentRepoEvents: [],
     resolutions: [],
+    resolutionProposals: [],
     sessionSummaries: [],
     conflictFeedback: []
   };
@@ -44,6 +45,30 @@ export function kickUrl(repoId: string, sessionId: string): string {
 export async function kickSession(repoId: string, sessionId: string): Promise<boolean> {
   try {
     const response = await fetch(kickUrl(repoId, sessionId), {
+      method: "POST",
+      credentials: "include"
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+export function resolveWinnerUrl(repoId: string, proposalId: string, winnerSessionId: string): string {
+  return (
+    `/auth/projects/resolve-winner?repoId=${encodeURIComponent(repoId)}` +
+    `&proposalId=${encodeURIComponent(proposalId)}` +
+    `&winnerSessionId=${encodeURIComponent(winnerSessionId)}`
+  );
+}
+
+export async function chooseResolutionWinner(
+  repoId: string,
+  proposalId: string,
+  winnerSessionId: string
+): Promise<boolean> {
+  try {
+    const response = await fetch(resolveWinnerUrl(repoId, proposalId, winnerSessionId), {
       method: "POST",
       credentials: "include"
     });

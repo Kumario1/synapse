@@ -16,6 +16,7 @@ web-presentation vocabulary we use to talk about the UI.
 - **Edit lock** — a session's claim on a symbol it's editing. Source: protocol `EditLock`.
 - **Contract delta** — a recorded before→after change to a symbol's contract, classified breaking/compatible/etc. Source: protocol `ContractDelta`.
 - **Contested symbol** — a symbol two or more sessions are touching at once; the moment Synapse exists to surface. Derived in `derive.ts`.
+- **Resolution mediator** — the Room card that shows transient mediator proposals (`resolving`, `resolved`, `awaiting_owner`, `voided`). Owner actions here are decisions only, currently winner choice for semantic conflicts; coding agents still edit code.
 - **Ship trail** — the page's name for recent pushes + repo events (the "work landed" stream).
 - **Demo (narrated step-through)** — the scripted 4-frame conflict story (Alice & Bob collide on `loadRoom`), shown as a guided walkthrough with a caption per step, highlighting only the panel that changed. Used when `mode === "demo"`.
 - **Live grid** — the cleaned-up 4-panel dashboard shown when a real server is connected (`mode === "live"`). Same panels, no scripted narration.

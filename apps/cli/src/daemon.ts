@@ -1288,6 +1288,16 @@ function buildInsightsResponse(
   const activeSessions = state.sessions.filter((session) => session.status !== "ended").length;
   const activeEditLocks = state.editLocks.length;
   const unpushedDeltas = state.unpushedDeltas.filter((delta) => delta.pushedAt === null).length;
+  const resolutionProposals = state.resolutionProposals ?? [];
+  const resolutionResolving = resolutionProposals.filter(
+    (proposal) => proposal.status === "resolving"
+  ).length;
+  const resolutionResolved = resolutionProposals.filter(
+    (proposal) => proposal.status === "resolved"
+  ).length;
+  const resolutionEscalated = resolutionProposals.filter(
+    (proposal) => proposal.status === "awaiting_owner" || proposal.status === "voided"
+  ).length;
 
   const topRulesByFeedback = bucketTop(
     feedback.map((item) => item.rule ?? "unknown_rule"),
@@ -1312,6 +1322,11 @@ function buildInsightsResponse(
   if (topRulesByFeedback[0]) {
     summary.push(`Noisiest feedback rule: ${topRulesByFeedback[0].name} (${topRulesByFeedback[0].count}).`);
   }
+  if (resolutionProposals.length > 0) {
+    summary.push(
+      `Mediator proposals: ${resolutionResolving} resolving, ${resolutionResolved} resolved, ${resolutionEscalated} escalated.`
+    );
+  }
 
   return {
     repoId: state.repoId,
@@ -1324,7 +1339,10 @@ function buildInsightsResponse(
       dismissed,
       activeSessions,
       unpushedDeltas,
-      activeEditLocks
+      activeEditLocks,
+      resolutionResolving,
+      resolutionResolved,
+      resolutionEscalated
     },
     topRulesByFeedback,
     topConflictTargets,

@@ -1,4 +1,12 @@
-import type { ContractDelta, EditLock, RecentPush, RecentRepoEvent, Session, TeamState } from "@synapse/protocol";
+import type {
+  ContractDelta,
+  EditLock,
+  RecentPush,
+  RecentRepoEvent,
+  ResolutionProposal,
+  Session,
+  TeamState
+} from "@synapse/protocol";
 
 const repoId = "demo/playground";
 const base = Date.parse("2026-06-15T16:00:00.000Z");
@@ -71,6 +79,32 @@ const aliceDelta: ContractDelta = {
   pushedAt: null
 };
 
+const loadRoomProposal: ResolutionProposal = {
+  id: `rp:${symbol}:${alice.id}:${bob.id}`,
+  repoId,
+  symbol: { raw: symbol },
+  conflictClass: "mechanical",
+  before: null,
+  after: null,
+  status: "resolving",
+  directions: [
+    {
+      sessionId: alice.id,
+      role: "keep",
+      summary: "Keep the loadRoom contract update.",
+      affectedSites: []
+    },
+    {
+      sessionId: bob.id,
+      role: "adapt",
+      summary: "Update src/sidebar.ts to match loadRoom's new shape.",
+      affectedSites: [{ symbolId: { raw: "src/sidebar.ts#renderRoom" }, filePath: "src/sidebar.ts" }]
+    }
+  ],
+  acceptedBy: [alice.id],
+  createdAt: at(78)
+};
+
 const finalPush: RecentPush = {
   id: "push-load-room",
   repoId,
@@ -104,6 +138,7 @@ function state(step: number, patch: Partial<TeamState>): TeamState {
     recentPushes: [],
     recentRepoEvents: [],
     resolutions: [],
+    resolutionProposals: [],
     sessionSummaries: [],
     conflictFeedback: [],
     ...patch,
@@ -142,7 +177,8 @@ export const demoFrames: TeamState[] = [
       { ...bob, filesEditing: [filePath], lastTask: "Started same symbol edit" }
     ],
     editLocks: [aliceLock, bobLock],
-    unpushedDeltas: [aliceDelta]
+    unpushedDeltas: [aliceDelta],
+    resolutionProposals: [loadRoomProposal]
   }),
   state(5, {
     sessions: [
@@ -151,6 +187,13 @@ export const demoFrames: TeamState[] = [
     ],
     editLocks: [],
     unpushedDeltas: [],
+    resolutionProposals: [
+      {
+        ...loadRoomProposal,
+        status: "resolved",
+        acceptedBy: [alice.id, bob.id]
+      }
+    ],
     recentPushes: [finalPush],
     recentRepoEvents: [finalPr]
   })

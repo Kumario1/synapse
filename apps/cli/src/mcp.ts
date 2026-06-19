@@ -308,7 +308,7 @@ export async function runMcp(rawArgs: string[]): Promise<void> {
     {
       title: "Show Synapse Coordination Insights",
       description:
-        "Return local aggregate coordination insights from the daemon: feedback outcomes, noisy rules, active sessions, unpushed deltas, and edit locks. Does not expose raw code.",
+        "Return local aggregate coordination insights from the daemon: feedback outcomes, noisy rules, active sessions, unpushed deltas, edit locks, and mediator proposal state. Does not expose raw code.",
       inputSchema: {
         ...commonShape,
         limit: z.number().int().positive().max(20).optional()

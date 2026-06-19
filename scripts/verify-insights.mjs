@@ -30,6 +30,22 @@ try {
   ]);
   await waitForState(serverPort, (state) => state.sessions.length === 2);
 
+  const aliceCheck = await postJson(`http://localhost:${alicePort}/tools/synapse_check`, {
+    repoId: "local",
+    sessionId: "alice",
+    filePath,
+    files: [filePath],
+    symbols: [{ raw: symbol }]
+  });
+  assert.equal(aliceCheck.verdict, "none");
+  await waitForState(
+    serverPort,
+    (state) =>
+      state.editLocks.some(
+        (lock) => lock.sessionId === "alice" && lock.symbolId.raw === symbol
+      )
+  );
+
   await postJson(`http://localhost:${alicePort}/tools/synapse_report`, {
     repoId: "local",
     sessionId: "alice",
@@ -47,8 +63,16 @@ try {
     symbols: [{ raw: symbol }]
   });
   assert.equal(check.verdict, "warn");
-  assert.equal(check.conflicts.length, 1);
-  const conflict = check.conflicts[0];
+  assert.ok(check.conflicts.length >= 1);
+  const conflict = check.conflicts.find((item) => item.rule === "same_symbol_unpushed");
+  assert.ok(conflict);
+  await waitForState(
+    serverPort,
+    (state) =>
+      (state.resolutionProposals ?? []).some(
+        (proposal) => proposal.symbol.raw === symbol && proposal.status === "resolving"
+      )
+  );
 
   const acted = await postJson(`http://localhost:${bobPort}/tools/synapse_feedback`, {
     repoId: "local",
@@ -124,6 +148,9 @@ function assertInsights(insights) {
   assert.equal(insights.totals.dismissed, 1);
   assert.equal(insights.totals.activeSessions, 2);
   assert.equal(insights.totals.unpushedDeltas, 1);
+  assert.equal(insights.totals.resolutionResolving, 1);
+  assert.equal(insights.totals.resolutionResolved, 0);
+  assert.equal(insights.totals.resolutionEscalated, 0);
   assert.equal(insights.topRulesByFeedback[0].name, "same_symbol_unpushed");
   assert.equal(insights.topRulesByFeedback[0].count, 2);
   assert.equal(insights.topConflictTargets[0].name, symbol);
@@ -133,6 +160,7 @@ function assertInsights(insights) {
     ["dismissed", "acted"]
   );
   assert.ok(insights.summary.some((line) => line.includes("2 feedback events recorded")));
+  assert.ok(insights.summary.some((line) => line.includes("Mediator proposals: 1 resolving")));
 }
 
 function startDaemon(member, port) {
