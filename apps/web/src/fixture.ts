@@ -98,7 +98,9 @@ const loadRoomProposal: ResolutionProposal = {
       sessionId: bob.id,
       role: "adapt",
       summary: "Update src/sidebar.ts to match loadRoom's new shape.",
-      affectedSites: [{ symbolId: { raw: "src/sidebar.ts#renderRoom" }, filePath: "src/sidebar.ts" }]
+      affectedSites: [
+        { symbolId: { raw: "src/sidebar.ts#renderRoom" }, filePath: "src/sidebar.ts" }
+      ]
     }
   ],
   acceptedBy: [alice.id],
@@ -134,6 +136,7 @@ function state(step: number, patch: Partial<TeamState>): TeamState {
   return {
     repoId,
     editLocks: [],
+    reservations: [],
     unpushedDeltas: [],
     recentPushes: [],
     recentRepoEvents: [],
@@ -164,10 +167,7 @@ export const demoFrames: TeamState[] = [
     editLocks: [aliceLock]
   }),
   state(3, {
-    sessions: [
-      { ...alice, filesEditing: [filePath], lastTask: "Report contract delta" },
-      bob
-    ],
+    sessions: [{ ...alice, filesEditing: [filePath], lastTask: "Report contract delta" }, bob],
     editLocks: [aliceLock],
     unpushedDeltas: [aliceDelta]
   }),

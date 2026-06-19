@@ -330,6 +330,7 @@ function teamState(partial: Partial<TeamState>): TeamState {
     repoId: "local",
     sessions: [],
     editLocks: [],
+    reservations: [],
     unpushedDeltas: [],
     recentPushes: [],
     recentRepoEvents: [],

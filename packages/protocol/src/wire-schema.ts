@@ -36,6 +36,11 @@ const signature = z.looseObject({
   raw: z.string()
 });
 
+const reservationSeed = z.looseObject({
+  radius: z.number().int().nonnegative(),
+  symbols: z.array(symbolId)
+});
+
 const changeKind = z.enum([
   "added",
   "removed",
@@ -75,7 +80,8 @@ const contractDelta = z.looseObject({
   baseSha: z.string(),
   dependents: z.array(symbolId),
   createdAt: z.string(),
-  pushedAt: z.string().nullable()
+  pushedAt: z.string().nullable(),
+  reservation: reservationSeed.optional()
 });
 
 const contractResolution = z.looseObject({
@@ -153,6 +159,24 @@ const editLock = z.looseObject({
   ttlSec: z.number()
 });
 
+const reservationRoot = z.looseObject({
+  symbolId,
+  filePath: z.string(),
+  acquiredAt: z.string(),
+  ttlSec: z.number(),
+  radius: z.number().int().nonnegative(),
+  symbols: z.array(symbolId)
+});
+
+const reservation = z.looseObject({
+  repoId: z.string().min(1),
+  sessionId: z.string().min(1),
+  radius: z.number().int().nonnegative(),
+  symbols: z.array(symbolId),
+  roots: z.array(reservationRoot),
+  updatedAt: z.string()
+});
+
 const recentPush = z.looseObject({
   id: z.string().min(1),
   repoId: z.string().min(1),
@@ -182,6 +206,7 @@ const teamState = z.looseObject({
   repoId: z.string().min(1),
   sessions: z.array(session),
   editLocks: z.array(editLock),
+  reservations: z.array(reservation),
   unpushedDeltas: z.array(contractDelta),
   recentPushes: z.array(recentPush),
   recentRepoEvents: z.array(recentRepoEvent),
@@ -209,6 +234,8 @@ const stateOp = z.discriminatedUnion("op", [
     op: z.literal("deleteEditLocksForSession"),
     sessionId: z.string().min(1)
   }),
+  z.looseObject({ op: z.literal("upsertReservation"), reservation }),
+  z.looseObject({ op: z.literal("deleteReservation"), sessionId: z.string().min(1) }),
   z.looseObject({ op: z.literal("upsertDelta"), delta: contractDelta }),
   z.looseObject({ op: z.literal("deleteDelta"), deltaId: z.string().min(1) }),
   z.looseObject({

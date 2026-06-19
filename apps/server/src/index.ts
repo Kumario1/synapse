@@ -1013,6 +1013,14 @@ function teeStateStoreOps(ops: StateOp[]): StateStoreOps {
       store.deleteEditLocksForSession(repoId, sessionId);
       ops.push({ op: "deleteEditLocksForSession", sessionId });
     },
+    upsertReservation: (repoId, reservation) => {
+      store.upsertReservation(repoId, reservation);
+      ops.push({ op: "upsertReservation", reservation: clone(reservation) });
+    },
+    deleteReservation: (repoId, sessionId) => {
+      store.deleteReservation(repoId, sessionId);
+      ops.push({ op: "deleteReservation", sessionId });
+    },
     upsertDelta: (repoId, delta) => {
       store.upsertDelta(repoId, delta);
       ops.push({ op: "upsertDelta", delta: clone(delta) });

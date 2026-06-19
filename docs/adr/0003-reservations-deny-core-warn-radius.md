@@ -68,9 +68,9 @@ with blast radius, not hand-maintained.
   scoping `deny` strictly to live edit-lock collisions; everything
   dependency-derived stays advisory, and `SYNAPSE_HOOK_NONBLOCKING=1` still
   downgrades to context-only.
-- A Reservation is net-new persisted, queryable per-session state, where today
-  the blast radius is recomputed transiently per check. Modest: a union over
-  existing `EditLock`s plus graph queries, cleared on push or TTL.
+- A Reservation is persisted, queryable per-session state. It is a union over
+  reported edit roots plus deterministic graph neighbors, cleared on push or
+  edit-lock TTL.
 - Two sessions' growing reservations can collide on the core — that is the
   existing `contested` flow, now possibly reached via `deny` instead of `ask`.
   The reject / timeout / void / Owner-escalation paths from ADR 0002 handle it
@@ -81,10 +81,10 @@ with blast radius, not hand-maintained.
 ## Remaining work
 
 - Persist `Reservation` as queryable per-session state (protocol type + server
-  store); today the radius is transient.
-- Add task-to-reservation overlap matching using captured prompts. The first
-  warn-only floor shipped in issue #128: SessionStart now surfaces active
-  teammates' live `EditLock` regions from `synapse_whatsup`.
+  store) — shipped in issue #129.
+- Add task-to-reservation overlap matching using captured prompts. The warn-only
+  floor shipped across issues #128 and #129: SessionStart now surfaces active
+  teammates' stored Reservations from `synapse_whatsup`.
 - Flip `preToolUseDecision` to return `deny` for the live edit-lock collision
   case only; keep `ask` / `warn` elsewhere.
 - Surface live reservations to Owners in the dashboard.
