@@ -67,6 +67,7 @@ This plan set came from a deep advisory audit. Source files were not modified wh
 | [060](060-mediator-owner-visibility.md) | Mediator — Owner visibility in insights and dashboard | P1 | M | 056, 057, 058 | DONE (issue #114; planned at `e28b7d5`. Adds mediator proposal counts to `synapse insights` and a compact Owner dashboard card for resolving/resolved/escalated proposals, with winner-choice buttons reusing the existing Owner-authenticated HTTP route. Visibility/decision only; no code-edit action. Gates green: build/typecheck, protocol 25 / cli 31 / web 25 / server 134 tests, web build, `verify:insights`, `verify:mediator`, lint, format:check, diff check all 0.) |
 | [061](061-session-join-active-region-awareness.md) | Surface teammates' live edit regions at session start | P1 | S | - | DONE (issue #128; first warn-only Reservation slice. Uses existing `sessions` + `editLocks` in `synapse_whatsup`; no persisted Reservation and no `deny` behavior. Local gates green: build, CLI tests, `verify:session-start`, typecheck, lint, root `npm test` under Node 20.) |
 | [062](062-persist-session-reservations.md) | Persist per-session Reservations from reported edits | P1 | M | 061 | DONE (issue #129; persisted/queryable Reservation state from reported edits, read by SessionStart. Local gates green: build, typecheck, lint, protocol/server/CLI tests, `verify:session-start`, root `npm test` under Node 20 + Python 3.12. No deny behavior and no dashboard UI.) |
+| [063](063-deny-live-edit-lock-collision.md) | Deny PreToolUse on live same-symbol edit-lock collisions | P1 | S | 062 | DONE (issue #130; only `same_symbol_active` maps to hook `deny`, nonblocking mode downgrades to allow+context, dependency-radius and contract conflicts remain advisory. Local gates green: build, typecheck, lint, CLI tests, `verify:hooks`, `ci:strict:agent-loop`, root `npm test` under Node 20 + Python 3.12, format:check, diff check.) |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
 
@@ -92,6 +93,7 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
 - Plan 060 (issue #114) is the final PRD #109 slice: visibility and Owner decision in existing surfaces only. It depends on 058's semantic `awaiting_owner` state and existing resolve-winner HTTP route.
 - Plan 061 (issue #128) is independent of the mediator sequence. It intentionally ships only session-start awareness over active edit locks; persisted Reservations and PreToolUse `deny` stay future work.
 - Plan 062 (issue #129) depends on 061 because SessionStart already has a warn-only rendering path to switch from raw locks to stored Reservations. It intentionally excludes issue #130's deny behavior and issue #131's dashboard UI.
+- Plan 063 (issue #130) depends on 062 because ADR 0003's Reservation floor is now persisted, but it intentionally changes only the hook decision for the existing `same_symbol_active` live edit-lock core. It excludes dependency-radius deny and the issue #131 dashboard surface.
 
 ## Verification Baseline
 
