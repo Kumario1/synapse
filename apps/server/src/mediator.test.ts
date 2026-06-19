@@ -1,13 +1,19 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import type { MediatorResolutionProvider } from "@synapse/conflict-engine";
 import { createEmptyTeamState, type ContractDelta, type TeamState } from "@synapse/protocol";
 import {
   applyResolutionAck,
   applyResolutionReject,
   applyWinnerChoice,
+  enrichResolutionProse,
   proposeOnContest,
   voidOnTimeout
 } from "./mediator.js";
+import {
+  createOpenRouterMediatorProvider,
+  parseMediatorResolutionProse
+} from "./mediator-openrouter.js";
 
 const symbol = { raw: "ts:src/auth/token.ts#getUser" };
 const dependent = { raw: "ts:src/routes/me.ts#handleMe" };
@@ -76,16 +82,19 @@ test("proposeOnContest stores one mechanical keep/adapt proposal", () => {
   assert.deepEqual(proposal.before, state.unpushedDeltas[0].before);
   assert.deepEqual(proposal.after, state.unpushedDeltas[0].after);
   assert.deepEqual(
-    proposal.directions.map((direction) => ({
-      sessionId: direction.sessionId,
-      role: direction.role,
-      affectedSites: direction.affectedSites
-    })),
+    proposal.directions,
     [
-      { sessionId: "alice", role: "keep", affectedSites: [] },
+      {
+        sessionId: "alice",
+        role: "keep",
+        summary: "Keep your change to ts:src/auth/token.ts#getUser.",
+        affectedSites: []
+      },
       {
         sessionId: "bob",
         role: "adapt",
+        summary:
+          "Update 1 call-site(s) to match ts:src/auth/token.ts#getUser's new signature.",
         affectedSites: [{ symbolId: dependent, filePath: "src/routes/me.ts" }]
       }
     ]
@@ -143,6 +152,129 @@ test("applyWinnerChoice ignores sessions that are not candidates", () => {
   assert.deepEqual(proposal.directions, []);
   assert.deepEqual(proposal.candidates, ["alice", "bob"]);
   assert.equal(proposal.after, null);
+});
+
+test("enrichResolutionProse with null provider does not mutate a mechanical proposal", async () => {
+  const state = stateWithKeepDelta();
+  const proposal = proposeOnContest(state, symbol.raw, "bob");
+  assert.ok(proposal);
+  const before = structuredClone(proposal);
+
+  assert.equal(await enrichResolutionProse(state, proposal.id, null), false);
+  assert.deepEqual(proposal, before);
+});
+
+test("enrichResolutionProse changes only the adapt summary", async () => {
+  const state = stateWithKeepDelta();
+  const proposal = proposeOnContest(state, symbol.raw, "bob");
+  assert.ok(proposal);
+  const stableFields = proposalStateFields(proposal);
+  const keepDirection = structuredClone(proposal.directions[0]);
+  let called = false;
+  const provider: MediatorResolutionProvider = {
+    proposeResolution: async (request) => {
+      called = true;
+      assert.equal(request.proposalId, proposal.id);
+      assert.equal(request.keep.sessionId, "alice");
+      assert.equal(request.adapt.sessionId, "bob");
+      return { adaptSummary: validAdaptSummary() };
+    }
+  };
+
+  assert.equal(await enrichResolutionProse(state, proposal.id, provider), true);
+
+  assert.equal(called, true);
+  assert.deepEqual(proposalStateFields(proposal), stableFields);
+  assert.deepEqual(proposal.directions[0], keepDirection);
+  assert.equal(proposal.directions[1]?.summary, validAdaptSummary());
+});
+
+test("enrichResolutionProse ignores semantic proposals before owner choice", async () => {
+  const state = stateWithDivergentDeltas();
+  const proposal = proposeOnContest(state, symbol.raw, "bob");
+  assert.ok(proposal);
+  let called = false;
+  const provider: MediatorResolutionProvider = {
+    proposeResolution: async () => {
+      called = true;
+      return { adaptSummary: validAdaptSummary() };
+    }
+  };
+
+  assert.equal(await enrichResolutionProse(state, proposal.id, provider), false);
+  assert.equal(called, false);
+  assert.equal(proposal.status, "awaiting_owner");
+  assert.deepEqual(proposal.directions, []);
+});
+
+test("enrichResolutionProse can enrich a semantic proposal after owner choice", async () => {
+  const state = stateWithDivergentDeltas();
+  const proposal = proposeOnContest(state, symbol.raw, "bob");
+  assert.ok(proposal);
+  assert.equal(applyWinnerChoice(state, proposal.id, "alice"), true);
+
+  assert.equal(
+    await enrichResolutionProse(state, proposal.id, {
+      proposeResolution: async (request) => {
+        assert.equal(request.conflictClass, "semantic");
+        assert.equal(request.keep.sessionId, "alice");
+        assert.equal(request.adapt.sessionId, "bob");
+        return { adaptSummary: validAdaptSummary() };
+      }
+    }),
+    true
+  );
+
+  assert.equal(proposal.status, "resolving");
+  assert.equal(proposal.directions[1]?.summary, validAdaptSummary());
+});
+
+test("enrichResolutionProse swallows provider exceptions and preserves summaries", async () => {
+  const state = stateWithKeepDelta();
+  const proposal = proposeOnContest(state, symbol.raw, "bob");
+  assert.ok(proposal);
+  const before = structuredClone(proposal.directions);
+
+  assert.equal(
+    await enrichResolutionProse(state, proposal.id, {
+      proposeResolution: async () => {
+        throw new Error("provider failed");
+      }
+    }),
+    false
+  );
+
+  assert.deepEqual(proposal.directions, before);
+});
+
+test("parseMediatorResolutionProse accepts strict JSON with adaptSummary", () => {
+  assert.deepEqual(parseMediatorResolutionProse('{"adaptSummary":"  Update the caller.  "}'), {
+    adaptSummary: "Update the caller."
+  });
+});
+
+test("parseMediatorResolutionProse rejects malformed or empty provider output", () => {
+  assert.equal(parseMediatorResolutionProse(undefined), null);
+  assert.equal(parseMediatorResolutionProse("not json"), null);
+  assert.equal(parseMediatorResolutionProse('{"adaptSummary":""}'), null);
+  assert.equal(parseMediatorResolutionProse('{"summary":"wrong field"}'), null);
+});
+
+test("createOpenRouterMediatorProvider is disabled without a key or with resolve disabled", () => {
+  const originalKey = process.env.OPENROUTER_API_KEY;
+  const originalResolve = process.env.SYNAPSE_LLM_RESOLVE;
+  try {
+    delete process.env.OPENROUTER_API_KEY;
+    delete process.env.SYNAPSE_LLM_RESOLVE;
+    assert.equal(createOpenRouterMediatorProvider(), null);
+
+    process.env.OPENROUTER_API_KEY = "test-key";
+    process.env.SYNAPSE_LLM_RESOLVE = "0";
+    assert.equal(createOpenRouterMediatorProvider(), null);
+  } finally {
+    restoreEnv("OPENROUTER_API_KEY", originalKey);
+    restoreEnv("SYNAPSE_LLM_RESOLVE", originalResolve);
+  }
 });
 
 test("applyResolutionAck does not resolve a semantic proposal before owner choice", () => {
@@ -272,4 +404,38 @@ function session(id: string): TeamState["sessions"][number] {
     lastSeen: "2026-06-17T00:00:00.000Z",
     status: "active"
   };
+}
+
+function validAdaptSummary(): string {
+  return "Update ts:src/auth/token.ts#getUser callers in src/routes/me.ts to handle () => User | null.";
+}
+
+function proposalStateFields(proposal: NonNullable<TeamState["resolutionProposals"]>[number]): {
+  conflictClass: typeof proposal.conflictClass;
+  before: typeof proposal.before;
+  after: typeof proposal.after;
+  status: typeof proposal.status;
+  acceptedBy: typeof proposal.acceptedBy;
+  candidates: typeof proposal.candidates;
+  voidReason: typeof proposal.voidReason;
+  voidedBy: typeof proposal.voidedBy;
+} {
+  return {
+    conflictClass: proposal.conflictClass,
+    before: proposal.before,
+    after: proposal.after,
+    status: proposal.status,
+    acceptedBy: proposal.acceptedBy,
+    candidates: proposal.candidates,
+    voidReason: proposal.voidReason,
+    voidedBy: proposal.voidedBy
+  };
+}
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
 }

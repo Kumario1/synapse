@@ -1,16 +1,15 @@
 # LLM resolution-mediator: suggest-only, coordinated-pair, Synapse never edits
 
-Status: Proposed (2026-06-17). Introduces a background **mediator agent** that
+Status: Accepted (2026-06-18). Introduces a background **mediator agent** that
 reasons over Synapse's deterministic coordination state to *propose* a
 reconciliation for a contested symbol, and delivers it as a **direction** to each
 side's coding agent. The verdict rule is **preserved** — the LLM still never
-raises, lowers, or replaces a detection verdict. What this shifts is the LLM's
-*role*: from detection-time **enrichment only** to also **driving resolution**
-(reasoning over state to propose reconciliations, with Synapse emitting the
-directions). That shift is confined to the *resolution* axis and bounded by the
-decisions below. It complements, and supersedes the "suggest-only" framing of,
-the close-the-loop spike (plan 046), which scoped the deterministic fix-handoff
-and explicitly left LLM resolution out.
+raises, lowers, or replaces a detection verdict. In the current slice, the LLM
+only authors optional prose for the losing side's `adapt` direction; deterministic
+state still owns proposal class, status, signatures, winners, and call-site
+facts. This complements, and supersedes the "suggest-only" framing of, the
+close-the-loop spike (plan 046), which scoped the deterministic fix-handoff and
+explicitly left LLM resolution out.
 
 ## Context
 
@@ -51,26 +50,33 @@ edit satisfies both) — would confidently apply wrong reconciliations silently.
   Built on existing primitives — the server-authoritative atomic round-trip
   (plan 036) and edit locks.
 - **Semantic conflicts are not "both-satisfied."** When intents are mutually
-  exclusive the mediator picks a winner and assigns the other an *adapt* role;
-  it does not pretend a both-satisfying edit exists. (How the winner is chosen,
-  and who authorizes that choice, is the next open decision — see below.)
+  exclusive, Synapse does not pretend a both-satisfying edit exists. The
+  server-hosted mediator emits an `awaiting_owner` proposal, and the Owner picks
+  the winner. The winner keeps its deterministic `after`; the losing side gets
+  the deterministic `adapt` call-site list.
+- **Deterministic state owns the facts.** The server and pure conflict engine
+  own signatures, affected call-site paths, proposal status, timeout/reject
+  behavior, and the Owner winner choice. The LLM can only rewrite the adapt
+  `Direction.summary`, and grounding rejects invented files, symbol ids, or
+  signature snippets.
+- **The mediator is server-hosted with pure helpers.** Request construction and
+  grounding live in `packages/conflict-engine`; transient proposal mutation and
+  async provider orchestration live in `apps/server`. Optional OpenRouter calls
+  happen after deterministic state is broadcast and outside the per-repo lock.
 
 ## Consequences
 
-- New trust surface: an LLM now influences *what an agent is told to do* to
-  resolve a conflict. Mitigated by suggest-only + per-side surfacing + two-phase
+- New trust surface: an LLM now influences *how adapt guidance is phrased* for a
+  resolving conflict. Mitigated by suggest-only + per-side surfacing + two-phase
   commit; every factual claim in a direction stays grounded in deterministic
-  state.
+  state, and invalid prose falls back to the deterministic summary.
 - Synapse gains a "resolving" conflict state and a small consensus protocol over
   two autonomous agents — on-brand for a coordination layer, but net-new
   machinery to build and test.
 
-## Open (not yet decided)
+## Remaining work
 
-- **Winner selection** for semantic conflicts and who authorizes it (lock
-  seniority? task priority? always escalate to Owner?).
-- **Code home** for the mediator (apps/cli vs packages/conflict-engine vs
-  apps/server) — glossary terms (mediator agent, direction, actuator,
-  coordinated pair, mechanical vs semantic conflict) get written into that
-  package's CONTEXT.md once chosen.
-- **Trigger source**: reuse the atomic intent round-trip (036) as the wake event.
+- Issue #114 still needs Owner visibility for resolving/awaiting-owner state in
+  the dashboard.
+- Future protocol work may add provenance for enriched summaries; this slice
+  deliberately uses the existing `Direction.summary` field.
