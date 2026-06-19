@@ -29,12 +29,18 @@ const bobFile = "src/util/other.ts";
 const bobSymbol = "ts:src/util/other.ts#foo";
 
 try {
-  await writeFile2(aliceRoot, aliceFile, "export function validate(input: string): boolean { return !!input; }");
+  await writeFile2(
+    aliceRoot,
+    aliceFile,
+    "export function validate(input: string): boolean { return !!input; }"
+  );
   await writeFile2(bobRoot, bobFile, "export function foo(a: string): string { return a; }");
   await writeLocalConfig(aliceRoot, alicePort, "alice");
   await writeLocalConfig(bobRoot, bobPort, "bob");
 
-  startProcess("server", ["apps/server/dist/index.js"], { SYNAPSE_SERVER_PORT: String(serverPort) });
+  startProcess("server", ["apps/server/dist/index.js"], {
+    SYNAPSE_SERVER_PORT: String(serverPort)
+  });
   await waitForHttp(`http://localhost:${serverPort}/health`);
   startDaemon("alice", alicePort, aliceRoot);
   startDaemon("bob", bobPort, bobRoot);
@@ -44,9 +50,18 @@ try {
   ]);
   await waitForState(serverPort, (s) => s.sessions.length === 2);
 
+  await check(alicePort, "alice", aliceFile, aliceSymbol);
+  await waitForState(serverPort, (s) =>
+    s.editLocks.some((lock) => lock.sessionId === "alice" && lock.symbolId.raw === aliceSymbol)
+  );
+
   // Alice changes validate (teammate's unpushed change), Bob changes his own foo.
   await report(alicePort, "alice", aliceFile);
-  await writeFile2(aliceRoot, aliceFile, "export function validate(input: string): string { return input; }");
+  await writeFile2(
+    aliceRoot,
+    aliceFile,
+    "export function validate(input: string): string { return input; }"
+  );
   await report(alicePort, "alice", aliceFile);
 
   await report(bobPort, "bob", bobFile);
@@ -66,7 +81,10 @@ try {
   // Bob's daemon cache must reflect the shared state before it briefs.
   await waitForDaemonState(
     bobPort,
-    (s) => s.unpushedDeltas.some((d) => d.symbolId.raw === aliceSymbol) && s.recentPushes.length >= 1
+    (s) =>
+      s.unpushedDeltas.some((d) => d.symbolId.raw === aliceSymbol) &&
+      s.editLocks.some((lock) => lock.sessionId === "alice" && lock.symbolId.raw === aliceSymbol) &&
+      s.recentPushes.length >= 1
   );
 
   // Invoke Bob's SessionStart hook exactly as Claude Code would.
@@ -77,6 +95,11 @@ try {
   assert.ok(context.includes("Synapse catch-up"), "briefing has a heading");
   assert.ok(context.includes(aliceSymbol), "briefing surfaces alice's unpushed change");
   assert.ok(context.includes("alice"), "briefing names the teammate");
+  assert.ok(context.includes("Teammates' live edit regions"), "briefing surfaces live regions");
+  assert.ok(
+    context.includes(`${aliceSymbol} in ${aliceFile}`),
+    "briefing surfaces alice's active lock"
+  );
   assert.ok(context.includes("Recent pushes"), "briefing surfaces the recent push");
   assert.ok(!context.includes(bobSymbol), "briefing excludes the reader's own change");
 
@@ -121,12 +144,30 @@ async function writeLocalConfig(worktreeRoot, port, sessionId) {
   await mkdir(join(worktreeRoot, ".synapse"), { recursive: true });
   await writeFile(
     join(worktreeRoot, ".synapse/config.json"),
-    JSON.stringify({ repoId: "local", daemonPort: port, sessionId, member: sessionId, worktreeRoot }, null, 2)
+    JSON.stringify(
+      { repoId: "local", daemonPort: port, sessionId, member: sessionId, worktreeRoot },
+      null,
+      2
+    )
   );
 }
 
 async function report(port, sessionId, filePath) {
-  return postJson(`http://localhost:${port}/tools/synapse_report`, { repoId: "local", sessionId, filePath });
+  return postJson(`http://localhost:${port}/tools/synapse_report`, {
+    repoId: "local",
+    sessionId,
+    filePath
+  });
+}
+
+async function check(port, sessionId, filePath, symbolRaw) {
+  return postJson(`http://localhost:${port}/tools/synapse_check`, {
+    repoId: "local",
+    sessionId,
+    files: [filePath],
+    symbols: [{ raw: symbolRaw }],
+    task: "validate auth tokens"
+  });
 }
 
 async function pushWebhook() {

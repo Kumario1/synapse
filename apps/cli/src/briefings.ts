@@ -1,3 +1,4 @@
+import { editLockIsActive } from "@synapse/conflict-engine";
 import type {
   RecallMatch,
   SynapseOnboardResponse,
@@ -6,19 +7,23 @@ import type {
   SynapseWhyResponse,
   SynapseWhySource,
   SynapseWhySourceKind,
-  TeamState,
-
+  TeamState
 } from "@synapse/protocol";
 
 /** Build the catch-up text from a whatsup briefing, excluding the reader's own work. */
-export function sessionStartBriefing(briefing: SynapseWhatsupResponse, selfSessionId: string): string | null {
+export function sessionStartBriefing(
+  briefing: SynapseWhatsupResponse,
+  selfSessionId: string
+): string | null {
   const sections: string[] = [];
 
   const pushes = briefing.recentPushes.slice(0, 5);
   if (pushes.length > 0) {
     sections.push(
       `Recent pushes:\n${pushes
-        .map((push) => `  • ${push.memberId}: ${push.summary} (${push.filesAffected.length} file(s))`)
+        .map(
+          (push) => `  • ${push.memberId}: ${push.summary} (${push.filesAffected.length} file(s))`
+        )
         .join("\n")}`
     );
   }
@@ -42,7 +47,29 @@ export function sessionStartBriefing(briefing: SynapseWhatsupResponse, selfSessi
     );
   }
 
-  const summaries = briefing.sessionSummaries.filter((summary) => summary.sessionId !== selfSessionId);
+  const sessionLabelById = new Map(
+    briefing.sessions.map((session) => [session.id, session.memberLogin ?? session.id])
+  );
+  const locksBySession = new Map<string, typeof briefing.editLocks>();
+  for (const lock of briefing.editLocks) {
+    if (lock.sessionId === selfSessionId) {
+      continue;
+    }
+    const locks = locksBySession.get(lock.sessionId) ?? [];
+    locks.push(lock);
+    locksBySession.set(lock.sessionId, locks);
+  }
+  const liveRegionLines = [...locksBySession].flatMap(([sessionId, locks]) => {
+    const label = sessionLabelById.get(sessionId) ?? sessionId;
+    return locks.map((lock) => `  • ${label}: ${lock.symbolId.raw} in ${lock.filePath}`);
+  });
+  if (liveRegionLines.length > 0) {
+    sections.push(`Teammates' live edit regions:\n${liveRegionLines.join("\n")}`);
+  }
+
+  const summaries = briefing.sessionSummaries.filter(
+    (summary) => summary.sessionId !== selfSessionId
+  );
   if (summaries.length > 0) {
     sections.push(
       `Recent session summaries:\n${summaries
@@ -73,6 +100,12 @@ export function buildWhatsupResponse(
   const activeSessions = state.sessions
     .filter((session) => session.status !== "ended")
     .sort((a, b) => b.lastSeen.localeCompare(a.lastSeen));
+  const liveRegionSessionIds = new Set(
+    activeSessions.filter((session) => session.status === "active").map((session) => session.id)
+  );
+  const activeEditLocks = state.editLocks.filter(
+    (lock) => liveRegionSessionIds.has(lock.sessionId) && editLockIsActive(lock)
+  );
   const unpushedDeltas = [...state.unpushedDeltas]
     .filter((delta) => delta.pushedAt === null)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -95,7 +128,7 @@ export function buildWhatsupResponse(
     summary: [
       `${activeSessions.length} active session${activeSessions.length === 1 ? "" : "s"}`,
       `${unpushedDeltas.length} unpushed contract delta${unpushedDeltas.length === 1 ? "" : "s"}`,
-      `${state.editLocks.length} active edit lock${state.editLocks.length === 1 ? "" : "s"}`,
+      `${activeEditLocks.length} active edit lock${activeEditLocks.length === 1 ? "" : "s"}`,
       `${recentPushes.length} recent push${recentPushes.length === 1 ? "" : "es"}`,
       `${recentRepoEvents.length} GitHub repo event${recentRepoEvents.length === 1 ? "" : "s"}`,
       `${resolutions.length} shared resolution${resolutions.length === 1 ? "" : "s"}`,
@@ -125,7 +158,7 @@ export function buildWhatsupResponse(
       baseSha: delta.baseSha,
       createdAt: delta.createdAt
     })),
-    editLocks: state.editLocks.slice(0, limit),
+    editLocks: activeEditLocks.slice(0, limit),
     recentPushes: recentPushes.slice(0, limit),
     recentRepoEvents: recentRepoEvents.slice(0, limit),
     resolutions: resolutions.slice(0, limit),
