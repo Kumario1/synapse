@@ -12,12 +12,10 @@ existing `warn`/`info` advisories**. Synapse still never edits user code.
 
 ## Context
 
-Detection today is reactive: by the time a symbol is `contested`, both sides
-have already done work, so coordination means someone adapts or wastes effort.
-The PreToolUse hook only ever returns `ask` — `preToolUseDecision`
-(`apps/cli/src/hooks.ts`) is commented _"the 'agents query, humans decide'
-principle — never an auto-block."_ Wasted parallel work is surfaced, never
-pre-empted.
+Before this ADR's first enforcement slice, detection was reactive: by the time
+a symbol was `contested`, both sides had already done work, so coordination
+meant someone adapted or wasted effort. The PreToolUse hook only returned `ask`;
+wasted parallel work was surfaced, never pre-empted.
 
 The owner asked whether "smart contracts" (deterministic execution, escrow,
 enforceable obligations, immutable audit, automatic enforcement) could improve
@@ -64,7 +62,7 @@ with blast radius, not hand-maintained.
 
 ## Consequences
 
-- The PreToolUse hook gains a blocking path for the first time. Mitigated by
+- The PreToolUse hook gained a blocking path for the first time in issue #130. Mitigated by
   scoping `deny` strictly to live edit-lock collisions; everything
   dependency-derived stays advisory, and `SYNAPSE_HOOK_NONBLOCKING=1` still
   downgrades to context-only.
@@ -86,5 +84,5 @@ with blast radius, not hand-maintained.
   floor shipped across issues #128 and #129: SessionStart now surfaces active
   teammates' stored Reservations from `synapse_whatsup`.
 - Flip `preToolUseDecision` to return `deny` for the live edit-lock collision
-  case only; keep `ask` / `warn` elsewhere.
+  case only; keep `ask` / `warn` elsewhere — shipped in issue #130.
 - Surface live reservations to Owners in the dashboard.

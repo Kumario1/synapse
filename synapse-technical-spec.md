@@ -394,10 +394,12 @@ configured, `synapse_why` additionally ranks by vector recall on top of the dete
 **Claude Code hooks** (the first-class automatic path) — installed into the repo's settings:
 
 - `PreToolUse` on `Edit|Write|MultiEdit`: shells into the daemon's local endpoint = `synapse_check`
-  for the target file. On `warn`, the hook returns context that Claude surfaces inline before editing
-  (per "warn inline, dev decides" — it does **not** block). For file-based checks, the daemon also
-  snapshots the current contract symbols locally so the next post-edit report can diff against the
-  pre-edit state.
+  for the target file. On the live same-symbol edit-lock rule (`same_symbol_active`), the hook returns
+  `permissionDecision: "deny"` so a cooperating agent does not edit a symbol another live session
+  currently holds. Other surfaced conflicts remain advisory (`ask` / inline context), and
+  `SYNAPSE_HOOK_NONBLOCKING=1` downgrades even the deny case to context-only. For file-based checks,
+  the daemon also snapshots the current contract symbols locally so the next post-edit report can diff
+  against the pre-edit state.
 - `PostToolUse` on `Edit|Write|MultiEdit`: calls `synapse_report` for the changed file.
 
 ### 8b. Daemon ↔ Server (WSS, authenticated, per-repo room)
@@ -467,7 +469,8 @@ a valid `X-Hub-Signature-256` HMAC.
 
 ## 9. The Conflict Engine (severity algorithm)
 
-Pure function, runs locally in the daemon. Output ∈ `{none, info, warn}` (we chose no auto-block).
+Pure function, runs locally in the daemon. Output ∈ `{none, info, warn}`; the Claude hook maps only
+`same_symbol_active` to a blocking `deny`.
 
 ```
 function evaluate(target: {symbolId, filePath}, state: TeamState, graph): Conflict[] {
@@ -476,7 +479,7 @@ function evaluate(target: {symbolId, filePath}, state: TeamState, graph): Confli
 
   for each otherSession (≠ me) in state.sessions:
     // R1 — same symbol, actively edited elsewhere
-    if otherSession holds EditLock on target.symbolId        -> WARN  (same_symbol_active)
+    if otherSession holds EditLock on target.symbolId        -> WARN  (same_symbol_active; hook deny)
     // R2 — same symbol has an unpushed contract change elsewhere
     if ∃ unpushedDelta(symbol=target.symbolId, session=other) -> WARN (same_symbol_unpushed)
 
