@@ -380,5 +380,12 @@ export {
   type MediatorResolutionProvider,
   type MediatorResolutionRequest
 } from "./mediator.js";
+export {
+  extractJsonObject,
+  openRouterConfig,
+  requestCompletion,
+  type CompletionParams,
+  type OpenRouterConfig
+} from "./openrouter.js";
 
 export type { Conflict };
