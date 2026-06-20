@@ -3,6 +3,7 @@ import type {
   EditLock,
   RecentPush,
   RecentRepoEvent,
+  Reservation,
   ResolutionProposal,
   Session,
   TeamState
@@ -77,6 +78,24 @@ const aliceDelta: ContractDelta = {
   dependents: [{ raw: "src/sidebar.ts#renderRoom" }],
   createdAt: at(54),
   pushedAt: null
+};
+
+const aliceReservation: Reservation = {
+  repoId,
+  sessionId: alice.id,
+  radius: 2,
+  symbols: [{ raw: symbol }, { raw: "src/sidebar.ts#renderRoom" }],
+  roots: [
+    {
+      symbolId: { raw: symbol },
+      filePath,
+      acquiredAt: at(54),
+      ttlSec: 180,
+      radius: 2,
+      symbols: [{ raw: symbol }, { raw: "src/sidebar.ts#renderRoom" }]
+    }
+  ],
+  updatedAt: at(54)
 };
 
 const loadRoomProposal: ResolutionProposal = {
@@ -169,6 +188,7 @@ export const demoFrames: TeamState[] = [
   state(3, {
     sessions: [{ ...alice, filesEditing: [filePath], lastTask: "Report contract delta" }, bob],
     editLocks: [aliceLock],
+    reservations: [aliceReservation],
     unpushedDeltas: [aliceDelta]
   }),
   state(4, {
@@ -177,6 +197,7 @@ export const demoFrames: TeamState[] = [
       { ...bob, filesEditing: [filePath], lastTask: "Started same symbol edit" }
     ],
     editLocks: [aliceLock, bobLock],
+    reservations: [aliceReservation],
     unpushedDeltas: [aliceDelta],
     resolutionProposals: [loadRoomProposal]
   }),

@@ -10,10 +10,16 @@ import {
   CardHeader,
   CardTitle
 } from "@/components/ui/card";
-import { activeSessions, deriveContestedSymbols } from "./derive";
+import { activeSessions, deriveActiveReservations, deriveContestedSymbols } from "./derive";
 import type { FeedSnapshot, FeedStatus } from "./feed";
 import FlowGraph from "./FlowGraph";
-import { CommitsPanel, OnlinePanel, ResolutionPanel, SignalsPanel } from "./panels";
+import {
+  CommitsPanel,
+  OnlinePanel,
+  ReservationsPanel,
+  ResolutionPanel,
+  SignalsPanel
+} from "./panels";
 
 export default function Dashboard({
   snapshot,
@@ -26,17 +32,24 @@ export default function Dashboard({
 }) {
   const sessions = useMemo(() => activeSessions(snapshot.state), [snapshot.state]);
   const contested = useMemo(() => deriveContestedSymbols(snapshot.state), [snapshot.state]);
+  const reservations = useMemo(() => deriveActiveReservations(snapshot.state), [snapshot.state]);
   const signalCount = snapshot.state.unpushedDeltas.length + snapshot.state.editLocks.length;
   const activityCount = snapshot.state.recentPushes.length + snapshot.state.recentRepoEvents.length;
 
   return (
-    <main className="mx-auto flex w-full max-w-7xl flex-col gap-5 px-4 pb-16 sm:px-6 lg:px-8" id="dashboard">
+    <main
+      className="mx-auto flex w-full max-w-7xl flex-col gap-5 px-4 pb-16 sm:px-6 lg:px-8"
+      id="dashboard"
+    >
       <section className="grid gap-3 lg:grid-cols-[1fr_auto]" aria-label="Live room summary">
         <Card className="bg-card/85">
           <CardHeader>
-            <CardTitle className="text-3xl tracking-normal sm:text-4xl">{snapshot.state.repoId}</CardTitle>
+            <CardTitle className="text-3xl tracking-normal sm:text-4xl">
+              {snapshot.state.repoId}
+            </CardTitle>
             <CardDescription>
-              Live coordination room with current sessions, edit signals, data flow, and repository activity.
+              Live coordination room with current sessions, edit signals, data flow, and repository
+              activity.
             </CardDescription>
             <CardAction>
               <Badge variant={statusVariant(snapshot.status)}>{snapshot.status}</Badge>
@@ -49,9 +62,10 @@ export default function Dashboard({
           </CardContent>
         </Card>
 
-        <div className="grid gap-3 sm:grid-cols-4 lg:min-w-[34rem]">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5 lg:min-w-[42rem]">
           <Metric icon={UsersIcon} label="Members" value={sessions.length} />
           <Metric icon={LockKeyholeIcon} label="Signals" value={signalCount} />
+          <Metric icon={ActivityIcon} label="Reservations" value={reservations.length} />
           <Metric icon={ActivityIcon} label="Contested" value={contested.size} />
           <Metric icon={GitPullRequestIcon} label="Ship trail" value={activityCount} />
         </div>
@@ -60,15 +74,27 @@ export default function Dashboard({
       <section className="grid gap-5 lg:grid-cols-2" aria-label="Synapse room dashboard">
         <OnlinePanel sessions={sessions} onKick={onKick} />
         <SignalsPanel state={snapshot.state} />
+        <ReservationsPanel state={snapshot.state} />
         <ResolutionPanel state={snapshot.state} onChooseWinner={onChooseWinner} />
         <FlowGraph state={snapshot.state} />
-        <CommitsPanel pushes={snapshot.state.recentPushes} events={snapshot.state.recentRepoEvents} />
+        <CommitsPanel
+          pushes={snapshot.state.recentPushes}
+          events={snapshot.state.recentRepoEvents}
+        />
       </section>
     </main>
   );
 }
 
-function Metric({ icon: Icon, label, value }: { icon: typeof UsersIcon; label: string; value: number }) {
+function Metric({
+  icon: Icon,
+  label,
+  value
+}: {
+  icon: typeof UsersIcon;
+  label: string;
+  value: number;
+}) {
   return (
     <Card className="bg-card/70" size="sm">
       <CardHeader>

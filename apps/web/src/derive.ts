@@ -1,4 +1,10 @@
-import type { ResolutionProposal, Session, TeamState } from "@synapse/protocol";
+import type {
+  Reservation,
+  ReservationRoot,
+  ResolutionProposal,
+  Session,
+  TeamState
+} from "@synapse/protocol";
 
 export interface FlowEdge {
   from: string;
@@ -14,6 +20,50 @@ export interface FlowGraph {
 
 export function activeSessions(state: TeamState) {
   return state.sessions.filter((session) => session.status !== "ended");
+}
+
+export interface ActiveReservation {
+  session: Session;
+  reservation: Reservation;
+  activeRoots: ReservationRoot[];
+  rootSymbols: string[];
+  dependencySymbols: string[];
+  symbols: string[];
+  ttlRemainingSec: number;
+}
+
+export function deriveActiveReservations(state: TeamState, now = Date.now()): ActiveReservation[] {
+  const sessions = new Map(activeSessions(state).map((session) => [session.id, session]));
+
+  return state.reservations.flatMap((reservation) => {
+    const session = sessions.get(reservation.sessionId);
+    if (!session) {
+      return [];
+    }
+
+    const activeRoots = reservation.roots.filter((root) => rootTtlRemaining(root, now) > 0);
+    if (activeRoots.length === 0) {
+      return [];
+    }
+
+    const rootSymbols = Array.from(new Set(activeRoots.map((root) => root.symbolId.raw))).sort();
+    const rootSet = new Set(rootSymbols);
+    const dependencySymbols = Array.from(
+      new Set(reservation.symbols.map((symbol) => symbol.raw).filter((raw) => !rootSet.has(raw)))
+    ).sort();
+
+    return [
+      {
+        session,
+        reservation,
+        activeRoots,
+        rootSymbols,
+        dependencySymbols,
+        symbols: [...rootSymbols, ...dependencySymbols],
+        ttlRemainingSec: Math.min(...activeRoots.map((root) => rootTtlRemaining(root, now)))
+      }
+    ];
+  });
 }
 
 export function deriveContestedSymbols(state: TeamState): Set<string> {
@@ -96,4 +146,9 @@ export function deriveResolutionOverview(state: TeamState): ResolutionOverview {
       (proposal) => proposal.status === "awaiting_owner" || proposal.status === "voided"
     )
   };
+}
+
+function rootTtlRemaining(root: ReservationRoot, now: number) {
+  const elapsed = Math.floor((now - Date.parse(root.acquiredAt)) / 1000);
+  return Math.max(0, root.ttlSec - elapsed);
 }
