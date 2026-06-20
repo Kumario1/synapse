@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import { ActivityIcon, GitPullRequestIcon, LockKeyholeIcon, UsersIcon } from "lucide-react";
 import type { ResolutionProposal, Session } from "@synapse/protocol";
 import { Badge } from "@/components/ui/badge";
@@ -30,9 +29,9 @@ export default function Dashboard({
   onKick?: (session: Session) => void;
   onChooseWinner?: (proposal: ResolutionProposal, winnerSessionId: string) => void;
 }) {
-  const sessions = useMemo(() => activeSessions(snapshot.state), [snapshot.state]);
-  const contested = useMemo(() => deriveContestedSymbols(snapshot.state), [snapshot.state]);
-  const reservations = useMemo(() => deriveActiveReservations(snapshot.state), [snapshot.state]);
+  const sessions = activeSessions(snapshot.state);
+  const contested = deriveContestedSymbols(snapshot.state);
+  const reservations = deriveActiveReservations(snapshot.state);
   const signalCount = snapshot.state.unpushedDeltas.length + snapshot.state.editLocks.length;
   const activityCount = snapshot.state.recentPushes.length + snapshot.state.recentRepoEvents.length;
 
