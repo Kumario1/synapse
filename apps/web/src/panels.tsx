@@ -25,7 +25,11 @@ import {
   EmptyTitle
 } from "@/components/ui/empty";
 import { Separator } from "@/components/ui/separator";
-import { deriveContestedSymbols, deriveResolutionOverview } from "./derive";
+import {
+  deriveActiveReservations,
+  deriveContestedSymbols,
+  deriveResolutionOverview
+} from "./derive";
 
 export function OnlinePanel({
   sessions,
@@ -45,7 +49,11 @@ export function OnlinePanel({
       </CardHeader>
       <CardContent>
         {sessions.length === 0 ? (
-          <PanelEmpty icon={UsersIcon} title="No members online" description="Waiting for an agent to join this room." />
+          <PanelEmpty
+            icon={UsersIcon}
+            title="No members online"
+            description="Waiting for an agent to join this room."
+          />
         ) : (
           <div className="flex flex-col gap-4">
             {sessions.map((session, index) => (
@@ -53,17 +61,23 @@ export function OnlinePanel({
                 {index > 0 ? <Separator /> : null}
                 <section className="grid gap-4 sm:grid-cols-[auto_1fr_auto]">
                   <Avatar size="lg">
-                    <AvatarFallback>{initials(session.memberLogin ?? session.memberId)}</AvatarFallback>
+                    <AvatarFallback>
+                      {initials(session.memberLogin ?? session.memberId)}
+                    </AvatarFallback>
                   </Avatar>
                   <div className="min-w-0">
-                    <h3 className="truncate text-sm font-medium">{session.memberLogin ?? session.memberId}</h3>
+                    <h3 className="truncate text-sm font-medium">
+                      {session.memberLogin ?? session.memberId}
+                    </h3>
                     <p className="mt-1 line-clamp-2 text-sm leading-6 text-muted-foreground">
                       {session.lastTask ?? "Waiting for work"}
                     </p>
                   </div>
                   <div className="flex flex-wrap items-start gap-2 sm:justify-end">
                     <Badge variant="outline">{session.agentType}</Badge>
-                    <Badge variant={session.status === "active" ? "secondary" : "outline"}>{session.status}</Badge>
+                    <Badge variant={session.status === "active" ? "secondary" : "outline"}>
+                      {session.status}
+                    </Badge>
                     <Badge variant="outline">{session.branch ?? "unknown branch"}</Badge>
                     {onKick && session.status !== "ended" ? (
                       <Button size="sm" variant="outline" onClick={() => onKick(session)}>
@@ -91,12 +105,18 @@ export function SignalsPanel({ state }: { state: TeamState }) {
         <CardTitle>Edit signals</CardTitle>
         <CardDescription>Locks that announce where agents are editing.</CardDescription>
         <CardAction>
-          <Badge variant={contested.size > 0 ? "destructive" : "secondary"}>{state.editLocks.length}</Badge>
+          <Badge variant={contested.size > 0 ? "destructive" : "secondary"}>
+            {state.editLocks.length}
+          </Badge>
         </CardAction>
       </CardHeader>
       <CardContent>
         {state.editLocks.length === 0 ? (
-          <PanelEmpty icon={LockKeyholeIcon} title="No active signals" description="No one is holding an edit lock right now." />
+          <PanelEmpty
+            icon={LockKeyholeIcon}
+            title="No active signals"
+            description="No one is holding an edit lock right now."
+          />
         ) : (
           <div className="flex flex-col gap-4">
             {state.editLocks.map((lock, index) => {
@@ -110,11 +130,14 @@ export function SignalsPanel({ state }: { state: TeamState }) {
                       <Badge variant={isContested ? "destructive" : "outline"}>
                         {isContested ? "Contested lock" : "Edit lock"}
                       </Badge>
-                      <Badge variant="secondary">{ttlRemaining(lock.acquiredAt, lock.ttlSec)}s TTL</Badge>
+                      <Badge variant="secondary">
+                        {ttlRemaining(lock.acquiredAt, lock.ttlSec)}s TTL
+                      </Badge>
                     </div>
                     <div className="min-w-0">
                       <h3 className="truncate text-sm font-medium">
-                        {holder?.memberLogin ?? holder?.memberId ?? lock.sessionId} -&gt; {lock.symbolId.raw}
+                        {holder?.memberLogin ?? holder?.memberId ?? lock.sessionId} -&gt;{" "}
+                        {lock.symbolId.raw}
                       </h3>
                       <p className="mt-1 truncate text-sm text-muted-foreground">{lock.filePath}</p>
                     </div>
@@ -122,6 +145,69 @@ export function SignalsPanel({ state }: { state: TeamState }) {
                 </div>
               );
             })}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+export function ReservationsPanel({ state }: { state: TeamState }) {
+  const regions = deriveActiveReservations(state);
+  const sessions = new Map(state.sessions.map((session) => [session.id, session]));
+
+  return (
+    <Card className="bg-card/85">
+      <CardHeader>
+        <CardTitle>Reservations</CardTitle>
+        <CardDescription>
+          Reported edit regions: held symbols plus dependency neighbors, not Contracts.
+        </CardDescription>
+        <CardAction>
+          <Badge variant="secondary">{regions.length}</Badge>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        {regions.length === 0 ? (
+          <PanelEmpty
+            icon={LockKeyholeIcon}
+            title="No active Reservations"
+            description="No session is holding a Reservation right now."
+          />
+        ) : (
+          <div className="flex flex-col gap-4">
+            {regions.map((region, index) => (
+              <div className="flex flex-col gap-4" key={region.reservation.sessionId}>
+                {index > 0 ? <Separator /> : null}
+                <section className="flex flex-col gap-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap gap-2">
+                      <Badge variant="outline">radius {region.reservation.radius}</Badge>
+                      <Badge variant="outline">{region.activeRoots.length} roots</Badge>
+                      <Badge variant="secondary">{region.symbols.length} symbols</Badge>
+                    </div>
+                    <Badge variant="secondary">{region.ttlRemainingSec}s TTL</Badge>
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="truncate text-sm font-medium">
+                      {labelFor(region.reservation.sessionId, sessions)}
+                    </h3>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Updated{" "}
+                      <time dateTime={region.reservation.updatedAt}>
+                        {relativeTime(region.reservation.updatedAt)}
+                      </time>
+                    </p>
+                  </div>
+                  <SymbolList label="Held symbols" symbols={region.rootSymbols} />
+                  <SymbolList
+                    empty="No dependency neighbors"
+                    label="Dependency neighbors"
+                    symbols={region.dependencySymbols}
+                  />
+                </section>
+              </div>
+            ))}
           </div>
         )}
       </CardContent>
@@ -156,7 +242,11 @@ export function ResolutionPanel({
       </CardHeader>
       <CardContent>
         {overview.proposals.length === 0 ? (
-          <PanelEmpty icon={RadioTowerIcon} title="No mediator proposals" description="Resolving pairs and Owner escalations will appear here." />
+          <PanelEmpty
+            icon={RadioTowerIcon}
+            title="No mediator proposals"
+            description="Resolving pairs and Owner escalations will appear here."
+          />
         ) : (
           <div className="flex flex-col gap-4">
             {overview.proposals.map((proposal, index) => (
@@ -165,7 +255,13 @@ export function ResolutionPanel({
                 <section className="flex flex-col gap-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex flex-wrap gap-2">
-                      <Badge variant={proposal.status === "voided" || proposal.status === "awaiting_owner" ? "destructive" : "outline"}>
+                      <Badge
+                        variant={
+                          proposal.status === "voided" || proposal.status === "awaiting_owner"
+                            ? "destructive"
+                            : "outline"
+                        }
+                      >
                         {proposal.status.replace("_", " ")}
                       </Badge>
                       <Badge variant="secondary">{proposal.conflictClass}</Badge>
@@ -203,7 +299,10 @@ export function ResolutionPanel({
                   {proposal.directions.length > 0 ? (
                     <div className="flex flex-col gap-2">
                       {proposal.directions.map((direction) => (
-                        <p className="line-clamp-2 text-sm text-muted-foreground" key={`${proposal.id}-${direction.sessionId}`}>
+                        <p
+                          className="line-clamp-2 text-sm text-muted-foreground"
+                          key={`${proposal.id}-${direction.sessionId}`}
+                        >
                           <span className="font-medium text-foreground">{direction.role}</span>{" "}
                           {labelFor(direction.sessionId, sessions)}: {direction.summary}
                         </p>
@@ -220,7 +319,13 @@ export function ResolutionPanel({
   );
 }
 
-export function CommitsPanel({ pushes, events }: { pushes: RecentPush[]; events: RecentRepoEvent[] }) {
+export function CommitsPanel({
+  pushes,
+  events
+}: {
+  pushes: RecentPush[];
+  events: RecentRepoEvent[];
+}) {
   const items = [
     ...pushes.map((push) => ({ ...push, itemType: "push" as const, at: push.pushedAt })),
     ...events.map((event) => ({ ...event, itemType: "event" as const, at: event.createdAt }))
@@ -237,14 +342,22 @@ export function CommitsPanel({ pushes, events }: { pushes: RecentPush[]; events:
       </CardHeader>
       <CardContent>
         {items.length === 0 ? (
-          <PanelEmpty icon={GitCommitHorizontalIcon} title="No recent activity" description="Pushes and PRs will appear here." />
+          <PanelEmpty
+            icon={GitCommitHorizontalIcon}
+            title="No recent activity"
+            description="Pushes and PRs will appear here."
+          />
         ) : (
           <div className="flex flex-col gap-4">
             {items.map((item, index) => (
               <div className="flex flex-col gap-4" key={`${item.itemType}-${item.id}`}>
                 {index > 0 ? <Separator /> : null}
                 <section className="flex flex-col gap-2">
-                  {item.itemType === "push" ? <PushItem push={item} /> : <RepoEventItem event={item} />}
+                  {item.itemType === "push" ? (
+                    <PushItem push={item} />
+                  ) : (
+                    <RepoEventItem event={item} />
+                  )}
                   <time className="text-sm text-muted-foreground" dateTime={item.at}>
                     {relativeTime(item.at)}
                   </time>
@@ -265,7 +378,9 @@ function PushItem({ push }: { push: RecentPush & { at: string; itemType: "push" 
         push {push.sha.slice(0, 7)}
       </Badge>
       <h3 className="text-sm font-medium">{push.summary}</h3>
-      <p className="text-sm text-muted-foreground">{push.filesAffected.length} files · {push.branch}</p>
+      <p className="text-sm text-muted-foreground">
+        {push.filesAffected.length} files · {push.branch}
+      </p>
     </>
   );
 }
@@ -281,7 +396,12 @@ function RepoEventItem({ event }: { event: RecentRepoEvent & { at: string; itemT
       </Badge>
       <h3 className="text-sm font-medium">
         {event.url ? (
-          <a className="underline underline-offset-4" href={event.url} rel="noreferrer" target="_blank">
+          <a
+            className="underline underline-offset-4"
+            href={event.url}
+            rel="noreferrer"
+            target="_blank"
+          >
             {title}
           </a>
         ) : (
@@ -293,7 +413,42 @@ function RepoEventItem({ event }: { event: RecentRepoEvent & { at: string; itemT
   );
 }
 
-function PanelEmpty({ description, icon: Icon, title }: { description: string; icon: typeof UsersIcon; title: string }) {
+function SymbolList({
+  empty,
+  label,
+  symbols
+}: {
+  empty?: string;
+  label: string;
+  symbols: string[];
+}) {
+  return (
+    <div className="min-w-0">
+      <p className="text-xs font-medium uppercase tracking-normal text-muted-foreground">{label}</p>
+      {symbols.length === 0 ? (
+        <p className="mt-1 text-sm text-muted-foreground">{empty}</p>
+      ) : (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {symbols.map((symbol) => (
+            <Badge className="max-w-full truncate" key={symbol} variant="outline">
+              {symbol}
+            </Badge>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PanelEmpty({
+  description,
+  icon: Icon,
+  title
+}: {
+  description: string;
+  icon: typeof UsersIcon;
+  title: string;
+}) {
   return (
     <Empty className="border">
       <EmptyHeader>

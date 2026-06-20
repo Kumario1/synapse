@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ResolutionProposal, TeamState } from "@synapse/protocol";
-import { deriveContestedSymbols, deriveGraph, deriveResolutionOverview } from "./derive";
+import {
+  deriveActiveReservations,
+  deriveContestedSymbols,
+  deriveGraph,
+  deriveResolutionOverview
+} from "./derive";
+import { demoFrames } from "./fixture";
 
 const baseState: TeamState = {
   repoId: "demo/playground",
@@ -176,6 +182,64 @@ test("deriveResolutionOverview groups resolving, resolved, and escalated proposa
   assert.deepEqual(overview.escalated, [awaitingOwner, voided]);
 });
 
+test("active reservations expose held symbols and dependency neighbors", () => {
+  const regions = deriveActiveReservations(
+    {
+      ...baseState,
+      reservations: [reservation()]
+    },
+    Date.parse("2026-06-15T12:03:00.000Z")
+  );
+
+  assert.equal(regions.length, 1);
+  assert.equal(regions[0].session.id, "s1");
+  assert.deepEqual(regions[0].rootSymbols, ["src/api.ts#loadRoom"]);
+  assert.deepEqual(regions[0].dependencySymbols, ["src/client.ts#renderRoom"]);
+  assert.deepEqual(regions[0].symbols, ["src/api.ts#loadRoom", "src/client.ts#renderRoom"]);
+  assert.equal(regions[0].ttlRemainingSec, 60);
+});
+
+test("reservations for inactive or expired sessions are excluded", () => {
+  assert.deepEqual(
+    deriveActiveReservations(
+      {
+        ...baseState,
+        sessions: [{ ...baseState.sessions[0], status: "ended" }],
+        reservations: [reservation()]
+      },
+      Date.parse("2026-06-15T12:03:00.000Z")
+    ),
+    []
+  );
+
+  assert.deepEqual(
+    deriveActiveReservations(
+      {
+        ...baseState,
+        reservations: [reservation()]
+      },
+      Date.parse("2026-06-15T12:04:01.000Z")
+    ),
+    []
+  );
+});
+
+test("demo reservations render before push and disappear after push", () => {
+  const duringReport = deriveActiveReservations(
+    demoFrames[3],
+    Date.parse("2026-06-15T16:01:30.000Z")
+  );
+  const afterPush = deriveActiveReservations(
+    demoFrames[demoFrames.length - 1],
+    Date.parse("2026-06-15T16:02:00.000Z")
+  );
+
+  assert.equal(duringReport.length, 1);
+  assert.deepEqual(duringReport[0].rootSymbols, ["src/room.ts#loadRoom"]);
+  assert.deepEqual(duringReport[0].dependencySymbols, ["src/sidebar.ts#renderRoom"]);
+  assert.deepEqual(afterPush, []);
+});
+
 function proposal(id: string, status: ResolutionProposal["status"]): ResolutionProposal {
   return {
     id,
@@ -196,5 +260,25 @@ function proposal(id: string, status: ResolutionProposal["status"]): ResolutionP
     acceptedBy: status === "resolved" ? ["s1", "s2"] : [],
     voidReason: status === "voided" ? "timeout" : undefined,
     createdAt: "2026-06-15T12:03:00.000Z"
+  };
+}
+
+function reservation(): TeamState["reservations"][number] {
+  return {
+    repoId: baseState.repoId,
+    sessionId: "s1",
+    radius: 2,
+    symbols: [{ raw: "src/api.ts#loadRoom" }, { raw: "src/client.ts#renderRoom" }],
+    roots: [
+      {
+        symbolId: { raw: "src/api.ts#loadRoom" },
+        filePath: "src/api.ts",
+        acquiredAt: "2026-06-15T12:02:00.000Z",
+        ttlSec: 120,
+        radius: 2,
+        symbols: [{ raw: "src/api.ts#loadRoom" }, { raw: "src/client.ts#renderRoom" }]
+      }
+    ],
+    updatedAt: "2026-06-15T12:02:00.000Z"
   };
 }
