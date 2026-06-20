@@ -56,7 +56,7 @@ export default function ProjectsDashboard() {
           </Button>
         ))}
       </div>
-      {selected && <SelectedRoom repoId={selected} />}
+      {selected && <SelectedRoom key={selected} repoId={selected} />}
     </section>
   );
 }
@@ -68,9 +68,6 @@ function SelectedRoom({ repoId }: { repoId: string }) {
 
   useEffect(() => {
     let active = true;
-    setState(emptyRoomState(repoId));
-    setSeq(0);
-    setStatus("connecting");
 
     const poll = () => {
       void fetchOwnedRoomState(repoId).then((next) => {

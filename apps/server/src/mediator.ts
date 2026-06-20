@@ -248,18 +248,13 @@ export function applyResolutionReject(
  * Void a proposal whose TTL elapsed before both sides accepted. Terminal.
  * No-op unless the proposal is still `resolving`.
  */
-export function voidOnTimeout(
-  state: TeamState,
-  proposalId: string,
-  now: () => string = () => new Date().toISOString()
-): boolean {
+export function voidOnTimeout(state: TeamState, proposalId: string): boolean {
   const proposal = state.resolutionProposals?.find((p) => p.id === proposalId);
   if (!proposal || proposal.status !== "resolving") {
     return false;
   }
   proposal.status = "voided";
   proposal.voidReason = "timeout";
-  void now;
   return true;
 }
 

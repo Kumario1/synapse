@@ -1,8 +1,11 @@
-import type {
-  AnalysisProvider,
-  ConflictAnalysisInput,
-  ResolutionProvider,
-  ResolutionRequest
+import {
+  extractJsonObject,
+  openRouterConfig,
+  requestCompletion,
+  type AnalysisProvider,
+  type ConflictAnalysisInput,
+  type ResolutionProvider,
+  type ResolutionRequest
 } from "@synapse/conflict-engine";
 import type {
   ConflictAction,
@@ -49,7 +52,12 @@ export function createOpenRouterAnalysisProvider(): AnalysisProvider | null {
 
       try {
         const analysis = parseAnalysis(
-          await requestCompletion(config, 700, 0.2, buildSystemPrompt(), buildUserPrompt(input)),
+          await requestCompletion(
+            config,
+            { maxTokens: 700, temperature: 0.2 },
+            buildSystemPrompt(),
+            buildUserPrompt(input)
+          ),
           config.model
         );
         if (!analysis) {
@@ -114,28 +122,11 @@ function buildUserPrompt(input: ConflictAnalysisInput): string {
 }
 
 export function parseAnalysis(content: string | undefined, model: string): ConflictAnalysis | null {
-  if (!content) {
+  const record = extractJsonObject(content);
+  if (!record) {
     return null;
   }
 
-  const start = content.indexOf("{");
-  const end = content.lastIndexOf("}");
-  if (start === -1 || end <= start) {
-    return null;
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(content.slice(start, end + 1));
-  } catch {
-    return null;
-  }
-
-  if (typeof parsed !== "object" || parsed === null) {
-    return null;
-  }
-
-  const record = parsed as Record<string, unknown>;
   const assessment = typeof record.assessment === "string" ? record.assessment.trim() : "";
   const recommendation = asRecommendation(record.recommendation);
   const actions = asActions(record.actions);
@@ -258,7 +249,12 @@ export function createOpenRouterResolutionProvider(): ResolutionProvider | null 
       // recovers most malformed first responses without affecting the verdict.
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const resolution = parseResolution(
-          await requestCompletion(config, 700, 0, RESOLUTION_SYSTEM_PROMPT, buildResolutionPrompt(req)),
+          await requestCompletion(
+            config,
+            { maxTokens: 700, temperature: 0 },
+            RESOLUTION_SYSTEM_PROMPT,
+            buildResolutionPrompt(req)
+          ),
           config.model
         );
         if (resolution) {
@@ -270,68 +266,6 @@ export function createOpenRouterResolutionProvider(): ResolutionProvider | null 
       return null;
     }
   };
-}
-
-interface OpenRouterConfig {
-  apiKey: string;
-  baseUrl: string;
-  model: string;
-  timeoutMs: number;
-}
-
-function openRouterConfig(disableFlag: string): OpenRouterConfig | null {
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  return !apiKey || process.env[disableFlag] === "0"
-    ? null
-    : {
-        apiKey,
-        baseUrl: (process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1").replace(/\/$/, ""),
-        model: process.env.SYNAPSE_LLM_MODEL ?? "anthropic/claude-haiku-4.5",
-        timeoutMs: Number(process.env.SYNAPSE_LLM_TIMEOUT_MS ?? 8000)
-      };
-}
-
-async function requestCompletion(
-  config: OpenRouterConfig,
-  maxTokens: number,
-  temperature: number,
-  system: string,
-  user: string
-): Promise<string | undefined> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), config.timeoutMs);
-
-  try {
-    const response = await fetch(`${config.baseUrl}/chat/completions`, {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${config.apiKey}`,
-        "x-title": "Synapse"
-      },
-      body: JSON.stringify({
-        model: config.model,
-        max_tokens: maxTokens,
-        temperature,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user }
-        ]
-      })
-    });
-
-    if (!response.ok) {
-      return undefined;
-    }
-
-    const data = (await response.json()) as { choices?: { message?: { content?: string } }[] };
-    return data.choices?.[0]?.message?.content;
-  } catch {
-    return undefined;
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 const RESOLUTION_SYSTEM_PROMPT = [
@@ -363,28 +297,11 @@ function buildResolutionPrompt(req: ResolutionRequest): string {
 }
 
 function parseResolution(content: string | undefined, model: string): ProposedResolution | null {
-  if (!content) {
+  const record = extractJsonObject(content);
+  if (!record) {
     return null;
   }
 
-  const start = content.indexOf("{");
-  const end = content.lastIndexOf("}");
-  if (start === -1 || end <= start) {
-    return null;
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(content.slice(start, end + 1));
-  } catch {
-    return null;
-  }
-
-  if (typeof parsed !== "object" || parsed === null) {
-    return null;
-  }
-
-  const record = parsed as Record<string, unknown>;
   const reconciled = record.reconciled === true;
   const rationale = typeof record.rationale === "string" ? record.rationale.trim() : "";
   const instruction = typeof record.instruction === "string" ? record.instruction.trim() : "";
@@ -457,7 +374,12 @@ export function createOpenRouterSummaryProvider(): SummaryProvider | null {
     async summarizeSession(input: SessionSummaryInput): Promise<string | null> {
       try {
         const content = (
-          await requestCompletion(config, 220, 0.3, SUMMARY_SYSTEM_PROMPT, buildSummaryPrompt(input))
+          await requestCompletion(
+            config,
+            { maxTokens: 220, temperature: 0.3 },
+            SUMMARY_SYSTEM_PROMPT,
+            buildSummaryPrompt(input)
+          )
         )?.trim();
         return content && content.length > 0 ? content : null;
       } catch {

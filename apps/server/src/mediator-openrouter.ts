@@ -1,19 +1,15 @@
 import { createHash } from "node:crypto";
-import type {
-  MediatorResolutionProse,
-  MediatorResolutionProvider,
-  MediatorResolutionRequest
+import {
+  extractJsonObject,
+  openRouterConfig,
+  requestCompletion,
+  type MediatorResolutionProse,
+  type MediatorResolutionProvider,
+  type MediatorResolutionRequest
 } from "@synapse/conflict-engine";
 
-interface OpenRouterConfig {
-  apiKey: string;
-  baseUrl: string;
-  model: string;
-  timeoutMs: number;
-}
-
 export function createOpenRouterMediatorProvider(): MediatorResolutionProvider | null {
-  const config = openRouterConfig();
+  const config = openRouterConfig("SYNAPSE_LLM_RESOLVE");
   if (!config) {
     return null;
   }
@@ -29,7 +25,12 @@ export function createOpenRouterMediatorProvider(): MediatorResolutionProvider |
       }
 
       const prose = parseMediatorResolutionProse(
-        await requestCompletion(config, MEDIATOR_SYSTEM_PROMPT, buildMediatorPrompt(req))
+        await requestCompletion(
+          config,
+          { maxTokens: 180, temperature: 0.2 },
+          MEDIATOR_SYSTEM_PROMPT,
+          buildMediatorPrompt(req)
+        )
       );
       if (!prose) {
         return null;
@@ -44,28 +45,12 @@ export function createOpenRouterMediatorProvider(): MediatorResolutionProvider |
 export function parseMediatorResolutionProse(
   content: string | undefined
 ): MediatorResolutionProse | null {
-  if (!content) {
+  const record = extractJsonObject(content);
+  if (!record) {
     return null;
   }
 
-  const start = content.indexOf("{");
-  const end = content.lastIndexOf("}");
-  if (start === -1 || end <= start) {
-    return null;
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(content.slice(start, end + 1));
-  } catch {
-    return null;
-  }
-
-  if (typeof parsed !== "object" || parsed === null) {
-    return null;
-  }
-
-  const adaptSummary = (parsed as Record<string, unknown>).adaptSummary;
+  const adaptSummary = record.adaptSummary;
   if (typeof adaptSummary !== "string" || !adaptSummary.trim()) {
     return null;
   }
@@ -75,62 +60,6 @@ export function parseMediatorResolutionProse(
 
 export function mediatorResolutionCacheKey(req: MediatorResolutionRequest): string {
   return createHash("sha256").update(JSON.stringify(req)).digest("hex");
-}
-
-function openRouterConfig(): OpenRouterConfig | null {
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  return !apiKey || process.env.SYNAPSE_LLM_RESOLVE === "0"
-    ? null
-    : {
-        apiKey,
-        baseUrl: (process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1").replace(
-          /\/$/,
-          ""
-        ),
-        model: process.env.SYNAPSE_LLM_MODEL ?? "anthropic/claude-haiku-4.5",
-        timeoutMs: Number(process.env.SYNAPSE_LLM_TIMEOUT_MS ?? 8000)
-      };
-}
-
-async function requestCompletion(
-  config: OpenRouterConfig,
-  system: string,
-  user: string
-): Promise<string | undefined> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), config.timeoutMs);
-
-  try {
-    const response = await fetch(`${config.baseUrl}/chat/completions`, {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${config.apiKey}`,
-        "x-title": "Synapse"
-      },
-      body: JSON.stringify({
-        model: config.model,
-        max_tokens: 180,
-        temperature: 0.2,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user }
-        ]
-      })
-    });
-
-    if (!response.ok) {
-      return undefined;
-    }
-
-    const data = (await response.json()) as { choices?: { message?: { content?: string } }[] };
-    return data.choices?.[0]?.message?.content;
-  } catch {
-    return undefined;
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 const MEDIATOR_SYSTEM_PROMPT = [
