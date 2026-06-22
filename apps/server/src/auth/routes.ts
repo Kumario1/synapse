@@ -11,7 +11,7 @@ import {
   verifySession
 } from "./session.js";
 import type { UserStore } from "./user-store.js";
-import type { ProjectStore } from "./project-store.js";
+import type { Project, ProjectStore } from "./project-store.js";
 
 /**
  * The human GitHub sign-in routes (plan 051). The decision logic
@@ -81,8 +81,13 @@ function clearCookie(name: string): string {
   return serializeCookie(name, "", { maxAgeSec: 0, path: "/", httpOnly: true });
 }
 
-/** The authenticated Owner behind a request, or null. Reuses the session HMAC. */
-function requireOwner(
+/**
+ * Authentication guard: the signed-in Owner behind a request, or null when the
+ * session cookie is absent or its HMAC does not verify. This is identity only —
+ * it answers "who is this", not "may they touch repo X" (see
+ * {@link withOwnedProject} for the ownership check).
+ */
+function requireSession(
   cookies: Record<string, string>,
   ctx: AuthContext
 ): { userId: string } | null {
@@ -92,20 +97,25 @@ function requireOwner(
 /**
  * One handled `/auth/*` route. The dispatcher ({@link resolveAuthRoute}) owns
  * the shared envelope — prefix match, method+path lookup, and (when
- * `requireOwner` is set) the single sign-in check that returns 401 before the
+ * `requireSession` is set) the single sign-in check that returns 401 before the
  * handler runs and otherwise passes the resolved Owner in. Handlers therefore
  * carry only their own logic: per-route param/state validation, ownership
- * authorization, and the response. Keeping the table the single source of which
- * "METHOD /path" pairs exist replaces the former flat if-ladder.
+ * authorization (via {@link withOwnedProject}), and the response. Keeping the
+ * table the single source of which "METHOD /path" pairs exist replaces the
+ * former flat if-ladder.
  */
 interface AuthRoute {
-  /** Run the shared sign-in check once; 401 short-circuits before `handle`. */
-  requireOwner?: boolean;
+  /**
+   * Run the shared authentication check once; 401 short-circuits before
+   * `handle`. This only authenticates (resolves the signed-in Owner); per-route
+   * ownership of a repo is a separate check (see {@link withOwnedProject}).
+   */
+  requireSession?: boolean;
   handle: (args: {
     query: URLSearchParams;
     cookies: Record<string, string>;
     ctx: AuthContext;
-    /** Present iff `requireOwner` is set (the dispatcher resolved it). */
+    /** Present iff `requireSession` is set (the dispatcher resolved it). */
     owner: { userId: string };
   }) => Promise<RouteResult> | RouteResult;
 }
@@ -191,7 +201,7 @@ const AUTH_ROUTES: Record<string, AuthRoute> = {
 
   // Start a repo claim: send the signed-in Owner through the App install flow.
   "GET /auth/projects/add": {
-    requireOwner: true,
+    requireSession: true,
     handle: ({ ctx }) => {
       if (!ctx.appSlug || !ctx.masterSecret) {
         return { status: 503, body: { error: "claiming_unavailable" } };
@@ -215,7 +225,7 @@ const AUTH_ROUTES: Record<string, AuthRoute> = {
 
   // Install setup callback: verify push access, record Owner↔repo, mint key.
   "GET /auth/github/setup": {
-    requireOwner: true,
+    requireSession: true,
     handle: async ({ query, cookies, ctx, owner }) => {
       if (!verifyStateSigned(query.get("state"), cookies[INSTALL_STATE_COOKIE], ctx.sessionKey)) {
         return { status: 400, body: { error: "bad_state" } };
@@ -249,7 +259,7 @@ const AUTH_ROUTES: Record<string, AuthRoute> = {
 
   // The Owner's own claimed projects + their per-repo daemon credential.
   "GET /auth/projects": {
-    requireOwner: true,
+    requireSession: true,
     handle: async ({ ctx, owner }) => {
       const projects = await ctx.projectStore.listProjectsForOwner(owner.userId);
       return {
@@ -263,15 +273,15 @@ const AUTH_ROUTES: Record<string, AuthRoute> = {
   // the live Room only for a repo they have claimed. Distinct from the machine
   // GET /state (project-key) path — the boundary stays separate.
   "GET /auth/projects/state": {
-    requireOwner: true,
+    requireSession: true,
     handle: async ({ query, ctx, owner }) => {
       const repoId = query.get("repoId");
       if (!repoId) {
         return { status: 400, body: { error: "missing_repo" } };
       }
-      const project = await ctx.projectStore.getProject(owner.userId, repoId);
-      if (!project) {
-        return { status: 403, body: { error: "not_owner" } };
+      const owned = await withOwnedProject(ctx, owner, repoId);
+      if ("status" in owned) {
+        return owned;
       }
       const state = await ctx.readRoomState(repoId);
       return { status: 200, body: state };
@@ -282,16 +292,16 @@ const AUTH_ROUTES: Record<string, AuthRoute> = {
   // cookie-authed, authorized by ownership — never a browser WS message. repoId and
   // sessionId ride the query string (resolveAuthRoute has no request body).
   "POST /auth/projects/kick": {
-    requireOwner: true,
+    requireSession: true,
     handle: async ({ query, ctx, owner }) => {
       const repoId = query.get("repoId");
       const sessionId = query.get("sessionId");
       if (!repoId || !sessionId) {
         return { status: 400, body: { error: "missing_params" } };
       }
-      const project = await ctx.projectStore.getProject(owner.userId, repoId);
-      if (!project) {
-        return { status: 403, body: { error: "not_owner" } };
+      const owned = await withOwnedProject(ctx, owner, repoId);
+      if ("status" in owned) {
+        return owned;
       }
       await ctx.kickSession(repoId, sessionId);
       return { status: 200, body: { ok: true } };
@@ -299,7 +309,7 @@ const AUTH_ROUTES: Record<string, AuthRoute> = {
   },
 
   "POST /auth/projects/resolve-winner": {
-    requireOwner: true,
+    requireSession: true,
     handle: async ({ query, ctx, owner }) => {
       const repoId = query.get("repoId");
       const proposalId = query.get("proposalId");
@@ -307,15 +317,33 @@ const AUTH_ROUTES: Record<string, AuthRoute> = {
       if (!repoId || !proposalId || !winnerSessionId) {
         return { status: 400, body: { error: "missing_params" } };
       }
-      const project = await ctx.projectStore.getProject(owner.userId, repoId);
-      if (!project) {
-        return { status: 403, body: { error: "not_owner" } };
+      const owned = await withOwnedProject(ctx, owner, repoId);
+      if ("status" in owned) {
+        return owned;
       }
       await ctx.pickResolutionWinner(repoId, proposalId, winnerSessionId);
       return { status: 200, body: { ok: true } };
     }
   }
 };
+
+/**
+ * Ownership guard: resolve the project the Owner is asking to act on, or the
+ * `403 not_owner` result to return when they have not claimed `repoId`. Callers
+ * have already authenticated (via {@link requireSession}) and validated their
+ * params; this folds in the actual ownership check the routes share.
+ */
+async function withOwnedProject(
+  ctx: AuthContext,
+  owner: { userId: string },
+  repoId: string
+): Promise<{ project: Project } | RouteResult> {
+  const project = await ctx.projectStore.getProject(owner.userId, repoId);
+  if (!project) {
+    return { status: 403, body: { error: "not_owner" } };
+  }
+  return { project };
+}
 
 export async function resolveAuthRoute(
   method: string,
@@ -337,8 +365,8 @@ export async function resolveAuthRoute(
   // here and 401 before their handler. The placeholder satisfies the handler
   // type for the open (non-owner) routes that never read it.
   let owner: { userId: string } = { userId: "" };
-  if (route.requireOwner) {
-    const resolved = requireOwner(cookies, ctx);
+  if (route.requireSession) {
+    const resolved = requireSession(cookies, ctx);
     if (!resolved) {
       return { status: 401, body: { error: "unauthenticated" } };
     }
