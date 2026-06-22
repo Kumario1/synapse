@@ -152,16 +152,35 @@ export function applyResolutionProse(
   return applyMediatorResolutionProse(proposal, request, prose);
 }
 
+/**
+ * I/O seam for {@link enrichResolutionProse}. In production `withState` runs its
+ * callback under the per-repo lock against authoritative state and `onApplied`
+ * broadcasts the fresh snapshot; tests pass an in-memory state and a spy. The
+ * lock deliberately lives outside this module: the per-repo mutex is never held
+ * across the provider network call, so enrichment is a two-phase transaction.
+ */
+export interface ResolutionEnrichIO {
+  withState: <T>(fn: (state: TeamState) => T) => Promise<T>;
+  onApplied: (state: TeamState) => void;
+}
+
+/**
+ * Enrich a resolving proposal's adapt summary via the provider, two-phase: read
+ * the request under the lock, call the provider unlocked, then re-read and apply
+ * under the lock. `applyResolutionProse` re-validates the request against current
+ * state, so a concurrent change voids the enrichment rather than applying stale
+ * prose. Returns true only when prose was applied (the signal to broadcast).
+ */
 export async function enrichResolutionProse(
-  state: TeamState,
   proposalId: string,
-  provider: MediatorResolutionProvider | null
+  provider: MediatorResolutionProvider | null,
+  io: ResolutionEnrichIO
 ): Promise<boolean> {
   if (!provider) {
     return false;
   }
 
-  const request = buildResolutionProseRequest(state, proposalId);
+  const request = await io.withState((state) => buildResolutionProseRequest(state, proposalId));
   if (!request) {
     return false;
   }
@@ -172,7 +191,19 @@ export async function enrichResolutionProse(
   } catch {
     return false;
   }
-  return applyResolutionProse(state, request, prose);
+  if (!prose) {
+    return false;
+  }
+
+  const applied = await io.withState((state) =>
+    applyResolutionProse(state, request, prose) ? state : null
+  );
+  if (!applied) {
+    return false;
+  }
+
+  io.onApplied(applied);
+  return true;
 }
 
 /**
