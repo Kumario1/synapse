@@ -32,6 +32,7 @@ const stageDir = join(releaseDir, "package");
 const BUNDLED = [
   { name: "@synapse/protocol", dir: "packages/protocol", copy: ["dist"] },
   { name: "@synapse/conflict-engine", dir: "packages/conflict-engine", copy: ["dist"] },
+  { name: "@synapse/analyzer-core", dir: "packages/analyzer-core", copy: ["dist"] },
   { name: "@synapse/analyzer-ts", dir: "packages/analyzer-ts", copy: ["dist"] },
   {
     name: "@synapse/analyzer-go",
