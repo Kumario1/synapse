@@ -12,6 +12,7 @@ import type {
 import { isKnownSynapseCommand } from "@synapse/protocol";
 import { renderSignature } from "./compare.js";
 import { extractJsonObject } from "./openrouter.js";
+import { ruleDescriptors } from "./rules.js";
 
 /**
  * Attach a command suggestion to the first action matching `audience`
@@ -71,16 +72,6 @@ export interface AnalysisContext {
 export interface AnalysisProvider {
   analyzeConflict(input: ConflictAnalysisInput): Promise<ConflictAnalysis | null>;
 }
-
-const recommendationByRule: Record<Conflict["rule"], ConflictAnalysis["recommendation"]> = {
-  contract_divergent: "warn",
-  same_symbol_unpushed: "warn",
-  same_symbol_active: "warn",
-  dependency_changed: "warn",
-  transitive_dependency: "info",
-  stale_base: "warn",
-  same_file_no_overlap: "info"
-};
 
 /**
  * The recommendation scale, weakest → strongest. `ConflictRecommendation`
@@ -255,7 +246,7 @@ export function deterministicAnalysis(conflict: Conflict): ConflictAnalysis {
 
   const base: ConflictAnalysis = {
     assessment: conflict.detail,
-    recommendation: recommendationByRule[conflict.rule],
+    recommendation: ruleDescriptors[conflict.rule].recommendation,
     actions: [],
     source: "deterministic"
   };
