@@ -3,7 +3,7 @@ import { ChevronLeftIcon, ChevronRightIcon, PauseIcon, PlayIcon } from "lucide-r
 import type { TeamState } from "@synapse/protocol";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { activeSessions } from "./derive";
+import { activeSessions, deriveContestedSymbols } from "./derive";
 import { demoFrames } from "./fixture";
 import FlowGraph from "./FlowGraph";
 import { narrationSteps, type PanelKey } from "./narration";
@@ -16,7 +16,7 @@ function renderPanel(panel: PanelKey, state: TeamState): ReactNode {
     case "online":
       return <OnlinePanel sessions={activeSessions(state)} />;
     case "signals":
-      return <SignalsPanel state={state} />;
+      return <SignalsPanel state={state} contested={deriveContestedSymbols(state)} />;
     case "flow":
       return <FlowGraph state={state} />;
     case "commits":
