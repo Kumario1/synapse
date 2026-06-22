@@ -72,8 +72,8 @@ export default function Dashboard({
 
       <section className="grid gap-5 lg:grid-cols-2" aria-label="Synapse room dashboard">
         <OnlinePanel sessions={sessions} onKick={onKick} />
-        <SignalsPanel state={snapshot.state} />
-        <ReservationsPanel state={snapshot.state} />
+        <SignalsPanel state={snapshot.state} contested={contested} />
+        <ReservationsPanel state={snapshot.state} regions={reservations} />
         <ResolutionPanel state={snapshot.state} onChooseWinner={onChooseWinner} />
         <FlowGraph state={snapshot.state} />
         <CommitsPanel
