@@ -20,7 +20,6 @@ import {
   type TeamState,
   type WireEnvelope
 } from "@synapse/protocol";
-import type { MediatorResolutionProse } from "@synapse/conflict-engine";
 import { WebSocket, WebSocketServer } from "ws";
 import { createEmbeddingProvider } from "./embeddings.js";
 import { exchangeCodeForToken, fetchGitHubUser } from "./auth/github-oauth.js";
@@ -45,8 +44,7 @@ import {
   applyResolutionAck,
   applyResolutionReject,
   applyWinnerChoice,
-  applyResolutionProse,
-  buildResolutionProseRequest,
+  enrichResolutionProse,
   proposeOnContest,
   voidOnTimeout
 } from "./mediator.js";
@@ -957,42 +955,14 @@ function scheduleResolutionTimeout(repoId: string, proposalId: string): void {
 }
 
 async function enrichMediatorProposal(repoId: string, proposalId: string): Promise<void> {
-  if (!mediatorResolutionProvider) {
-    return;
-  }
-
-  const request = await withRepo(repoId, async () => {
-    const state = await getState(repoId);
-    return buildResolutionProseRequest(state, proposalId);
+  await enrichResolutionProse(proposalId, mediatorResolutionProvider, {
+    withState: <T>(fn: (state: TeamState) => T) =>
+      withRepo(repoId, async () => fn(await getState(repoId))),
+    onApplied: (state) => {
+      broadcast(repoId, envelope("state.snapshot", { teamState: state, seq: bumpRepoSeq(repoId) }));
+      fanout?.publish(repoId);
+    }
   });
-  if (!request) {
-    return;
-  }
-
-  let prose: MediatorResolutionProse | null;
-  try {
-    prose = await mediatorResolutionProvider.proposeResolution(request);
-  } catch {
-    return;
-  }
-  if (!prose) {
-    return;
-  }
-
-  const result = await withRepo(repoId, async () => {
-    const state = await getState(repoId);
-    const changed = applyResolutionProse(state, request, prose);
-    return { state, changed };
-  });
-  if (!result.changed) {
-    return;
-  }
-
-  broadcast(
-    repoId,
-    envelope("state.snapshot", { teamState: result.state, seq: bumpRepoSeq(repoId) })
-  );
-  fanout?.publish(repoId);
 }
 
 function teeStateStoreOps(ops: StateOp[]): StateStoreOps {

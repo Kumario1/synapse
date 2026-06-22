@@ -8,6 +8,7 @@ import {
   applyWinnerChoice,
   enrichResolutionProse,
   proposeOnContest,
+  type ResolutionEnrichIO,
   voidOnTimeout
 } from "./mediator.js";
 import {
@@ -160,7 +161,7 @@ test("enrichResolutionProse with null provider does not mutate a mechanical prop
   assert.ok(proposal);
   const before = structuredClone(proposal);
 
-  assert.equal(await enrichResolutionProse(state, proposal.id, null), false);
+  assert.equal(await enrichResolutionProse(proposal.id, null, directIO(state)), false);
   assert.deepEqual(proposal, before);
 });
 
@@ -181,9 +182,17 @@ test("enrichResolutionProse changes only the adapt summary", async () => {
     }
   };
 
-  assert.equal(await enrichResolutionProse(state, proposal.id, provider), true);
+  let appliedState: TeamState | null = null;
+  const io: ResolutionEnrichIO = {
+    withState: async (fn) => fn(state),
+    onApplied: (applied) => {
+      appliedState = applied;
+    }
+  };
+  assert.equal(await enrichResolutionProse(proposal.id, provider, io), true);
 
   assert.equal(called, true);
+  assert.equal(appliedState, state);
   assert.deepEqual(proposalStateFields(proposal), stableFields);
   assert.deepEqual(proposal.directions[0], keepDirection);
   assert.equal(proposal.directions[1]?.summary, validAdaptSummary());
@@ -201,7 +210,7 @@ test("enrichResolutionProse ignores semantic proposals before owner choice", asy
     }
   };
 
-  assert.equal(await enrichResolutionProse(state, proposal.id, provider), false);
+  assert.equal(await enrichResolutionProse(proposal.id, provider, directIO(state)), false);
   assert.equal(called, false);
   assert.equal(proposal.status, "awaiting_owner");
   assert.deepEqual(proposal.directions, []);
@@ -214,14 +223,18 @@ test("enrichResolutionProse can enrich a semantic proposal after owner choice", 
   assert.equal(applyWinnerChoice(state, proposal.id, "alice"), true);
 
   assert.equal(
-    await enrichResolutionProse(state, proposal.id, {
-      proposeResolution: async (request) => {
-        assert.equal(request.conflictClass, "semantic");
-        assert.equal(request.keep.sessionId, "alice");
-        assert.equal(request.adapt.sessionId, "bob");
-        return { adaptSummary: validAdaptSummary() };
-      }
-    }),
+    await enrichResolutionProse(
+      proposal.id,
+      {
+        proposeResolution: async (request) => {
+          assert.equal(request.conflictClass, "semantic");
+          assert.equal(request.keep.sessionId, "alice");
+          assert.equal(request.adapt.sessionId, "bob");
+          return { adaptSummary: validAdaptSummary() };
+        }
+      },
+      directIO(state)
+    ),
     true
   );
 
@@ -236,11 +249,15 @@ test("enrichResolutionProse swallows provider exceptions and preserves summaries
   const before = structuredClone(proposal.directions);
 
   assert.equal(
-    await enrichResolutionProse(state, proposal.id, {
-      proposeResolution: async () => {
-        throw new Error("provider failed");
-      }
-    }),
+    await enrichResolutionProse(
+      proposal.id,
+      {
+        proposeResolution: async () => {
+          throw new Error("provider failed");
+        }
+      },
+      directIO(state)
+    ),
     false
   );
 
@@ -408,6 +425,11 @@ function session(id: string): TeamState["sessions"][number] {
 
 function validAdaptSummary(): string {
   return "Update ts:src/auth/token.ts#getUser callers in src/routes/me.ts to handle () => User | null.";
+}
+
+/** Runs build/apply directly against an in-memory state, mirroring the prod lock seam. */
+function directIO(state: TeamState): ResolutionEnrichIO {
+  return { withState: async (fn) => fn(state), onApplied: () => {} };
 }
 
 function proposalStateFields(proposal: NonNullable<TeamState["resolutionProposals"]>[number]): {
