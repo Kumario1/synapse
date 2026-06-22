@@ -846,6 +846,7 @@ export type ServerMessage =
 
 export type StateOp =
   | { op: "upsertSession"; session: Session }
+  | { op: "deleteSession"; sessionId: string }
   | { op: "upsertEditLock"; lock: EditLock }
   | { op: "deleteEditLock"; sessionId: string; symbolRaw: string }
   | { op: "deleteEditLocksForSession"; sessionId: string }
@@ -864,6 +865,9 @@ export function applyStateOp(teamState: TeamState, op: StateOp): void {
   switch (op.op) {
     case "upsertSession":
       upsertBy(teamState.sessions, op.session, (session) => session.id);
+      return;
+    case "deleteSession":
+      teamState.sessions = teamState.sessions.filter((session) => session.id !== op.sessionId);
       return;
     case "upsertEditLock":
       upsertBy(teamState.editLocks, op.lock, (lock) => `${lock.sessionId}\0${lock.symbolId.raw}`);

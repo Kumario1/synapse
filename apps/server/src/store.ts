@@ -12,6 +12,7 @@ import {
   type RecentRepoEvent,
   type Session,
   type SessionSummary,
+  type StateOp,
   type TeamState
 } from "@synapse/protocol";
 
@@ -59,6 +60,70 @@ export interface StateStore extends StateStoreOps {
   flush(): Promise<void>;
   /** Flush and release the underlying handle. */
   close(): Promise<void>;
+}
+
+/**
+ * Persist one canonical {@link StateOp} by dispatching to the matching
+ * per-entity {@link StateStoreOps} method. This is the single persistence entry
+ * point (plan M8 / review #2): `state.ts` emits the ops that drive both the
+ * `state.delta` broadcast and this store write, so the in-memory mutation lives
+ * only in `applyStateOp` and the row mapping lives only here — no third hand-
+ * mirrored copy. The per-entity SQL still lives in the store methods below.
+ */
+export function applyStateOpToStore(store: StateStoreOps, repoId: string, op: StateOp): void {
+  switch (op.op) {
+    case "upsertSession":
+      store.upsertSession(repoId, op.session);
+      return;
+    case "deleteSession":
+      store.deleteSession(repoId, op.sessionId);
+      return;
+    case "upsertEditLock":
+      store.upsertEditLock(repoId, op.lock);
+      return;
+    case "deleteEditLock":
+      store.deleteEditLock(repoId, op.sessionId, op.symbolRaw);
+      return;
+    case "deleteEditLocksForSession":
+      store.deleteEditLocksForSession(repoId, op.sessionId);
+      return;
+    case "upsertReservation":
+      store.upsertReservation(repoId, op.reservation);
+      return;
+    case "deleteReservation":
+      store.deleteReservation(repoId, op.sessionId);
+      return;
+    case "upsertDelta":
+      store.upsertDelta(repoId, op.delta);
+      return;
+    case "deleteDelta":
+      store.deleteDelta(repoId, op.deltaId);
+      return;
+    case "appendPush":
+      store.appendPush(repoId, op.push, op.cap);
+      return;
+    case "appendRepoEvent":
+      store.appendRepoEvent(repoId, op.event, op.cap);
+      return;
+    case "upsertResolution":
+      store.upsertResolution(repoId, op.resolution);
+      return;
+    case "deleteResolution":
+      store.deleteResolution(repoId, op.symbolRaw, op.inputsHash);
+      return;
+    case "appendSummary":
+      store.appendSummary(repoId, op.summary, op.cap);
+      return;
+    case "appendFeedback":
+      store.appendFeedback(repoId, op.feedback, op.cap);
+      return;
+    default:
+      assertNeverOp(op);
+  }
+}
+
+function assertNeverOp(op: never): never {
+  throw new Error(`Unhandled state op for store: ${JSON.stringify(op)}`);
 }
 
 /** Default for callers that mutate state without persistence (tests, CLI). */

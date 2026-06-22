@@ -14,7 +14,28 @@ import {
   type WireEnvelope
 } from "@synapse/protocol";
 import { applyMessage } from "./state.js";
-import { createStateStore, SqliteStateStore, type StateStore } from "./store.js";
+import {
+  applyStateOpToStore,
+  createStateStore,
+  SqliteStateStore,
+  type StateStore
+} from "./store.js";
+
+/**
+ * Apply a message in-memory and persist the emitted ops to the store, the way
+ * the server wires `applyMessage` -> `applyStateOpToStore`. Returns the mutated
+ * state so the suite can compare it against a fresh `load()`.
+ */
+function applyAndPersist(
+  state: TeamState,
+  repoId: string,
+  msg: ClientMessage,
+  store: StateStore
+): void {
+  for (const op of applyMessage(state, repoId, msg)) {
+    applyStateOpToStore(store, repoId, op);
+  }
+}
 
 /**
  * Both backends run the same suite (plan M8): SQLite always; Postgres when a
@@ -73,22 +94,22 @@ for (const backend of backends) {
 
     // A realistic sequence: session joins, takes a lock, reports a delta,
     // a push lands (clearing live state), a summary and feedback arrive.
-    applyMessage(state, repoId, sessionStart(repoId, "alice"), handle.store);
-    applyMessage(
+    applyAndPersist(state, repoId, sessionStart(repoId, "alice"), handle.store);
+    applyAndPersist(
       state,
       repoId,
       editIntent(repoId, "alice", "ts:src/a.ts#f", "src/a.ts"),
       handle.store
     );
-    applyMessage(
+    applyAndPersist(
       state,
       repoId,
       contractDelta(repoId, "alice", "d1", "ts:src/a.ts#f", "src/a.ts"),
       handle.store
     );
-    applyMessage(state, repoId, pushNotify(repoId, "bob", ["src/other.ts"]), handle.store);
-    applyMessage(state, repoId, summaryMessage(repoId, "alice"), handle.store);
-    applyMessage(state, repoId, feedbackMessage(repoId, "f1"), handle.store);
+    applyAndPersist(state, repoId, pushNotify(repoId, "bob", ["src/other.ts"]), handle.store);
+    applyAndPersist(state, repoId, summaryMessage(repoId, "alice"), handle.store);
+    applyAndPersist(state, repoId, feedbackMessage(repoId, "f1"), handle.store);
 
     await handle.store.flush();
     const loaded = await handle.store.load(repoId);
@@ -112,9 +133,9 @@ for (const backend of backends) {
     const handle = await backend.open();
 
     const stateA = createEmptyTeamState(repoA);
-    applyMessage(stateA, repoA, sessionStart(repoA, "alice"), handle.store);
+    applyAndPersist(stateA, repoA, sessionStart(repoA, "alice"), handle.store);
     const stateB = createEmptyTeamState(repoB);
-    applyMessage(stateB, repoB, sessionStart(repoB, "bob"), handle.store);
+    applyAndPersist(stateB, repoB, sessionStart(repoB, "bob"), handle.store);
     await handle.store.close();
 
     const second = await handle.reopen();
@@ -134,12 +155,12 @@ for (const backend of backends) {
 
     // 60 pushes: memory and store both keep the 50 newest, newest first.
     for (let i = 0; i < 60; i += 1) {
-      applyMessage(state, repoId, pushNotify(repoId, `m${i}`, [`f${i}.ts`]), handle.store);
+      applyAndPersist(state, repoId, pushNotify(repoId, `m${i}`, [`f${i}.ts`]), handle.store);
     }
     // Re-sent feedback id replaces the prior entry and moves to the front.
-    applyMessage(state, repoId, feedbackMessage(repoId, "f-retry", "acted"), handle.store);
-    applyMessage(state, repoId, feedbackMessage(repoId, "f-other", "acted"), handle.store);
-    applyMessage(state, repoId, feedbackMessage(repoId, "f-retry", "dismissed"), handle.store);
+    applyAndPersist(state, repoId, feedbackMessage(repoId, "f-retry", "acted"), handle.store);
+    applyAndPersist(state, repoId, feedbackMessage(repoId, "f-other", "acted"), handle.store);
+    applyAndPersist(state, repoId, feedbackMessage(repoId, "f-retry", "dismissed"), handle.store);
 
     await handle.store.flush();
     const loaded = await handle.store.load(repoId);
@@ -161,15 +182,15 @@ for (const backend of backends) {
     const handle = await backend.open();
     const state = createEmptyTeamState(repoId);
 
-    applyMessage(state, repoId, sessionStart(repoId, "alice"), handle.store);
-    applyMessage(
+    applyAndPersist(state, repoId, sessionStart(repoId, "alice"), handle.store);
+    applyAndPersist(
       state,
       repoId,
       contractDelta(repoId, "alice", "d1", "ts:src/a.ts#f", "src/a.ts"),
       handle.store
     );
     // The push touches the delta's file → memory clears it; store must too.
-    applyMessage(state, repoId, pushNotify(repoId, "alice", ["src/a.ts"]), handle.store);
+    applyAndPersist(state, repoId, pushNotify(repoId, "alice", ["src/a.ts"]), handle.store);
 
     await handle.store.flush();
     const loaded = await handle.store.load(repoId);
