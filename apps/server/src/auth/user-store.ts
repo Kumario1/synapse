@@ -1,7 +1,6 @@
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
 import Database from "better-sqlite3";
 import type { Pool } from "pg";
+import { createPgPool, openSqliteDb, selectBackend } from "./store-base.js";
 
 /**
  * The human Owner identity established by the GitHub sign-in flow (plan 051).
@@ -47,12 +46,7 @@ class SqliteUserStore implements UserStore {
   private readonly db: Database.Database;
 
   constructor(path: string) {
-    if (path !== ":memory:") {
-      mkdirSync(dirname(path), { recursive: true });
-    }
-    this.db = new Database(path);
-    this.db.pragma("journal_mode = WAL");
-    this.db.pragma("busy_timeout = 5000");
+    this.db = openSqliteDb(path);
     this.db.exec(
       `CREATE TABLE IF NOT EXISTS users (
          id TEXT PRIMARY KEY,
@@ -101,8 +95,7 @@ class PostgresUserStore implements UserStore {
   constructor(private readonly databaseUrl: string) {}
 
   async init(): Promise<void> {
-    const { default: pg } = await import("pg");
-    this.pool = new pg.Pool({ connectionString: this.databaseUrl });
+    this.pool = await createPgPool(this.databaseUrl);
     await this.pool.query(
       `CREATE TABLE IF NOT EXISTS users (
          id TEXT PRIMARY KEY,
@@ -141,20 +134,20 @@ class PostgresUserStore implements UserStore {
 }
 
 /**
- * Build the configured user store. Mirrors {@link createStateStore}'s backend
- * selection: `SYNAPSE_DATABASE_URL` → Postgres; else `SYNAPSE_DB_PATH` → a
- * durable SQLite file; unset → in-memory SQLite, so tests stay hermetic.
+ * Build the configured user store. Backend selection ({@link selectBackend}) is
+ * shared with {@link createProjectStore} and {@link createStateStore}:
+ * `SYNAPSE_DATABASE_URL` → Postgres; else `SYNAPSE_DB_PATH` → a durable SQLite
+ * file; unset → in-memory SQLite, so tests stay hermetic.
  */
-export async function createUserStore(
+export function createUserStore(
   options: { databaseUrl?: string; path?: string } = {}
 ): Promise<UserStore> {
-  const databaseUrl = options.databaseUrl ?? process.env.SYNAPSE_DATABASE_URL;
-  if (databaseUrl) {
-    const store = new PostgresUserStore(databaseUrl);
-    await store.init();
-    return store;
-  }
-
-  const path = options.path ?? process.env.SYNAPSE_DB_PATH;
-  return new SqliteUserStore(path && path.length > 0 ? path : ":memory:");
+  return selectBackend<UserStore>(options, {
+    postgres: async (databaseUrl) => {
+      const store = new PostgresUserStore(databaseUrl);
+      await store.init();
+      return store;
+    },
+    sqlite: (path) => new SqliteUserStore(path)
+  });
 }
