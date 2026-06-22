@@ -3,12 +3,15 @@ import type {
   Conflict,
   ConflictAction,
   ConflictAnalysis,
+  ConflictRecommendation,
   ContractChange,
   ContractDelta,
   ProposedResolution,
   Signature
 } from "@synapse/protocol";
+import { isKnownSynapseCommand } from "@synapse/protocol";
 import { renderSignature } from "./compare.js";
+import { extractJsonObject } from "./openrouter.js";
 
 /**
  * Attach a command suggestion to the first action matching `audience`
@@ -79,12 +82,164 @@ const recommendationByRule: Record<Conflict["rule"], ConflictAnalysis["recommend
   same_file_no_overlap: "info"
 };
 
-const recommendationRank: Record<ConflictAnalysis["recommendation"], number> = {
+/**
+ * The recommendation scale, weakest → strongest. `ConflictRecommendation`
+ * (protocol) is the source of truth for membership; this fixes the order and
+ * feeds {@link asRecommendation}. The rank table below is checked exhaustive by
+ * its `Record<ConflictRecommendation, …>` type, so the two cannot disagree.
+ */
+export const RECOMMENDATIONS = [
+  "proceed",
+  "info",
+  "warn",
+  "block"
+] as const satisfies readonly ConflictRecommendation[];
+
+const recommendationRank: Record<ConflictRecommendation, number> = {
   proceed: 0,
   info: 1,
   warn: 2,
   block: 3
 };
+
+/** Accept a model-supplied recommendation, or null if it is off the scale. */
+function asRecommendation(value: unknown): ConflictRecommendation | null {
+  return RECOMMENDATIONS.includes(value as ConflictRecommendation)
+    ? (value as ConflictRecommendation)
+    : null;
+}
+
+/**
+ * Validate a model reply into a {@link ConflictAnalysis}, or null if it is
+ * unusable (so the caller keeps the deterministic analysis). Canonical here in
+ * the engine so every provider — the CLI today, the server or another client
+ * later — validates a model's analysis identically, instead of duplicating it
+ * in an app.
+ */
+export function parseConflictAnalysis(
+  content: string | undefined,
+  model: string
+): ConflictAnalysis | null {
+  const record = extractJsonObject(content);
+  if (!record) {
+    return null;
+  }
+
+  const assessment = typeof record.assessment === "string" ? record.assessment.trim() : "";
+  const recommendation = asRecommendation(record.recommendation);
+  const actions = asActions(record.actions);
+
+  if (!assessment || !recommendation || actions.length === 0) {
+    return null;
+  }
+
+  return { assessment, recommendation, actions, source: model };
+}
+
+export function asActions(value: unknown): ConflictAction[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const actions: ConflictAction[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null) {
+      continue;
+    }
+
+    const record = entry as Record<string, unknown>;
+    const step = typeof record.step === "string" ? record.step.trim() : "";
+    const audience =
+      record.audience === "you" || record.audience === "counterpart" || record.audience === "both"
+        ? record.audience
+        : "both";
+
+    if (step) {
+      const command = asCommand(record.command);
+      actions.push(command ? { audience, step, command } : { audience, step });
+    }
+  }
+
+  return actions;
+}
+
+/**
+ * Validate a model-supplied `command` against the catalog allowlist. An unknown
+ * tool drops the whole `command` (the action's step text is kept regardless — a
+ * bad command suggestion must never fail the analysis).
+ */
+function asCommand(value: unknown): ConflictAction["command"] | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const tool = typeof record.tool === "string" ? record.tool : "";
+  if (!tool || !isKnownSynapseCommand(tool)) {
+    return undefined;
+  }
+
+  if (record.args === undefined || record.args === null || typeof record.args !== "object") {
+    return { tool };
+  }
+
+  const args: Record<string, string> = {};
+  for (const [key, val] of Object.entries(record.args as Record<string, unknown>)) {
+    if (typeof val === "string") {
+      args[key] = val;
+    }
+  }
+
+  return Object.keys(args).length > 0 ? { tool, args } : { tool };
+}
+
+/**
+ * Validate a model reply into a {@link ProposedResolution}, or null if it is
+ * unusable (so the caller falls back to the deterministic escalate). Canonical
+ * here alongside {@link parseConflictAnalysis} for the same layering reason.
+ */
+export function parseProposedResolution(
+  content: string | undefined,
+  model: string
+): ProposedResolution | null {
+  const record = extractJsonObject(content);
+  if (!record) {
+    return null;
+  }
+
+  const reconciled = record.reconciled === true;
+  const rationale = typeof record.rationale === "string" ? record.rationale.trim() : "";
+  const instruction = typeof record.instruction === "string" ? record.instruction.trim() : "";
+  const proposedContract =
+    typeof record.proposedContract === "string" && record.proposedContract.trim()
+      ? record.proposedContract.trim()
+      : null;
+  const recommendation =
+    record.recommendation === "block" || record.recommendation === "warn"
+      ? record.recommendation
+      : reconciled
+        ? "warn"
+        : "block";
+
+  if (!rationale || !instruction) {
+    return null;
+  }
+
+  // A reconciled result with no contract is self-contradictory; reject so the
+  // caller falls back to the deterministic escalate.
+  if (reconciled && !proposedContract) {
+    return null;
+  }
+
+  return {
+    reconciled,
+    proposedContract: reconciled ? proposedContract : null,
+    rationale,
+    recommendation,
+    instruction,
+    source: model
+  };
+}
 
 /**
  * Deterministic, dependency-free actionable analysis. Always available, always
@@ -111,9 +266,18 @@ export function deterministicAnalysis(conflict: Conflict): ConflictAnalysis {
         ...base,
         assessment: `You and ${counterpart} have both rewritten ${symbol} to different, incompatible contracts${reasonText}. Whoever merges second has to rebase onto the other's shape.`,
         actions: [
-          { audience: "both", step: `Agree on the final signature of ${symbol} before either side continues.` },
-          { audience: "you", step: `Rebase your change onto the agreed contract, then re-run your checks.` },
-          { audience: "counterpart", step: `Share or push your intended contract for ${symbol} so it can be reconciled.` }
+          {
+            audience: "both",
+            step: `Agree on the final signature of ${symbol} before either side continues.`
+          },
+          {
+            audience: "you",
+            step: `Rebase your change onto the agreed contract, then re-run your checks.`
+          },
+          {
+            audience: "counterpart",
+            step: `Share or push your intended contract for ${symbol} so it can be reconciled.`
+          }
         ],
         resolution: deterministicResolution(conflict)
       };
@@ -129,7 +293,10 @@ export function deterministicAnalysis(conflict: Conflict): ConflictAnalysis {
                 audience: "you",
                 step: `Pull or inspect ${counterpart}'s branch and build against the new contract${change?.after ? ` ${renderSignature(change.after)}` : ""}.`
               },
-              { audience: "counterpart", step: `Push the change or broadcast the new contract so others can adapt.` }
+              {
+                audience: "counterpart",
+                step: `Push the change or broadcast the new contract so others can adapt.`
+              }
             ],
             ["you", "both"],
             { tool: "synapse_whatsup" }
@@ -143,7 +310,12 @@ export function deterministicAnalysis(conflict: Conflict): ConflictAnalysis {
           recommendation: "proceed",
           assessment: `${counterpart} has an unpushed but backward-compatible change to ${symbol}${reasonText}. It should not break your edit.`,
           actions: withCommand(
-            [{ audience: "you", step: `Proceed; no action required, but keep ${counterpart}'s change in mind.` }],
+            [
+              {
+                audience: "you",
+                step: `Proceed; no action required, but keep ${counterpart}'s change in mind.`
+              }
+            ],
             ["you", "both"],
             { tool: "synapse_whatsup" }
           ),
@@ -154,7 +326,12 @@ export function deterministicAnalysis(conflict: Conflict): ConflictAnalysis {
         ...base,
         assessment: `${counterpart} has an unpushed change to ${symbol} that could not be classified automatically.`,
         actions: withCommand(
-          [{ audience: "you", step: `Inspect ${counterpart}'s change to ${symbol} before editing the same contract.` }],
+          [
+            {
+              audience: "you",
+              step: `Inspect ${counterpart}'s change to ${symbol} before editing the same contract.`
+            }
+          ],
           ["you", "both"],
           { tool: "synapse_whatsup" }
         ),
@@ -169,7 +346,10 @@ export function deterministicAnalysis(conflict: Conflict): ConflictAnalysis {
         actions: withCommand(
           [
             { audience: "you", step: `Adjust your code to the new contract of ${symbol}.` },
-            { audience: "counterpart", step: `Confirm downstream callers of ${symbol} have been accounted for.` }
+            {
+              audience: "counterpart",
+              step: `Confirm downstream callers of ${symbol} have been accounted for.`
+            }
           ],
           ["you", "both"],
           { tool: "synapse_why", args: { question: symbol } }
@@ -180,7 +360,12 @@ export function deterministicAnalysis(conflict: Conflict): ConflictAnalysis {
       return {
         ...base,
         assessment: `${counterpart} changed a transitive dependency of ${symbol}. Likely safe.`,
-        actions: [{ audience: "you", step: `Glance at the change; proceed if it is unrelated to your edit.` }]
+        actions: [
+          {
+            audience: "you",
+            step: `Glance at the change; proceed if it is unrelated to your edit.`
+          }
+        ]
       };
 
     case "same_symbol_active":
@@ -320,7 +505,9 @@ export function resolutionInputsHash(symbol: string, sides: ResolutionSide[]): s
     .sort((a, b) => a.sessionId.localeCompare(b.sessionId))
     .map((side) => ({ sessionId: side.sessionId, before: side.before, after: side.after }));
 
-  return createHash("sha256").update(JSON.stringify({ symbol, sides: ordered })).digest("hex");
+  return createHash("sha256")
+    .update(JSON.stringify({ symbol, sides: ordered }))
+    .digest("hex");
 }
 
 /**

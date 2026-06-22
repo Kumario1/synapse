@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { asActions, parseAnalysis } from "./explain-openrouter.js";
+import { asActions, parseConflictAnalysis } from "./explain.js";
 
 test("asActions keeps a command that names a known Synapse tool", () => {
   const actions = asActions([
@@ -41,7 +41,10 @@ test("asActions drops non-string args individually, keeping the rest of the comm
     {
       audience: "you",
       step: "ask why validate changed",
-      command: { tool: "synapse_why", args: { question: "ts:src/auth/token.ts#validate", limit: 5 } }
+      command: {
+        tool: "synapse_why",
+        args: { question: "ts:src/auth/token.ts#validate", limit: 5 }
+      }
     }
   ]);
 
@@ -61,23 +64,25 @@ test("asActions leaves command absent when null or missing", () => {
   assert.equal(actions[1]?.command, undefined);
 });
 
-test("parseAnalysis returns null for malformed actions (missing step)", () => {
+test("parseConflictAnalysis returns null for malformed actions (missing step)", () => {
   const content = JSON.stringify({
     assessment: "alice changed validate",
     recommendation: "warn",
     actions: [{ audience: "you", command: { tool: "synapse_whatsup" } }]
   });
 
-  assert.equal(parseAnalysis(content, "test-model"), null);
+  assert.equal(parseConflictAnalysis(content, "test-model"), null);
 });
 
-test("parseAnalysis keeps a validated command on the parsed action", () => {
+test("parseConflictAnalysis keeps a validated command on the parsed action", () => {
   const content = JSON.stringify({
     assessment: "alice changed validate",
     recommendation: "warn",
-    actions: [{ audience: "you", step: "see what alice is doing", command: { tool: "synapse_whatsup" } }]
+    actions: [
+      { audience: "you", step: "see what alice is doing", command: { tool: "synapse_whatsup" } }
+    ]
   });
 
-  const analysis = parseAnalysis(content, "test-model");
+  const analysis = parseConflictAnalysis(content, "test-model");
   assert.equal(analysis?.actions[0]?.command?.tool, "synapse_whatsup");
 });
