@@ -39,7 +39,7 @@ import {
   repoIdFor
 } from "./state.js";
 import { getCachedState } from "./state-cache.js";
-import { createStateStore, type StateStoreOps } from "./store.js";
+import { applyStateOpToStore, createStateStore } from "./store.js";
 import {
   applyResolutionAck,
   applyResolutionReject,
@@ -595,13 +595,14 @@ async function handleMessage(
     }
 
     const startedAt = performance.now();
-    const ops: StateOp[] = [];
+    let ops: StateOp[] = [];
     let ackLocks: EditLock[] | undefined;
     let proposedId: string | undefined;
     let proposedStatus: "resolving" | "resolved" | "voided" | "awaiting_owner" | undefined;
     const state = await withRepo(repoId, async () => {
       const current = await getState(repoId);
-      applyMessage(current, repoId, message, teeStateStoreOps(ops));
+      ops = applyMessage(current, repoId, message);
+      persistOps(repoId, ops);
       if (message.type === "edit.intent") {
         ackLocks = peerLocksForIntent(
           current,
@@ -721,15 +722,15 @@ async function handleGitHubWebhook(
 
     if (event !== "push") {
       const repoEvent = gitHubRepoEventToNotify(event, payload, url.searchParams.get("repoId"));
-      const ops: StateOp[] = [];
+      let ops: StateOp[] = [];
       const state = await withRepo(repoEvent.repoId, async () => {
         const current = await getState(repoEvent.repoId);
-        applyMessage(
+        ops = applyMessage(
           current,
           repoEvent.repoId,
-          clientEnvelope("repo.event", repoEvent.payload),
-          teeStateStoreOps(ops)
+          clientEnvelope("repo.event", repoEvent.payload)
         );
+        persistOps(repoEvent.repoId, ops);
         return current;
       });
       broadcastStateChange(repoEvent.repoId, state, ops);
@@ -745,15 +746,11 @@ async function handleGitHubWebhook(
     }
 
     const push = gitHubPushToNotify(payload, url.searchParams.get("repoId"));
-    const ops: StateOp[] = [];
+    let ops: StateOp[] = [];
     const state = await withRepo(push.repoId, async () => {
       const current = await getState(push.repoId);
-      applyMessage(
-        current,
-        push.repoId,
-        clientEnvelope("push.notify", push.payload),
-        teeStateStoreOps(ops)
-      );
+      ops = applyMessage(current, push.repoId, clientEnvelope("push.notify", push.payload));
+      persistOps(push.repoId, ops);
       return current;
     });
     broadcastStateChange(push.repoId, state, ops);
@@ -832,8 +829,10 @@ async function getState(repoId: string): Promise<TeamState> {
 
   const now = Date.now();
   if (dueForSweep(lastSweptAt.get(repoId) ?? 0, now, SWEEP_INTERVAL_MS)) {
-    pruneExpiredLocks(state, store);
-    pruneStaleSessions(state, store);
+    // Sweeps persist their evictions but are not broadcast as a delta (the next
+    // delta or snapshot carries the pruned state to clients), exactly as before.
+    persistOps(repoId, pruneExpiredLocks(state));
+    persistOps(repoId, pruneStaleSessions(state));
     lastSweptAt.set(repoId, now);
   }
   return state;
@@ -868,15 +867,11 @@ function broadcast<TType extends ServerMessage["type"]>(
 // the kicked daemon's socket(s). A clean close lets the daemon's backoff reconnect
 // as a fresh session — kick is an interrupt, not a ban.
 async function kickSession(repoId: string, sessionId: string): Promise<void> {
-  const ops: StateOp[] = [];
+  let ops: StateOp[] = [];
   const state = await withRepo(repoId, async () => {
     const current = await getState(repoId);
-    applyMessage(
-      current,
-      repoId,
-      clientEnvelope("session.end", { repoId, sessionId }),
-      teeStateStoreOps(ops)
-    );
+    ops = applyMessage(current, repoId, clientEnvelope("session.end", { repoId, sessionId }));
+    persistOps(repoId, ops);
     return current;
   });
   if (ops.length > 0) {
@@ -892,10 +887,16 @@ async function kickSession(repoId: string, sessionId: string): Promise<void> {
 
 function broadcastStateChange(repoId: string, state: TeamState, ops: StateOp[]): void {
   const seq = bumpRepoSeq(repoId);
+  // The ops reference live TeamState objects; this broadcast runs after withRepo
+  // releases, so a later same-repo message could mutate them before the delta is
+  // serialized. Snapshot the payload once (as the prior per-op clone did) so the
+  // delta reflects exactly the state at this seq.
+  let deltaOps: StateOp[] | undefined;
   for (const client of roomClients.get(repoId) ?? []) {
     const version = socketVersion(client);
     if (deltaBroadcastEnabled && version >= 2) {
-      send(client, envelope("state.delta", { repoId, seq, ops }, version));
+      deltaOps ??= structuredClone(ops);
+      send(client, envelope("state.delta", { repoId, seq, ops: deltaOps }, version));
       metrics.count("synapse_state_deltas_sent_total");
     } else {
       send(client, envelope("state.snapshot", { teamState: state, seq }, version));
@@ -965,76 +966,13 @@ async function enrichMediatorProposal(repoId: string, proposalId: string): Promi
   });
 }
 
-function teeStateStoreOps(ops: StateOp[]): StateStoreOps {
-  return {
-    upsertSession: (repoId, session) => {
-      store.upsertSession(repoId, session);
-      ops.push({ op: "upsertSession", session: clone(session) });
-    },
-    upsertEditLock: (repoId, lock) => {
-      store.upsertEditLock(repoId, lock);
-      ops.push({ op: "upsertEditLock", lock: clone(lock) });
-    },
-    deleteEditLock: (repoId, sessionId, symbolRaw) => {
-      store.deleteEditLock(repoId, sessionId, symbolRaw);
-      ops.push({ op: "deleteEditLock", sessionId, symbolRaw });
-    },
-    deleteEditLocksForSession: (repoId, sessionId) => {
-      store.deleteEditLocksForSession(repoId, sessionId);
-      ops.push({ op: "deleteEditLocksForSession", sessionId });
-    },
-    upsertReservation: (repoId, reservation) => {
-      store.upsertReservation(repoId, reservation);
-      ops.push({ op: "upsertReservation", reservation: clone(reservation) });
-    },
-    deleteReservation: (repoId, sessionId) => {
-      store.deleteReservation(repoId, sessionId);
-      ops.push({ op: "deleteReservation", sessionId });
-    },
-    upsertDelta: (repoId, delta) => {
-      store.upsertDelta(repoId, delta);
-      ops.push({ op: "upsertDelta", delta: clone(delta) });
-    },
-    deleteDelta: (repoId, deltaId) => {
-      store.deleteDelta(repoId, deltaId);
-      ops.push({ op: "deleteDelta", deltaId });
-    },
-    deleteSession: (repoId, sessionId) => {
-      // Sessions are only ever deleted by pruneStaleSessions in getState, which
-      // uses the raw store (like pruneExpiredLocks) — never this tee. Present
-      // solely to satisfy StateStoreOps; there is no applyMessage-path op to
-      // mirror into the delta stream.
-      store.deleteSession(repoId, sessionId);
-    },
-    appendPush: (repoId, push, cap) => {
-      store.appendPush(repoId, push, cap);
-      ops.push({ op: "appendPush", push: clone(push), cap });
-    },
-    appendRepoEvent: (repoId, event, cap) => {
-      store.appendRepoEvent(repoId, event, cap);
-      ops.push({ op: "appendRepoEvent", event: clone(event), cap });
-    },
-    upsertResolution: (repoId, resolution) => {
-      store.upsertResolution(repoId, resolution);
-      ops.push({ op: "upsertResolution", resolution: clone(resolution) });
-    },
-    deleteResolution: (repoId, symbolRaw, inputsHash) => {
-      store.deleteResolution(repoId, symbolRaw, inputsHash);
-      ops.push({ op: "deleteResolution", symbolRaw, inputsHash });
-    },
-    appendSummary: (repoId, summary, cap) => {
-      store.appendSummary(repoId, summary, cap);
-      ops.push({ op: "appendSummary", summary: clone(summary), cap });
-    },
-    appendFeedback: (repoId, feedback, cap) => {
-      store.appendFeedback(repoId, feedback, cap);
-      ops.push({ op: "appendFeedback", feedback: clone(feedback), cap });
-    }
-  };
-}
-
-function clone<T>(value: T): T {
-  return structuredClone(value);
+// Persist the canonical ops emitted by state.ts. Called inside withRepo, so the
+// in-memory objects the ops reference are serialized into the store before any
+// other same-repo message can mutate them — no clone needed on this path.
+function persistOps(repoId: string, ops: StateOp[]): void {
+  for (const op of ops) {
+    applyStateOpToStore(store, repoId, op);
+  }
 }
 
 function send(socket: WebSocket, message: ServerMessage): void {

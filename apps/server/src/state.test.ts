@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  applyStateOp,
   createEmptyTeamState,
   PROTOCOL_VERSION,
   type ClientMessage,
@@ -9,6 +10,7 @@ import {
   type EditLock,
   type Session,
   type Signature,
+  type StateOp,
   type TeamState
 } from "@synapse/protocol";
 import { resolutionInputsHash, resolutionSidesForSymbol } from "@synapse/conflict-engine";
@@ -161,7 +163,7 @@ test("edit.intent caps locks per session and evicts the oldest lock", () => {
   const state = createEmptyTeamState("local");
 
   for (let index = 0; index < 201; index += 1) {
-    applyMessage(state, "local", editIntentMessage("alice", index), undefined, timestamp(index));
+    applyMessage(state, "local", editIntentMessage("alice", index), timestamp(index));
   }
 
   const aliceLocks = state.editLocks.filter((lock) => lock.sessionId === "alice");
@@ -179,7 +181,7 @@ test("edit.intent caps locks per session and evicts the oldest lock", () => {
     true
   );
 
-  applyMessage(state, "local", editIntentMessage("bob", 0), undefined, timestamp(201));
+  applyMessage(state, "local", editIntentMessage("bob", 0), timestamp(201));
 
   assert.equal(state.editLocks.filter((lock) => lock.sessionId === "alice").length, 200);
   assert.equal(
@@ -218,7 +220,6 @@ test("contract.delta accretes reservations and push or TTL releases roots", () =
     state,
     "local",
     editIntentForSymbol("alice", secondRoot, "src/auth/parse.ts"),
-    undefined,
     expiredAt
   );
   applyMessage(
@@ -234,7 +235,6 @@ test("contract.delta accretes reservations and push or TTL releases roots", () =
         reservationSymbols: [secondRoot]
       })
     ),
-    undefined,
     expiredAt
   );
 
@@ -579,7 +579,7 @@ test("pruneStaleSessions ends a session that missed heartbeats past the TTL", ()
   );
   state.editLocks.push(lockFor("alice"));
 
-  pruneStaleSessions(state, undefined, sweepNow);
+  pruneStaleSessions(state, sweepNow);
 
   assert.equal(state.sessions.length, 1);
   assert.equal(state.sessions[0].status, "ended");
@@ -592,7 +592,7 @@ test("pruneStaleSessions leaves a recently-seen active session unchanged", () =>
   state.sessions.push(staleSession({ lastSeen: new Date(sweepNow - 60_000).toISOString() }));
   state.editLocks.push(lockFor("alice"));
 
-  pruneStaleSessions(state, undefined, sweepNow);
+  pruneStaleSessions(state, sweepNow);
 
   assert.equal(state.sessions.length, 1);
   assert.equal(state.sessions[0].status, "active");
@@ -606,7 +606,7 @@ test("pruneStaleSessions removes a long-ended session from state", () => {
     staleSession({ status: "ended", lastSeen: new Date(sweepNow - ONE_DAY_MS - 1).toISOString() })
   );
 
-  pruneStaleSessions(state, undefined, sweepNow);
+  pruneStaleSessions(state, sweepNow);
 
   assert.equal(state.sessions.length, 0);
 });
@@ -616,7 +616,7 @@ test("session.heartbeat does not refresh an ended session before prune", () => {
   const endedAt = "2026-01-01T00:00:00.000Z";
   const heartbeatAt = new Date(Date.parse(endedAt) + 60_000).toISOString();
 
-  applyMessage(state, "local", sessionStartMessage("alice"), undefined, endedAt);
+  applyMessage(state, "local", sessionStartMessage("alice"), endedAt);
   applyMessage(
     state,
     "local",
@@ -630,7 +630,6 @@ test("session.heartbeat does not refresh an ended session before prune", () => {
         sessionId: "alice"
       }
     },
-    undefined,
     endedAt
   );
 
@@ -638,14 +637,13 @@ test("session.heartbeat does not refresh an ended session before prune", () => {
     state,
     "local",
     heartbeatMessage("alice", "feature-x", "still running"),
-    undefined,
     heartbeatAt
   );
 
   assert.equal(state.sessions[0].status, "ended");
   assert.equal(state.sessions[0].lastSeen, endedAt);
 
-  pruneStaleSessions(state, undefined, Date.parse(endedAt) + ONE_DAY_MS + 1);
+  pruneStaleSessions(state, Date.parse(endedAt) + ONE_DAY_MS + 1);
 
   assert.equal(state.sessions.length, 0);
 });
@@ -659,7 +657,7 @@ test("SYNAPSE_SESSION_SWEEP=0 disables the sweep", () => {
   const previous = process.env.SYNAPSE_SESSION_SWEEP;
   process.env.SYNAPSE_SESSION_SWEEP = "0";
   try {
-    pruneStaleSessions(state, undefined, sweepNow);
+    pruneStaleSessions(state, sweepNow);
   } finally {
     if (previous === undefined) {
       delete process.env.SYNAPSE_SESSION_SWEEP;
@@ -678,7 +676,7 @@ test("a returning daemon's session.start revives a session the sweep ended", () 
     staleSession({ lastSeen: new Date(sweepNow - FIVE_MIN_MS - 1).toISOString() })
   );
 
-  pruneStaleSessions(state, undefined, sweepNow);
+  pruneStaleSessions(state, sweepNow);
   assert.equal(state.sessions[0].status, "ended");
 
   applyMessage(state, "local", sessionStartMessage("alice"));
@@ -736,4 +734,89 @@ test("kick (session.end) ends the session, clears edits, releases its locks; a f
   const fresh = state.sessions.find((session) => session.id === "bob");
   assert.ok(fresh);
   assert.equal(fresh?.status, "active");
+});
+
+// Consistency guard for the unified StateOp model (review #2): every mutation
+// in state.ts is emitted as a StateOp and applied in-memory via applyStateOp —
+// the same function clients replay on a `state.delta`. This proves the invariant
+// the delta broadcast and store persistence both depend on: replaying the
+// emitted ops onto a fresh state reproduces the directly-mutated state exactly,
+// so server memory and a delta-only client can never diverge.
+test("applyStateOp replay of emitted ops reproduces state.ts's in-memory result", () => {
+  const direct = createEmptyTeamState("local");
+  const replay = createEmptyTeamState("local");
+  const apply = (message: ClientMessage, at?: string): void => {
+    const ops: StateOp[] = at
+      ? applyMessage(direct, "local", message, at)
+      : applyMessage(direct, "local", message);
+    for (const op of ops) {
+      applyStateOp(replay, op);
+    }
+    assert.deepEqual(replay, direct, `diverged after ${message.type}`);
+  };
+
+  // Exercise every applyMessage branch that emits ops, including the tricky
+  // ones: session merge, lock eviction, reservation accretion, push-clear, and
+  // resolution invalidation.
+  apply(sessionStartMessage("alice", "main"));
+  apply(heartbeatMessage("alice", "feature-x", "refactor auth"));
+  apply(editIntentForSymbol("alice", symbol, "src/auth/token.ts"));
+  apply(
+    deltaMessage(
+      delta({
+        id: "alice-token",
+        sessionId: "alice",
+        after: sig("validate(input: string): Result<Token>"),
+        reservationSymbols: [symbol, "ts:src/auth/login.ts#login"]
+      })
+    )
+  );
+  apply(sessionStartMessage("bob", "main"));
+  apply(
+    deltaMessage(
+      delta({
+        id: "bob-token",
+        sessionId: "bob",
+        after: sig("validate(input: string): Promise<Token | null>")
+      })
+    )
+  );
+  apply(proposeMessage(resolution(hashOf(direct), "merged")));
+  apply(summaryMessage("alice", "wrapped up auth"));
+  apply(feedbackMessage("f1", "acted", 0));
+  apply(repoEventMessage(1));
+  // A push clears live deltas/locks/reservations for the file and invalidates
+  // the resolution — the densest single-message op sequence.
+  apply({
+    v: PROTOCOL_VERSION,
+    type: "push.notify",
+    id: "push-1",
+    ts: now,
+    payload: {
+      repoId: "local",
+      memberId: "alice",
+      sha: "abc",
+      summary: "shipped auth",
+      files: ["src/auth/token.ts"],
+      symbols: [{ raw: symbol }]
+    }
+  });
+  apply({
+    v: PROTOCOL_VERSION,
+    type: "session.end",
+    id: "end-bob",
+    ts: now,
+    payload: { repoId: "local", sessionId: "bob" }
+  });
+
+  // The prune sweeps emit ops too (persisted, not broadcast); they must satisfy
+  // the same replay invariant.
+  const sweepAt = Date.parse(now) + ONE_DAY_MS + 1;
+  for (const op of pruneExpiredLocks(direct)) {
+    applyStateOp(replay, op);
+  }
+  for (const op of pruneStaleSessions(direct, sweepAt)) {
+    applyStateOp(replay, op);
+  }
+  assert.deepEqual(replay, direct, "diverged after prune sweeps");
 });

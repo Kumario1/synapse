@@ -1,4 +1,5 @@
 import {
+  applyStateOp,
   type ClientMessage,
   type ConflictFeedback,
   type ContractDelta,
@@ -10,10 +11,25 @@ import {
   type RecentPush,
   type Session,
   type SessionSummary,
+  type StateOp,
   type TeamState
 } from "@synapse/protocol";
 import { resolutionInputsHash, resolutionSidesForSymbol } from "@synapse/conflict-engine";
-import { noopStateStore, type StateStoreOps } from "./store.js";
+
+/**
+ * Records each mutation as a canonical {@link StateOp}. `applyMessage` and the
+ * prune sweeps apply every op in-memory via {@link applyStateOp} (the single
+ * source of in-memory mutation) and collect the same ops here; the caller then
+ * persists them (`applyStateOpToStore`) and, for `applyMessage`, broadcasts
+ * them as a `state.delta`. The sweeps return their ops too so the caller can
+ * persist the eviction without broadcasting (matching the prior raw-store path).
+ */
+type OpSink = StateOp[];
+
+function emit(state: TeamState, sink: OpSink, op: StateOp): void {
+  applyStateOp(state, op);
+  sink.push(op);
+}
 
 const RECENT_PUSH_CAP = 50;
 const RECENT_REPO_EVENT_CAP = 50;
@@ -32,26 +48,26 @@ const SESSION_STALE_MS = Number(process.env.SYNAPSE_SESSION_TTL_MS ?? 300_000); 
 const SESSION_PRUNE_MS = Number(process.env.SYNAPSE_SESSION_PRUNE_MS ?? 86_400_000); // 24 h
 
 /**
- * Pure team-state mutations, kept free of any networking so they can be unit
- * tested directly. `apps/server/src/index.ts` owns the transport (HTTP +
+ * Pure team-state mutations, kept free of any networking or storage so they can
+ * be unit tested directly. `apps/server/src/index.ts` owns the transport (HTTP +
  * WebSocket fanout); it delegates every state change here.
  *
- * Persistence (plan M8): each mutation emits the matching per-entity store op
- * alongside the in-memory change, so the store always mirrors memory without
- * rewriting whole snapshots. The in-memory `TeamState` stays the source of
- * truth; `store` defaults to a no-op for callers that only need the mutation
- * (tests, dry runs).
+ * Each mutation is expressed as a canonical {@link StateOp}: it is applied
+ * in-memory through {@link applyStateOp} (the same function clients run on a
+ * `state.delta`, so server memory and client memory can never diverge) and
+ * returned to the caller. The caller persists the ops (`applyStateOpToStore`)
+ * and broadcasts them. The in-memory `TeamState` stays the source of truth.
  */
 export function applyMessage(
   state: TeamState,
   repoId: string,
   message: ClientMessage,
-  store: StateStoreOps = noopStateStore,
   now: string = new Date().toISOString()
-): void {
+): StateOp[] {
+  const ops: StateOp[] = [];
   switch (message.type) {
     case "session.start":
-      upsertSession(state, repoId, store, {
+      upsertSession(state, repoId, ops, {
         ...message.payload.session,
         repoId,
         lastSeen: now,
@@ -62,7 +78,7 @@ export function applyMessage(
       touchSession(
         state,
         repoId,
-        store,
+        ops,
         message.payload.sessionId,
         now,
         message.payload.branch,
@@ -70,10 +86,10 @@ export function applyMessage(
       );
       break;
     case "session.end":
-      endSession(state, repoId, store, message.payload.sessionId, now);
+      endSession(state, repoId, ops, message.payload.sessionId, now);
       break;
     case "edit.intent":
-      upsertEditLock(state, repoId, store, {
+      upsertEditLock(state, repoId, ops, {
         sessionId: message.payload.sessionId,
         symbolId: message.payload.symbolId,
         filePath: message.payload.filePath,
@@ -83,19 +99,19 @@ export function applyMessage(
       markSessionEditing(
         state,
         repoId,
-        store,
+        ops,
         message.payload.sessionId,
         message.payload.filePath,
         now
       );
       break;
     case "contract.delta":
-      upsertDelta(state, repoId, store, message.payload.delta);
-      accreteReservation(state, repoId, store, message.payload.delta, now);
+      upsertDelta(state, repoId, ops, message.payload.delta);
+      accreteReservation(state, repoId, ops, message.payload.delta, now);
       markSessionEditing(
         state,
         repoId,
-        store,
+        ops,
         message.payload.delta.sessionId,
         message.payload.delta.filePath,
         now
@@ -115,19 +131,12 @@ export function applyMessage(
         pushedAt: now,
         ...(message.payload.branch ? { branch: message.payload.branch } : {})
       };
-      addRecentPush(state, repoId, store, push);
-      clearPushedLiveState(
-        state,
-        repoId,
-        store,
-        message.payload.files,
-        message.payload.symbols,
-        now
-      );
+      addRecentPush(state, repoId, ops, push);
+      clearPushedLiveState(state, repoId, ops, message.payload.files, message.payload.symbols, now);
       break;
     }
     case "repo.event":
-      addRecentRepoEvent(state, repoId, store, {
+      addRecentRepoEvent(state, repoId, ops, {
         id: randomId(),
         repoId,
         kind: message.payload.kind,
@@ -142,21 +151,22 @@ export function applyMessage(
       });
       break;
     case "resolution.propose":
-      storeResolution(state, repoId, store, message.payload.resolution);
+      storeResolution(state, repoId, ops, message.payload.resolution);
       break;
     case "resolution.ack":
       break;
     case "session.summary":
-      storeSessionSummary(state, repoId, store, message.payload.summary);
+      storeSessionSummary(state, repoId, ops, message.payload.summary);
       break;
     case "conflict.feedback":
-      addConflictFeedback(state, repoId, store, message.payload.feedback);
+      addConflictFeedback(state, repoId, ops, message.payload.feedback);
       break;
     case "query.briefing":
       break;
     default:
       assertNever(message);
   }
+  return ops;
 }
 
 export function repoIdFor(message: ClientMessage): string | null {
@@ -186,19 +196,21 @@ export function repoIdFor(message: ClientMessage): string | null {
   }
 }
 
-export function pruneExpiredLocks(state: TeamState, store: StateStoreOps = noopStateStore): void {
+export function pruneExpiredLocks(state: TeamState): StateOp[] {
+  const ops: StateOp[] = [];
   const now = Date.now();
-  const surviving: EditLock[] = [];
-  for (const lock of state.editLocks) {
+  for (const lock of [...state.editLocks]) {
     const acquiredAt = Date.parse(lock.acquiredAt);
-    if (Number.isNaN(acquiredAt) || now - acquiredAt <= lock.ttlSec * 1000) {
-      surviving.push(lock);
-    } else {
-      store.deleteEditLock(state.repoId, lock.sessionId, lock.symbolId.raw);
+    if (!(Number.isNaN(acquiredAt) || now - acquiredAt <= lock.ttlSec * 1000)) {
+      emit(state, ops, {
+        op: "deleteEditLock",
+        sessionId: lock.sessionId,
+        symbolRaw: lock.symbolId.raw
+      });
     }
   }
-  state.editLocks = surviving;
-  pruneExpiredReservationRoots(state, state.repoId, store, now);
+  pruneExpiredReservationRoots(state, state.repoId, ops, now);
+  return ops;
 }
 
 /**
@@ -250,93 +262,80 @@ export function peerLocksForIntent(
  * "active" (applyMessage's session.start case) — so this only affects sessions
  * that truly stopped heartbeating.
  */
-export function pruneStaleSessions(
-  state: TeamState,
-  store: StateStoreOps = noopStateStore,
-  now: number = Date.now()
-): void {
+export function pruneStaleSessions(state: TeamState, now: number = Date.now()): StateOp[] {
+  const ops: StateOp[] = [];
   if (process.env.SYNAPSE_SESSION_SWEEP === "0") {
-    return;
+    return ops;
   }
-  const surviving: Session[] = [];
-  for (const session of state.sessions) {
+  const repoId = state.repoId;
+  for (const session of [...state.sessions]) {
     const lastSeen = Date.parse(session.lastSeen);
     const age = Number.isNaN(lastSeen) ? 0 : now - lastSeen;
     if (session.status === "ended" && age > SESSION_PRUNE_MS) {
-      store.deleteSession(state.repoId, session.id);
-      deleteReservation(state, state.repoId, store, session.id);
+      emit(state, ops, { op: "deleteSession", sessionId: session.id });
+      deleteReservation(state, repoId, ops, session.id);
       continue;
     }
     if (session.status !== "ended" && age > SESSION_STALE_MS) {
+      // Mutate before emitting so the upsert op carries the ended session.
       session.status = "ended";
       session.filesEditing = [];
-      state.editLocks = state.editLocks.filter((lock) => lock.sessionId !== session.id);
-      store.deleteEditLocksForSession(state.repoId, session.id);
-      deleteReservation(state, state.repoId, store, session.id);
-      store.upsertSession(state.repoId, session);
+      emit(state, ops, { op: "deleteEditLocksForSession", sessionId: session.id });
+      deleteReservation(state, repoId, ops, session.id);
+      emit(state, ops, { op: "upsertSession", session });
     }
-    surviving.push(session);
   }
-  state.sessions = surviving;
+  return ops;
 }
 
-function upsertSession(
-  state: TeamState,
-  repoId: string,
-  store: StateStoreOps,
-  session: Session
-): void {
-  const index = state.sessions.findIndex((candidate) => candidate.id === session.id);
-  if (index === -1) {
-    state.sessions.push(session);
-    store.upsertSession(repoId, session);
-    return;
-  }
-
-  state.sessions[index] = {
-    ...state.sessions[index],
-    ...session,
-    filesOpen: unique([...state.sessions[index].filesOpen, ...session.filesOpen]),
-    filesEditing: unique([...state.sessions[index].filesEditing, ...session.filesEditing])
-  };
-  store.upsertSession(repoId, state.sessions[index]);
+function upsertSession(state: TeamState, repoId: string, ops: OpSink, session: Session): void {
+  const existing = state.sessions.find((candidate) => candidate.id === session.id);
+  // On replace, merge the open/editing file sets exactly as before; the op then
+  // carries the merged session so applyStateOp's replace-by-id reproduces it.
+  const next: Session = existing
+    ? {
+        ...existing,
+        ...session,
+        filesOpen: unique([...existing.filesOpen, ...session.filesOpen]),
+        filesEditing: unique([...existing.filesEditing, ...session.filesEditing])
+      }
+    : session;
+  emit(state, ops, { op: "upsertSession", session: next });
 }
 
 function touchSession(
   state: TeamState,
   repoId: string,
-  store: StateStoreOps,
+  ops: OpSink,
   sessionId: string,
   now: string,
   branch?: string,
   task?: string
 ): void {
   const session = state.sessions.find((candidate) => candidate.id === sessionId);
-  if (session) {
-    if (session.status !== "ended") {
-      session.lastSeen = now;
-      session.status = "active";
+  if (session && session.status !== "ended") {
+    session.lastSeen = now;
+    session.status = "active";
 
-      // New clients refresh their branch every heartbeat; old clients omit it
-      // and keep the last known value (never clear on absence).
-      if (branch) {
-        session.branch = branch;
-      }
-      // Same preserve-on-omit rule as branch: a heartbeat with a task records
-      // the developer's current intent (plan 033); one without leaves the
-      // session's last known task untouched.
-      if (task) {
-        session.lastTask = task;
-      }
-      store.upsertSession(repoId, session);
+    // New clients refresh their branch every heartbeat; old clients omit it
+    // and keep the last known value (never clear on absence).
+    if (branch) {
+      session.branch = branch;
     }
+    // Same preserve-on-omit rule as branch: a heartbeat with a task records
+    // the developer's current intent (plan 033); one without leaves the
+    // session's last known task untouched.
+    if (task) {
+      session.lastTask = task;
+    }
+    emit(state, ops, { op: "upsertSession", session });
   }
 }
 
 function endSession(
   state: TeamState,
   repoId: string,
-  store: StateStoreOps,
+  ops: OpSink,
   sessionId: string,
   now: string
 ): void {
@@ -345,26 +344,20 @@ function endSession(
     session.lastSeen = now;
     session.status = "ended";
     session.filesEditing = [];
-    store.upsertSession(repoId, session);
+    emit(state, ops, { op: "upsertSession", session });
   }
 
-  state.editLocks = state.editLocks.filter((lock) => lock.sessionId !== sessionId);
-  store.deleteEditLocksForSession(repoId, sessionId);
-  deleteReservation(state, repoId, store, sessionId);
+  emit(state, ops, { op: "deleteEditLocksForSession", sessionId });
+  deleteReservation(state, repoId, ops, sessionId);
 }
 
-function upsertEditLock(
-  state: TeamState,
-  repoId: string,
-  store: StateStoreOps,
-  lock: EditLock
-): void {
-  const index = state.editLocks.findIndex(
+function upsertEditLock(state: TeamState, repoId: string, ops: OpSink, lock: EditLock): void {
+  const existing = state.editLocks.some(
     (candidate) =>
       candidate.sessionId === lock.sessionId && candidate.symbolId.raw === lock.symbolId.raw
   );
 
-  if (index === -1) {
+  if (!existing) {
     let oldestIndex = -1;
     let oldestTime = Infinity;
     let sessionLockCount = 0;
@@ -388,29 +381,29 @@ function upsertEditLock(
       sessionLockCount >= EDIT_LOCK_PER_SESSION_CAP &&
       oldestIndex !== -1
     ) {
-      const [oldest] = state.editLocks.splice(oldestIndex, 1);
-      store.deleteEditLock(repoId, oldest.sessionId, oldest.symbolId.raw);
+      const oldest = state.editLocks[oldestIndex];
+      emit(state, ops, {
+        op: "deleteEditLock",
+        sessionId: oldest.sessionId,
+        symbolRaw: oldest.symbolId.raw
+      });
       removeReservationRoots(
         state,
         repoId,
-        store,
+        ops,
         oldest.sessionId,
         (root) => root.symbolId.raw === oldest.symbolId.raw,
         lock.acquiredAt
       );
     }
-
-    state.editLocks.push(lock);
-  } else {
-    state.editLocks[index] = lock;
   }
-  store.upsertEditLock(repoId, lock);
+  emit(state, ops, { op: "upsertEditLock", lock });
 }
 
 function markSessionEditing(
   state: TeamState,
   repoId: string,
-  store: StateStoreOps,
+  ops: OpSink,
   sessionId: string,
   filePath: string,
   now: string
@@ -422,32 +415,21 @@ function markSessionEditing(
 
   session.filesEditing = unique([...session.filesEditing, filePath]);
   session.lastSeen = now;
-  store.upsertSession(repoId, session);
+  emit(state, ops, { op: "upsertSession", session });
 }
 
-function upsertDelta(
-  state: TeamState,
-  repoId: string,
-  store: StateStoreOps,
-  delta: ContractDelta
-): void {
-  const index = state.unpushedDeltas.findIndex((candidate) => candidate.id === delta.id);
-  if (index === -1) {
-    state.unpushedDeltas.push(delta);
-  } else {
-    state.unpushedDeltas[index] = delta;
-  }
-  store.upsertDelta(repoId, delta);
+function upsertDelta(state: TeamState, repoId: string, ops: OpSink, delta: ContractDelta): void {
+  emit(state, ops, { op: "upsertDelta", delta });
 
   // A new/changed delta for this symbol can shift the live contributing pair,
   // making any stored resolution stale. Drop the ones that no longer match.
-  invalidateResolutionsForSymbol(state, repoId, store, delta.symbolId.raw);
+  invalidateResolutionsForSymbol(state, repoId, ops, delta.symbolId.raw);
 }
 
 function accreteReservation(
   state: TeamState,
   repoId: string,
-  store: StateStoreOps,
+  ops: OpSink,
   delta: ContractDelta,
   now: string
 ): void {
@@ -471,7 +453,7 @@ function accreteReservation(
   writeReservationRoots(
     state,
     repoId,
-    store,
+    ops,
     existing ?? {
       repoId,
       sessionId: delta.sessionId,
@@ -485,32 +467,23 @@ function accreteReservation(
   );
 }
 
-function addRecentPush(
-  state: TeamState,
-  repoId: string,
-  store: StateStoreOps,
-  push: RecentPush
-): void {
-  state.recentPushes.unshift(push);
-  state.recentPushes = state.recentPushes.slice(0, RECENT_PUSH_CAP);
-  store.appendPush(repoId, push, RECENT_PUSH_CAP);
+function addRecentPush(state: TeamState, repoId: string, ops: OpSink, push: RecentPush): void {
+  emit(state, ops, { op: "appendPush", push, cap: RECENT_PUSH_CAP });
 }
 
 function addRecentRepoEvent(
   state: TeamState,
   repoId: string,
-  store: StateStoreOps,
+  ops: OpSink,
   event: RecentRepoEvent
 ): void {
-  state.recentRepoEvents.unshift(event);
-  state.recentRepoEvents = state.recentRepoEvents.slice(0, RECENT_REPO_EVENT_CAP);
-  store.appendRepoEvent(repoId, event, RECENT_REPO_EVENT_CAP);
+  emit(state, ops, { op: "appendRepoEvent", event, cap: RECENT_REPO_EVENT_CAP });
 }
 
 function clearPushedLiveState(
   state: TeamState,
   repoId: string,
-  store: StateStoreOps,
+  ops: OpSink,
   files: string[],
   symbols: ContractDelta["symbolId"][] = [],
   now: string
@@ -518,41 +491,41 @@ function clearPushedLiveState(
   const fileSet = new Set(files);
   const symbolSet = new Set(symbols.map((symbol) => symbol.raw));
 
-  state.unpushedDeltas = state.unpushedDeltas.filter((delta) => {
-    const keep = !fileSet.has(delta.filePath) && !symbolSet.has(delta.symbolId.raw);
-    if (!keep) {
-      store.deleteDelta(repoId, delta.id);
+  for (const delta of [...state.unpushedDeltas]) {
+    if (fileSet.has(delta.filePath) || symbolSet.has(delta.symbolId.raw)) {
+      emit(state, ops, { op: "deleteDelta", deltaId: delta.id });
     }
-    return keep;
-  });
-  state.editLocks = state.editLocks.filter((lock) => {
-    const keep = !fileSet.has(lock.filePath) && !symbolSet.has(lock.symbolId.raw);
-    if (!keep) {
-      store.deleteEditLock(repoId, lock.sessionId, lock.symbolId.raw);
+  }
+  for (const lock of [...state.editLocks]) {
+    if (fileSet.has(lock.filePath) || symbolSet.has(lock.symbolId.raw)) {
+      emit(state, ops, {
+        op: "deleteEditLock",
+        sessionId: lock.sessionId,
+        symbolRaw: lock.symbolId.raw
+      });
     }
-    return keep;
-  });
-  clearPushedReservations(state, repoId, store, fileSet, symbolSet, now);
+  }
+  clearPushedReservations(state, repoId, ops, fileSet, symbolSet, now);
 
   for (const session of state.sessions) {
     const filtered = session.filesEditing.filter((filePath) => !fileSet.has(filePath));
     if (filtered.length !== session.filesEditing.length) {
       session.filesEditing = filtered;
-      store.upsertSession(repoId, session);
+      emit(state, ops, { op: "upsertSession", session });
     }
   }
 
   // A push changes the live deltas, so re-check every stored resolution against
   // the (now possibly empty) contributing pair for its symbol.
   for (const symbol of new Set(state.resolutions.map((resolution) => resolution.symbol.raw))) {
-    invalidateResolutionsForSymbol(state, repoId, store, symbol);
+    invalidateResolutionsForSymbol(state, repoId, ops, symbol);
   }
 }
 
 function clearPushedReservations(
   state: TeamState,
   repoId: string,
-  store: StateStoreOps,
+  ops: OpSink,
   fileSet: Set<string>,
   symbolSet: Set<string>,
   now: string
@@ -561,20 +534,20 @@ function clearPushedReservations(
     const roots = reservation.roots.filter(
       (root) => !fileSet.has(root.filePath) && !symbolSet.has(root.symbolId.raw)
     );
-    writeReservationRoots(state, repoId, store, reservation, roots, now);
+    writeReservationRoots(state, repoId, ops, reservation, roots, now);
   }
 }
 
 function pruneExpiredReservationRoots(
   state: TeamState,
   repoId: string,
-  store: StateStoreOps,
+  ops: OpSink,
   now: number
 ): void {
   const updatedAt = new Date(now).toISOString();
   for (const reservation of [...state.reservations]) {
     const roots = reservation.roots.filter((root) => reservationRootIsActive(root, now));
-    writeReservationRoots(state, repoId, store, reservation, roots, updatedAt);
+    writeReservationRoots(state, repoId, ops, reservation, roots, updatedAt);
   }
 }
 
@@ -586,7 +559,7 @@ function reservationRootIsActive(root: ReservationRoot, now: number): boolean {
 function removeReservationRoots(
   state: TeamState,
   repoId: string,
-  store: StateStoreOps,
+  ops: OpSink,
   sessionId: string,
   shouldRemove: (root: ReservationRoot) => boolean,
   now: string
@@ -598,7 +571,7 @@ function removeReservationRoots(
   writeReservationRoots(
     state,
     repoId,
-    store,
+    ops,
     reservation,
     reservation.roots.filter((root) => !shouldRemove(root)),
     now
@@ -608,13 +581,13 @@ function removeReservationRoots(
 function writeReservationRoots(
   state: TeamState,
   repoId: string,
-  store: StateStoreOps,
+  ops: OpSink,
   reservation: Reservation,
   roots: ReservationRoot[],
   updatedAt: string
 ): void {
   if (roots.length === 0) {
-    deleteReservation(state, repoId, store, reservation.sessionId);
+    deleteReservation(state, repoId, ops, reservation.sessionId);
     return;
   }
 
@@ -626,25 +599,15 @@ function writeReservationRoots(
     symbols: uniqueSymbols(roots.flatMap((root) => root.symbols)),
     updatedAt
   };
-  const index = state.reservations.findIndex((candidate) => candidate.sessionId === next.sessionId);
-  if (index === -1) {
-    state.reservations.push(next);
-  } else {
-    state.reservations[index] = next;
-  }
-  store.upsertReservation(repoId, next);
+  emit(state, ops, { op: "upsertReservation", reservation: next });
 }
 
-function deleteReservation(
-  state: TeamState,
-  repoId: string,
-  store: StateStoreOps,
-  sessionId: string
-): void {
-  state.reservations = state.reservations.filter(
-    (reservation) => reservation.sessionId !== sessionId
-  );
-  store.deleteReservation(repoId, sessionId);
+function deleteReservation(state: TeamState, repoId: string, ops: OpSink, sessionId: string): void {
+  // Emitted unconditionally, exactly as the prior dual-write called
+  // store.deleteReservation on every teardown: a delete for a session with no
+  // reservation is a no-op both in-memory (applyStateOp's filter) and in the
+  // store, so the delta stream stays byte-identical to before.
+  emit(state, ops, { op: "deleteReservation", sessionId });
 }
 
 /**
@@ -656,7 +619,7 @@ function deleteReservation(
 function storeResolution(
   state: TeamState,
   repoId: string,
-  store: StateStoreOps,
+  ops: OpSink,
   resolution: ContractResolution
 ): void {
   const alreadyStored = state.resolutions.some(
@@ -668,12 +631,9 @@ function storeResolution(
     return;
   }
 
-  state.resolutions = state.resolutions.filter(
-    (candidate) => candidate.symbol.raw !== resolution.symbol.raw
-  );
-  state.resolutions.push(resolution);
-  // One row per symbol in the store, so the upsert also replaces the stale entry.
-  store.upsertResolution(repoId, resolution);
+  // applyStateOp's upsertResolution drops any prior entry for the symbol before
+  // pushing, so one row per symbol is preserved exactly as before.
+  emit(state, ops, { op: "upsertResolution", resolution });
 }
 
 /**
@@ -683,19 +643,21 @@ function storeResolution(
 function invalidateResolutionsForSymbol(
   state: TeamState,
   repoId: string,
-  store: StateStoreOps,
+  ops: OpSink,
   symbolRaw: string
 ): void {
   const sides = resolutionSidesForSymbol(state.unpushedDeltas, symbolRaw);
   const liveHash = sides.length > 0 ? resolutionInputsHash(symbolRaw, sides) : null;
 
-  state.resolutions = state.resolutions.filter((resolution) => {
-    const keep = resolution.symbol.raw !== symbolRaw || resolution.inputsHash === liveHash;
-    if (!keep) {
-      store.deleteResolution(repoId, resolution.symbol.raw, resolution.inputsHash);
+  for (const resolution of [...state.resolutions]) {
+    if (resolution.symbol.raw === symbolRaw && resolution.inputsHash !== liveHash) {
+      emit(state, ops, {
+        op: "deleteResolution",
+        symbolRaw: resolution.symbol.raw,
+        inputsHash: resolution.inputsHash
+      });
     }
-    return keep;
-  });
+  }
 }
 
 /**
@@ -705,15 +667,10 @@ function invalidateResolutionsForSymbol(
 function storeSessionSummary(
   state: TeamState,
   repoId: string,
-  store: StateStoreOps,
+  ops: OpSink,
   summary: SessionSummary
 ): void {
-  state.sessionSummaries = state.sessionSummaries.filter(
-    (candidate) => candidate.sessionId !== summary.sessionId
-  );
-  state.sessionSummaries.unshift(summary);
-  state.sessionSummaries = state.sessionSummaries.slice(0, SESSION_SUMMARY_CAP);
-  store.appendSummary(repoId, summary, SESSION_SUMMARY_CAP);
+  emit(state, ops, { op: "appendSummary", summary, cap: SESSION_SUMMARY_CAP });
 }
 
 /**
@@ -723,15 +680,10 @@ function storeSessionSummary(
 function addConflictFeedback(
   state: TeamState,
   repoId: string,
-  store: StateStoreOps,
+  ops: OpSink,
   feedback: ConflictFeedback
 ): void {
-  state.conflictFeedback = state.conflictFeedback.filter(
-    (candidate) => candidate.id !== feedback.id
-  );
-  state.conflictFeedback.unshift(feedback);
-  state.conflictFeedback = state.conflictFeedback.slice(0, CONFLICT_FEEDBACK_CAP);
-  store.appendFeedback(repoId, feedback, CONFLICT_FEEDBACK_CAP);
+  emit(state, ops, { op: "appendFeedback", feedback, cap: CONFLICT_FEEDBACK_CAP });
 }
 
 function unique(values: string[]): string[] {
