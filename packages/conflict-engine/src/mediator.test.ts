@@ -186,6 +186,24 @@ test("mediator prose with an invented call-site file path is rejected", () => {
   assert.equal(proposal.directions[1]?.summary, deterministicSummary);
 });
 
+test("mediator prose with a path fragment that only substring-matches an allowed id is rejected", () => {
+  const proposal = mechanicalProposal();
+  const request = buildMediatorResolutionRequest(proposal, keepDelta, adaptDelta);
+  assert.ok(request);
+  const deterministicSummary = proposal.directions[1]?.summary;
+
+  // "auth/token" sits inside the allowed id ts:src/auth/token.ts#getUser but is
+  // not a real referenced path; the old substring grounding let it through.
+  assert.equal(
+    applyMediatorResolutionProse(proposal, request, {
+      adaptSummary: `${validAdaptSummary()} Also rewrite auth/token internals.`
+    }),
+    false
+  );
+
+  assert.equal(proposal.directions[1]?.summary, deterministicSummary);
+});
+
 test("mediator prose with an invented signature snippet is rejected", () => {
   const proposal = mechanicalProposal();
   const request = buildMediatorResolutionRequest(proposal, keepDelta, adaptDelta);
