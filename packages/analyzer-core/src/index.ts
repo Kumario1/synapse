@@ -128,12 +128,16 @@ export class Sidecar {
     this.pending.clear();
   }
 
-  async request<T>(method: string, params: Record<string, unknown>): Promise<T> {
+  // Returns the raw JSON-RPC `result` as `unknown` on purpose: a sidecar reply
+  // is untrusted subprocess output, so the caller must validate it at its trust
+  // boundary (see @synapse/protocol parseExtracted*). Casting to a `T` here
+  // would silently inject malformed data into the symbol graph.
+  async request(method: string, params: Record<string, unknown>): Promise<unknown> {
     const child = this.ensureStarted();
     const id = this.nextId++;
     const payload = `${JSON.stringify({ id, method, params })}\n`;
 
-    return new Promise<T>((resolve, reject) => {
+    return new Promise<unknown>((resolve, reject) => {
       const timeoutMs = analyzerRequestTimeoutMs();
       const timer = setTimeout(() => {
         const pending = this.clearPending(id);
@@ -152,7 +156,7 @@ export class Sidecar {
         child.kill();
       }, timeoutMs);
 
-      this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject, timer });
+      this.pending.set(id, { resolve, reject, timer });
       child.stdin.write(payload, (error) => {
         if (error) {
           const pending = this.clearPending(id);

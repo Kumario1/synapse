@@ -194,11 +194,14 @@ export function groundedMediatorAdaptSummary(
   return summary;
 }
 
+/** Drop the `lang:` prefix from a symbol id (`ts:src/x.ts#fn` -> `src/x.ts#fn`). */
+function languageStripped(raw: string): string {
+  return raw.includes(":") ? raw.slice(raw.indexOf(":") + 1) : raw;
+}
+
 function filePathOf(symbolId: SymbolId): string {
-  const withoutLanguage = symbolId.raw.includes(":")
-    ? symbolId.raw.slice(symbolId.raw.indexOf(":") + 1)
-    : symbolId.raw;
-  return withoutLanguage.split("#", 1)[0] ?? withoutLanguage;
+  const stripped = languageStripped(symbolId.raw);
+  return stripped.split("#", 1)[0] ?? stripped;
 }
 
 function mentionsUnknownFilePath(text: string, request: MediatorResolutionRequest): boolean {
@@ -206,11 +209,12 @@ function mentionsUnknownFilePath(text: string, request: MediatorResolutionReques
   const symbolIds = allowedSymbolIds(request);
   for (const candidate of text.matchAll(/\b[\w.-]+(?:\/[\w.-]+)+(?:#[\w$.-]+)?/g)) {
     const token = stripTrailingPunctuation(candidate[0]);
-    if (
-      !allowed.has(token) &&
-      !symbolIds.has(token) &&
-      ![...symbolIds].some((symbolId) => symbolId.includes(token))
-    ) {
+    // Exact match only. A substring test (`symbolId.includes(token)`) let any
+    // hallucinated fragment that happened to sit inside an allowed symbol id
+    // (e.g. "rc/aut" inside "ts:src/auth/token.ts#validate") pass as grounded.
+    // The legitimate case — the file path embedded in a symbol id — is now an
+    // explicit member of `allowed` via filePathOf.
+    if (!allowed.has(token) && !symbolIds.has(token)) {
       return true;
     }
   }
@@ -243,11 +247,18 @@ function mentionsUnknownSignatureSnippet(
 }
 
 function allowedFilePaths(request: MediatorResolutionRequest): Set<string> {
+  const symbolIdRaws = [...allowedSymbolIds(request)];
   return new Set(
     [
       request.keep.filePath,
       request.adapt.filePath,
-      ...request.affectedSites.map((site) => site.filePath)
+      ...request.affectedSites.map((site) => site.filePath),
+      // A path-like token in the prose can come from a bare path mention
+      // (src/x.ts) or a full symbol-id mention, which the path regex surfaces
+      // with its language prefix stripped (src/x.ts#fn). Allow both exact forms
+      // for every allowed symbol id — sound, unlike the old substring test.
+      ...symbolIdRaws.map((raw) => filePathOf({ raw })),
+      ...symbolIdRaws.map(languageStripped)
     ].filter((value): value is string => Boolean(value))
   );
 }

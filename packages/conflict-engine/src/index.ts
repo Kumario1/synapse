@@ -355,9 +355,13 @@ export {
   type SignatureComparison
 } from "./compare.js";
 export {
+  asActions,
   deterministicAnalysis,
   deterministicResolution,
   enrichConflicts,
+  parseConflictAnalysis,
+  parseProposedResolution,
+  RECOMMENDATIONS,
   resolutionInputsHash,
   resolutionSidesForSymbol,
   templateExplanation,

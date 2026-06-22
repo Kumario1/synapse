@@ -3,6 +3,7 @@ import { createHmac } from "node:crypto";
 export * from "./command-catalog.js";
 export * from "./log.js";
 export * from "./metrics.js";
+export * from "./symbol-schema.js";
 export * from "./wire-schema.js";
 
 export const SUPPORTED_PROTOCOL_VERSIONS = [1, 2] as const;
@@ -832,7 +833,7 @@ export type ClientMessage =
   | WireEnvelope<"resolution.propose", { repoId: string; resolution: ContractResolution }>
   | WireEnvelope<
       "resolution.ack",
-      { repoId: string; sessionId: string; proposalId: string; accept: true }
+      { repoId: string; sessionId: string; proposalId: string; accept: boolean }
     >
   | WireEnvelope<"session.summary", { repoId: string; summary: SessionSummary }>
   | WireEnvelope<"conflict.feedback", { repoId: string; feedback: ConflictFeedback }>

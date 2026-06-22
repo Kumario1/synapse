@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Sidecar, diffContracts } from "@synapse/analyzer-core";
 import type { CodeSymbol, SymbolId } from "@synapse/protocol";
+import { parseExtractedContracts, parseExtractedDependencyGraph } from "@synapse/protocol";
 
 export interface ExtractGoContractsInput {
   filePath: string;
@@ -61,8 +62,10 @@ function getSidecar(): Sidecar {
 /** Probe the sidecar; `false` means the daemon should use file-level fallback. */
 export async function goAnalyzerAvailable(): Promise<boolean> {
   try {
-    const health = await getSidecar().request<{ ok?: boolean }>("health", {});
-    return health.ok === true;
+    const health = await getSidecar().request("health", {});
+    return (
+      typeof health === "object" && health !== null && (health as { ok?: unknown }).ok === true
+    );
   } catch {
     return false;
   }
@@ -71,18 +74,18 @@ export async function goAnalyzerAvailable(): Promise<boolean> {
 export async function extractGoContracts(
   input: ExtractGoContractsInput
 ): Promise<ExtractGoContractsResult> {
-  return getSidecar().request<ExtractGoContractsResult>("extractFile", {
+  const raw = await getSidecar().request("extractFile", {
     filePath: input.filePath,
     source: input.source
   });
+  return parseExtractedContracts(raw);
 }
 
 export async function extractGoDependencyGraph(
   input: ExtractGoDependencyGraphInput
 ): Promise<ExtractGoDependencyGraphResult> {
-  return getSidecar().request<ExtractGoDependencyGraphResult>("indexGraph", {
-    files: input.files
-  });
+  const raw = await getSidecar().request("indexGraph", { files: input.files });
+  return parseExtractedDependencyGraph(raw);
 }
 
 /**

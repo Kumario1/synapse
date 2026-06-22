@@ -1,19 +1,15 @@
 import {
-  extractJsonObject,
   openRouterConfig,
+  parseConflictAnalysis,
+  parseProposedResolution,
   requestCompletion,
   type AnalysisProvider,
   type ConflictAnalysisInput,
   type ResolutionProvider,
   type ResolutionRequest
 } from "@synapse/conflict-engine";
-import type {
-  ConflictAction,
-  ConflictAnalysis,
-  ConflictRecommendation,
-  ProposedResolution
-} from "@synapse/protocol";
-import { isKnownSynapseCommand, renderCommandCatalogForPrompt } from "@synapse/protocol";
+import type { ConflictAnalysis, ProposedResolution } from "@synapse/protocol";
+import { renderCommandCatalogForPrompt } from "@synapse/protocol";
 
 /**
  * Optional LLM analysis provider backed by OpenRouter (Rung 5).
@@ -51,7 +47,7 @@ export function createOpenRouterAnalysisProvider(): AnalysisProvider | null {
       }
 
       try {
-        const analysis = parseAnalysis(
+        const analysis = parseConflictAnalysis(
           await requestCompletion(
             config,
             { maxTokens: 700, temperature: 0.2 },
@@ -121,88 +117,6 @@ function buildUserPrompt(input: ConflictAnalysisInput): string {
   );
 }
 
-export function parseAnalysis(content: string | undefined, model: string): ConflictAnalysis | null {
-  const record = extractJsonObject(content);
-  if (!record) {
-    return null;
-  }
-
-  const assessment = typeof record.assessment === "string" ? record.assessment.trim() : "";
-  const recommendation = asRecommendation(record.recommendation);
-  const actions = asActions(record.actions);
-
-  if (!assessment || !recommendation || actions.length === 0) {
-    return null;
-  }
-
-  return { assessment, recommendation, actions, source: model };
-}
-
-function asRecommendation(value: unknown): ConflictRecommendation | null {
-  return value === "block" || value === "warn" || value === "info" || value === "proceed" ? value : null;
-}
-
-export function asActions(value: unknown): ConflictAction[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  const actions: ConflictAction[] = [];
-  for (const entry of value) {
-    if (typeof entry !== "object" || entry === null) {
-      continue;
-    }
-
-    const record = entry as Record<string, unknown>;
-    const step = typeof record.step === "string" ? record.step.trim() : "";
-    const audience =
-      record.audience === "you" || record.audience === "counterpart" || record.audience === "both"
-        ? record.audience
-        : "both";
-
-    if (step) {
-      const command = asCommand(record.command);
-      actions.push(command ? { audience, step, command } : { audience, step });
-    }
-  }
-
-  return actions;
-}
-
-/**
- * Validate a model-supplied `command` against the catalog allowlist. An
- * unknown tool drops the whole `command` (the action's step text is kept
- * regardless — a bad command suggestion must never fail the analysis).
- */
-function asCommand(value: unknown): ConflictAction["command"] | undefined {
-  if (typeof value !== "object" || value === null) {
-    return undefined;
-  }
-
-  const record = value as Record<string, unknown>;
-  const tool = typeof record.tool === "string" ? record.tool : "";
-  if (!tool || !isKnownSynapseCommand(tool)) {
-    return undefined;
-  }
-
-  if (record.args === undefined || record.args === null) {
-    return { tool };
-  }
-
-  if (typeof record.args !== "object") {
-    return { tool };
-  }
-
-  const args: Record<string, string> = {};
-  for (const [key, val] of Object.entries(record.args as Record<string, unknown>)) {
-    if (typeof val === "string") {
-      args[key] = val;
-    }
-  }
-
-  return Object.keys(args).length > 0 ? { tool, args } : { tool };
-}
-
 function cacheKey(input: ConflictAnalysisInput): string {
   return [
     input.rule,
@@ -248,7 +162,7 @@ export function createOpenRouterResolutionProvider(): ResolutionProvider | null 
       // Retry once: a strict-JSON contract is brittle, and a single retry
       // recovers most malformed first responses without affecting the verdict.
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const resolution = parseResolution(
+        const resolution = parseProposedResolution(
           await requestCompletion(
             config,
             { maxTokens: 700, temperature: 0 },
@@ -294,46 +208,6 @@ function buildResolutionPrompt(req: ResolutionRequest): string {
     null,
     2
   );
-}
-
-function parseResolution(content: string | undefined, model: string): ProposedResolution | null {
-  const record = extractJsonObject(content);
-  if (!record) {
-    return null;
-  }
-
-  const reconciled = record.reconciled === true;
-  const rationale = typeof record.rationale === "string" ? record.rationale.trim() : "";
-  const instruction = typeof record.instruction === "string" ? record.instruction.trim() : "";
-  const proposedContract =
-    typeof record.proposedContract === "string" && record.proposedContract.trim()
-      ? record.proposedContract.trim()
-      : null;
-  const recommendation =
-    record.recommendation === "block" || record.recommendation === "warn"
-      ? record.recommendation
-      : reconciled
-        ? "warn"
-        : "block";
-
-  if (!rationale || !instruction) {
-    return null;
-  }
-
-  // A reconciled result with no contract is self-contradictory; reject so the
-  // caller falls back to the deterministic escalate.
-  if (reconciled && !proposedContract) {
-    return null;
-  }
-
-  return {
-    reconciled,
-    proposedContract: reconciled ? proposedContract : null,
-    rationale,
-    recommendation,
-    instruction,
-    source: model
-  };
 }
 
 /** One contract change a session produced, as input to summarization. */
@@ -397,7 +271,10 @@ const SUMMARY_SYSTEM_PROMPT = [
 
 function buildSummaryPrompt(input: SessionSummaryInput): string {
   const lines = input.deltas.map((delta) => {
-    const shape = delta.before && delta.after ? `${delta.before} -> ${delta.after}` : delta.after ?? delta.before ?? "";
+    const shape =
+      delta.before && delta.after
+        ? `${delta.before} -> ${delta.after}`
+        : (delta.after ?? delta.before ?? "");
     return `- ${delta.symbol} (${delta.changeKind})${shape ? `: ${shape}` : ""}`;
   });
 

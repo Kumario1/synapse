@@ -1,7 +1,25 @@
 import { z } from "zod";
 // Type-only import: index.ts re-exports this module, so a value import here
 // would be a runtime cycle (PROTOCOL_VERSION would still be in its TDZ).
-import type { ClientMessage, ServerMessage } from "./index.js";
+import type {
+  ClientMessage,
+  ServerMessage,
+  Session,
+  EditLock,
+  ContractDelta,
+  ContractResolution,
+  ResolutionProposal,
+  Direction,
+  AffectedSite,
+  SessionSummary,
+  ConflictFeedback,
+  RecentPush,
+  RecentRepoEvent,
+  TeamState,
+  Signature,
+  SignatureParam,
+  SymbolId
+} from "./index.js";
 
 // Must cover [MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION] in index.ts
 // (kept literal to avoid the cycle). Version negotiation happens at the WS
@@ -51,6 +69,18 @@ const changeKind = z.enum([
 ]);
 
 const agentType = z.enum(["claude-code", "cursor", "cline", "aider", "other"]);
+
+// Closed set, kept in sync with Conflict["rule"] in index.ts by the drift
+// guard at the bottom of this file.
+const conflictRule = z.enum([
+  "same_symbol_active",
+  "same_symbol_unpushed",
+  "contract_divergent",
+  "dependency_changed",
+  "transitive_dependency",
+  "stale_base",
+  "same_file_no_overlap"
+]);
 
 const session = z.looseObject({
   id: z.string().min(1),
@@ -146,7 +176,7 @@ const conflictFeedback = z.looseObject({
   memberId: z.string(),
   outcome: z.enum(["acted", "dismissed"]),
   note: z.string().optional(),
-  rule: z.string().optional(),
+  rule: conflictRule.optional(),
   targetSymbol: symbolId.optional(),
   createdAt: z.string()
 });
@@ -199,6 +229,9 @@ const recentRepoEvent = z.looseObject({
   number: z.number().optional(),
   url: z.string().optional(),
   summary: z.string(),
+  // Distilled prose excerpt (RecentRepoEvent.detail). Mirrors the cap on the
+  // repo.event message payload so the snapshot/teamState path enforces it too.
+  detail: z.string().max(2000).optional(),
   createdAt: z.string()
 });
 
@@ -421,3 +454,38 @@ export function parseServerMessage(value: unknown): ParsedServerMessage {
   }
   return { ok: true, message: result.data as ServerMessage };
 }
+
+// --- Compile-time drift guard --------------------------------------------
+// `looseObject` infers a string index signature (forward-compat passthrough),
+// so the *literal* field set is what must track the hand-written interfaces in
+// index.ts. Stripping the index signature and comparing key sets turns a
+// dropped / renamed / added field into a build error — the real teeth behind
+// this file's "schemas can never silently drift from the types" claim. Field
+// *types* (e.g. the `rule` enum) are exercised at runtime by wire-schema.test.ts.
+type RemoveIndex<T> = {
+  [K in keyof T as string extends K ? never : number extends K ? never : K]: T[K];
+};
+type SchemaKeys<S extends z.ZodType> = keyof RemoveIndex<z.infer<S>>;
+type Equals<A, B> =
+  (<G>() => G extends A ? 1 : 2) extends <G>() => G extends B ? 1 : 2 ? true : false;
+type Expect<T extends true> = T;
+
+// Each element must be `true`; a key-set drift collapses it to `false` and the
+// tuple line names the offending entity.
+type _WireDriftGuard = [
+  Expect<Equals<SchemaKeys<typeof symbolId>, keyof SymbolId>>,
+  Expect<Equals<SchemaKeys<typeof signatureParam>, keyof SignatureParam>>,
+  Expect<Equals<SchemaKeys<typeof signature>, keyof Signature>>,
+  Expect<Equals<SchemaKeys<typeof session>, keyof Session>>,
+  Expect<Equals<SchemaKeys<typeof editLock>, keyof EditLock>>,
+  Expect<Equals<SchemaKeys<typeof contractDelta>, keyof ContractDelta>>,
+  Expect<Equals<SchemaKeys<typeof contractResolution>, keyof ContractResolution>>,
+  Expect<Equals<SchemaKeys<typeof affectedSite>, keyof AffectedSite>>,
+  Expect<Equals<SchemaKeys<typeof direction>, keyof Direction>>,
+  Expect<Equals<SchemaKeys<typeof resolutionProposal>, keyof ResolutionProposal>>,
+  Expect<Equals<SchemaKeys<typeof sessionSummary>, keyof SessionSummary>>,
+  Expect<Equals<SchemaKeys<typeof conflictFeedback>, keyof ConflictFeedback>>,
+  Expect<Equals<SchemaKeys<typeof recentPush>, keyof RecentPush>>,
+  Expect<Equals<SchemaKeys<typeof recentRepoEvent>, keyof RecentRepoEvent>>,
+  Expect<Equals<SchemaKeys<typeof teamState>, keyof TeamState>>
+];
