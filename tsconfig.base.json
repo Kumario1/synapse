@@ -18,6 +18,9 @@
       ],
       "@synapse/conflict-engine": [
         "packages/conflict-engine/src/index.ts"
+      ],
+      "@synapse/analyzer-core": [
+        "packages/analyzer-core/src/index.ts"
       ]
     }
   }

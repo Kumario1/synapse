@@ -1,8 +1,8 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { CodeSymbol, SymbolChange, SymbolId } from "@synapse/protocol";
+import { Sidecar, diffContracts } from "@synapse/analyzer-core";
+import type { CodeSymbol, SymbolId } from "@synapse/protocol";
 
 export interface ExtractPythonContractsInput {
   filePath: string;
@@ -30,185 +30,40 @@ export interface ExtractPythonDependencyGraphResult {
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const pythonDir = join(packageRoot, "python");
-const DEFAULT_REQUEST_TIMEOUT_MS = 5000;
-
-interface PendingRequest {
-  resolve: (value: unknown) => void;
-  reject: (error: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
-}
-
-function analyzerRequestTimeoutMs(): number {
-  const raw = process.env.SYNAPSE_ANALYZER_REQUEST_TIMEOUT_MS;
-  if (!raw) {
-    return DEFAULT_REQUEST_TIMEOUT_MS;
-  }
-  const timeoutMs = Number.parseInt(raw, 10);
-  return Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_REQUEST_TIMEOUT_MS;
-}
 
 /**
- * Manages the long-lived Python analyzer sidecar process and the
- * newline-delimited JSON-RPC channel to it. Lazily started on first use,
- * restarted automatically if it dies, and shut down via {@link close}.
- *
- * Any failure to start (missing venv/deps/python) surfaces as a rejected
- * request so the daemon can degrade to file-level detection instead of breaking.
+ * Resolve the Python interpreter: explicit override, then the package venv, then
+ * a system interpreter (which may lack the pinned deps — the first request then
+ * rejects and the daemon falls back to file-level detection).
  */
-class PythonSidecar {
-  private child: ChildProcessWithoutNullStreams | null = null;
-  private buffer = "";
-  private nextId = 1;
-  private readonly pending = new Map<number, PendingRequest>();
-
-  private resolvePythonExecutable(): string {
-    const override = process.env.SYNAPSE_PYTHON;
-    if (override && existsSync(override)) {
-      return override;
-    }
-    const isWindows = process.platform === "win32";
-    const venvPython = join(
-      packageRoot,
-      ".venv",
-      isWindows ? "Scripts" : "bin",
-      isWindows ? "python.exe" : "python3"
-    );
-    if (existsSync(venvPython)) {
-      return venvPython;
-    }
-    // Last resort: a system interpreter. It may lack the pinned deps, in which
-    // case the first request rejects and the daemon falls back to file-level.
-    return isWindows ? "python" : "python3";
+function resolvePythonExecutable(): string {
+  const override = process.env.SYNAPSE_PYTHON;
+  if (override && existsSync(override)) {
+    return override;
   }
-
-  private ensureStarted(): ChildProcessWithoutNullStreams {
-    if (this.child && !this.child.killed) {
-      return this.child;
-    }
-
-    const executable = this.resolvePythonExecutable();
-    const child = spawn(executable, ["-m", "synapse_analyzer.server"], {
-      cwd: pythonDir,
-      stdio: ["pipe", "pipe", "pipe"]
-    });
-
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => this.onData(chunk));
-    child.on("exit", (code) => this.onExit(child, code));
-    child.on("error", (error) => this.failAll(error));
-
-    this.child = child;
-    return child;
+  const isWindows = process.platform === "win32";
+  const venvPython = join(
+    packageRoot,
+    ".venv",
+    isWindows ? "Scripts" : "bin",
+    isWindows ? "python.exe" : "python3"
+  );
+  if (existsSync(venvPython)) {
+    return venvPython;
   }
-
-  private onData(chunk: string): void {
-    this.buffer += chunk;
-    let newlineIndex = this.buffer.indexOf("\n");
-    while (newlineIndex !== -1) {
-      const line = this.buffer.slice(0, newlineIndex).trim();
-      this.buffer = this.buffer.slice(newlineIndex + 1);
-      if (line) {
-        this.onMessage(line);
-      }
-      newlineIndex = this.buffer.indexOf("\n");
-    }
-  }
-
-  private onMessage(line: string): void {
-    let message: { id?: number; result?: unknown; error?: { message?: string } };
-    try {
-      message = JSON.parse(line);
-    } catch {
-      return;
-    }
-    if (typeof message.id !== "number") {
-      return;
-    }
-    const pending = this.clearPending(message.id);
-    if (!pending) {
-      return;
-    }
-    if (message.error) {
-      pending.reject(new Error(message.error.message ?? "python analyzer error"));
-    } else {
-      pending.resolve(message.result);
-    }
-  }
-
-  private onExit(child: ChildProcessWithoutNullStreams, code: number | null): void {
-    if (this.child === child) {
-      this.child = null;
-      this.buffer = "";
-    }
-    if (this.pending.size > 0) {
-      this.failAll(new Error(`python analyzer exited (code ${code ?? "unknown"})`));
-    }
-  }
-
-  private clearPending(id: number): PendingRequest | undefined {
-    const pending = this.pending.get(id);
-    if (pending) {
-      clearTimeout(pending.timer);
-      this.pending.delete(id);
-    }
-    return pending;
-  }
-
-  private failAll(error: Error): void {
-    for (const pending of this.pending.values()) {
-      clearTimeout(pending.timer);
-      pending.reject(error);
-    }
-    this.pending.clear();
-  }
-
-  async request<T>(method: string, params: Record<string, unknown>): Promise<T> {
-    const child = this.ensureStarted();
-    const id = this.nextId++;
-    const payload = `${JSON.stringify({ id, method, params })}\n`;
-
-    return new Promise<T>((resolve, reject) => {
-      const timeoutMs = analyzerRequestTimeoutMs();
-      const timer = setTimeout(() => {
-        const pending = this.clearPending(id);
-        if (!pending) {
-          return;
-        }
-        pending.reject(new Error(`python analyzer request timed out (method ${method}, id ${id}, timeout ${timeoutMs}ms)`));
-        if (this.child === child) {
-          this.child = null;
-          this.buffer = "";
-        }
-        child.kill();
-      }, timeoutMs);
-
-      this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject, timer });
-      child.stdin.write(payload, (error) => {
-        if (error) {
-          const pending = this.clearPending(id);
-          if (pending) {
-            pending.reject(error);
-          }
-        }
-      });
-    });
-  }
-
-  close(): void {
-    if (this.child && !this.child.killed) {
-      this.child.stdin.end();
-      this.child.kill();
-    }
-    this.failAll(new Error("python analyzer closed"));
-    this.child = null;
-  }
+  return isWindows ? "python" : "python3";
 }
 
-let sidecar: PythonSidecar | null = null;
+let sidecar: Sidecar | null = null;
 
-function getSidecar(): PythonSidecar {
+function getSidecar(): Sidecar {
   if (!sidecar) {
-    sidecar = new PythonSidecar();
+    sidecar = new Sidecar({
+      command: resolvePythonExecutable,
+      args: ["-m", "synapse_analyzer.server"],
+      cwd: pythonDir,
+      label: "python"
+    });
   }
   return sidecar;
 }
@@ -241,49 +96,11 @@ export async function extractPythonDependencyGraph(
 }
 
 /**
- * Structural contract diff over two symbol sets. Language-neutral — identical to
- * the TypeScript analyzer's diff — so a Python change flows through the same
- * conflict engine: removals, visibility changes, and `sigHash` deltas become
- * `SymbolChange`s; additions are reported too.
+ * Language-neutral structural contract diff, shared with the Go analyzer via
+ * `@synapse/analyzer-core`, so a Python change flows through the same conflict
+ * engine as every other language.
  */
-export function diffPythonContracts(before: CodeSymbol[], after: CodeSymbol[]): SymbolChange[] {
-  const beforeById = bySymbolId(before);
-  const afterById = bySymbolId(after);
-  const changes: SymbolChange[] = [];
-
-  for (const [raw, beforeSymbol] of beforeById) {
-    const afterSymbol = afterById.get(raw);
-    if (!afterSymbol) {
-      changes.push({ symbolId: beforeSymbol.id, changeKind: "removed", before: beforeSymbol, after: null });
-      continue;
-    }
-    if (beforeSymbol.visibility !== afterSymbol.visibility) {
-      changes.push({
-        symbolId: beforeSymbol.id,
-        changeKind: "visibility_changed",
-        before: beforeSymbol,
-        after: afterSymbol
-      });
-      continue;
-    }
-    if (beforeSymbol.sigHash !== afterSymbol.sigHash) {
-      changes.push({
-        symbolId: beforeSymbol.id,
-        changeKind: "signature_changed",
-        before: beforeSymbol,
-        after: afterSymbol
-      });
-    }
-  }
-
-  for (const [raw, afterSymbol] of afterById) {
-    if (!beforeById.has(raw)) {
-      changes.push({ symbolId: afterSymbol.id, changeKind: "added", before: null, after: afterSymbol });
-    }
-  }
-
-  return changes.sort((a, b) => a.symbolId.raw.localeCompare(b.symbolId.raw));
-}
+export const diffPythonContracts = diffContracts;
 
 /** Shut down the shared sidecar (tests, daemon shutdown). */
 export function closePythonAnalyzer(): void {
@@ -291,8 +108,4 @@ export function closePythonAnalyzer(): void {
     sidecar.close();
     sidecar = null;
   }
-}
-
-function bySymbolId(symbols: CodeSymbol[]): Map<string, CodeSymbol> {
-  return new Map(symbols.map((symbol) => [symbol.id.raw, symbol]));
 }

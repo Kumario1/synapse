@@ -24,6 +24,7 @@
     "test": "node scripts/setup-go.mjs && node --test dist/*.test.js"
   },
   "dependencies": {
+    "@synapse/analyzer-core": "0.0.0",
     "@synapse/protocol": "0.0.0"
   }
 }
