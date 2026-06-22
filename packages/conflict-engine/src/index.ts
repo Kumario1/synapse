@@ -15,6 +15,7 @@ import {
   renderSignature
 } from "./compare.js";
 import { deterministicAnalysis, templateExplanation } from "./explain.js";
+import { ruleDescriptors } from "./rules.js";
 
 export interface ConflictTarget {
   filePath: string;
@@ -81,7 +82,7 @@ export function evaluateConflicts(context: ConflictCheckContext): Conflict[] {
 
       if (sameSymbol(lock.symbolId, targetSymbol)) {
         addConflict(conflicts, {
-          severity: "warn",
+          severity: ruleDescriptors.same_symbol_active.severity,
           rule: "same_symbol_active",
           targetSymbol,
           counterpart: counterpartFor(context.state.sessions, lock.sessionId),
@@ -112,7 +113,7 @@ export function evaluateConflicts(context: ConflictCheckContext): Conflict[] {
           selfDelta.after.raw !== delta.after.raw
         ) {
           addConflict(conflicts, {
-            severity: "warn",
+            severity: ruleDescriptors.contract_divergent.severity,
             rule: "contract_divergent",
             targetSymbol,
             counterpart,
@@ -129,11 +130,12 @@ export function evaluateConflicts(context: ConflictCheckContext): Conflict[] {
         }
 
         // Otherwise classify the counterpart's change. Backward-compatible and
-        // no-op changes are demoted to info so they don't add to alarm fatigue.
+        // no-op changes are demoted to info so they don't add to alarm fatigue;
+        // everything else stays at the rule's floor severity.
         const severity =
           change.compatibility === "compatible" || change.compatibility === "identical"
             ? "info"
-            : "warn";
+            : ruleDescriptors.same_symbol_unpushed.severity;
 
         addConflict(conflicts, {
           severity,
@@ -155,7 +157,7 @@ export function evaluateConflicts(context: ConflictCheckContext): Conflict[] {
       const hops = dependencyHops.get(delta.symbolId.raw);
       if (hops === 1) {
         addConflict(conflicts, {
-          severity: "warn",
+          severity: ruleDescriptors.dependency_changed.severity,
           rule: "dependency_changed",
           targetSymbol,
           counterpart,
@@ -165,7 +167,7 @@ export function evaluateConflicts(context: ConflictCheckContext): Conflict[] {
         });
       } else if (hops === 2) {
         addConflict(conflicts, {
-          severity: "info",
+          severity: ruleDescriptors.transitive_dependency.severity,
           rule: "transitive_dependency",
           targetSymbol,
           counterpart,
@@ -188,7 +190,7 @@ export function evaluateConflicts(context: ConflictCheckContext): Conflict[] {
         push.filesAffected.includes(target.filePath)
       ) {
         addConflict(conflicts, {
-          severity: "warn",
+          severity: ruleDescriptors.stale_base.severity,
           rule: "stale_base",
           targetSymbol,
           counterpart: {
@@ -209,7 +211,7 @@ export function evaluateConflicts(context: ConflictCheckContext): Conflict[] {
         !hasSpecificConflict(conflicts, targetSymbol, session.id)
       ) {
         addConflict(conflicts, {
-          severity: "info",
+          severity: ruleDescriptors.same_file_no_overlap.severity,
           rule: "same_file_no_overlap",
           targetSymbol,
           counterpart: counterpartFor(context.state.sessions, session.id),
