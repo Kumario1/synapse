@@ -1,11 +1,10 @@
-import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createRequire } from "node:module";
 import { URL } from "node:url";
 import {
   createEmptyTeamState,
   createLogger,
-  deriveProjectKey,
   MetricsRegistry,
   MIN_SUPPORTED_PROTOCOL_VERSION,
   isSupportedProtocolVersion,
@@ -49,6 +48,9 @@ import {
   voidOnTimeout
 } from "./mediator.js";
 import { createOpenRouterMediatorProvider } from "./mediator-openrouter.js";
+import { clientEnvelope, envelope } from "./wire.js";
+import { headerValue, overRateLimit, readBody, writeJson, type RateWindow } from "./http-util.js";
+import { authorized as authorizeRequest, validGitHubSignature } from "./credential.js";
 
 const port = Number(process.env.SYNAPSE_SERVER_PORT ?? 4010);
 const host = process.env.SYNAPSE_SERVER_HOST ?? "127.0.0.1";
@@ -71,6 +73,10 @@ const authMode: "project-key" | "shared-token" | "open" = masterSecret
   : authToken
     ? "shared-token"
     : "open";
+// Bind the credential boundary (credential.ts) to this process's resolved auth
+// config so the call sites below stay a plain authorized(request, url, repoId).
+const authorized = (request: IncomingMessage, url: URL, repoId: string): boolean =>
+  authorizeRequest(request, url, repoId, { authMode, masterSecret, authToken });
 const log = createLogger("synapse-server");
 const githubApp = loadGitHubAppConfig();
 const githubWebhookSecret = githubApp.webhookSecret;
@@ -262,7 +268,7 @@ async function handleHttp(request: IncomingMessage, response: ServerResponse): P
     }
     let body: { repoId?: string; query?: string; limit?: number };
     try {
-      body = JSON.parse(await readBody(request)) as typeof body;
+      body = JSON.parse(await readBody(request, MAX_PAYLOAD_BYTES)) as typeof body;
     } catch {
       writeJson(response, 400, { ok: false, error: "invalid_json" });
       return;
@@ -368,11 +374,6 @@ const WEBHOOK_RATE_LIMIT_PER_MIN = Number(process.env.SYNAPSE_WEBHOOK_RATE_LIMIT
 // /state and /recall share one global read budget; set 0 to disable.
 const HTTP_READ_RATE_LIMIT_PER_MIN = Number(process.env.SYNAPSE_HTTP_RATE_LIMIT_PER_MIN ?? 120);
 
-interface RateWindow {
-  windowStartedAt: number;
-  count: number;
-}
-
 const socketRates = new WeakMap<WebSocket, RateWindow>();
 
 // The sessionId a socket last acted as — used to close the right daemon's socket
@@ -382,17 +383,6 @@ const socketSession = new WeakMap<WebSocket, string>();
 const webhookRate: RateWindow = { windowStartedAt: 0, count: 0 };
 const httpReadRate: RateWindow = { windowStartedAt: 0, count: 0 };
 
-function overRateLimit(window: RateWindow, limitPerMinute: number, now: number): boolean {
-  if (limitPerMinute <= 0) {
-    return false;
-  }
-  if (now - window.windowStartedAt >= 60_000) {
-    window.windowStartedAt = now;
-    window.count = 0;
-  }
-  window.count += 1;
-  return window.count > limitPerMinute;
-}
 const pingIntervalMs = Number(process.env.SYNAPSE_WS_PING_INTERVAL_MS ?? 20_000);
 
 wsServer.on("headers", (headers) => {
@@ -684,7 +674,7 @@ async function handleGitHubWebhook(
 
   let raw: string;
   try {
-    raw = await readBody(request);
+    raw = await readBody(request, MAX_PAYLOAD_BYTES);
   } catch {
     metrics.count("synapse_message_failures_total", { reason: "payload_too_large" });
     writeJson(response, 413, { ok: false, error: "payload_too_large" });
@@ -1041,101 +1031,4 @@ function send(socket: WebSocket, message: ServerMessage): void {
   if (socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify(message));
   }
-}
-
-function envelope<TType extends ServerMessage["type"]>(
-  type: TType,
-  payload: Extract<ServerMessage, WireEnvelope<TType>>["payload"],
-  version: ProtocolVersion = PROTOCOL_VERSION
-): Extract<ServerMessage, WireEnvelope<TType>> {
-  return {
-    v: version,
-    type,
-    id: randomUUID(),
-    ts: new Date().toISOString(),
-    payload
-  } as Extract<ServerMessage, WireEnvelope<TType>>;
-}
-
-function clientEnvelope<TType extends ClientMessage["type"]>(
-  type: TType,
-  payload: Extract<ClientMessage, WireEnvelope<TType>>["payload"]
-): Extract<ClientMessage, WireEnvelope<TType>> {
-  return {
-    v: PROTOCOL_VERSION,
-    type,
-    id: randomUUID(),
-    ts: new Date().toISOString(),
-    payload
-  } as Extract<ClientMessage, WireEnvelope<TType>>;
-}
-
-async function readBody(request: IncomingMessage): Promise<string> {
-  let body = "";
-  for await (const chunk of request) {
-    body += chunk;
-    if (body.length > MAX_PAYLOAD_BYTES) {
-      request.destroy();
-      throw new Error("payload_too_large");
-    }
-  }
-
-  return body;
-}
-
-/**
- * True when the request is authorized for `repoId`:
- *   - open mode: always (no auth configured).
- *   - shared-token mode: the presented credential matches SYNAPSE_AUTH_TOKEN
- *     (grants any repo).
- *   - project-key mode: the presented credential matches
- *     deriveProjectKey(masterSecret, repoId) — so a key validates against its
- *     own project only.
- * The credential arrives via `?token=` or an `Authorization: Bearer` header; the
- * comparison is constant-time to avoid leaking it through timing.
- */
-function authorized(request: IncomingMessage, url: URL, repoId: string): boolean {
-  if (authMode === "open") {
-    return true;
-  }
-
-  const fromQuery = url.searchParams.get("token");
-  const header = headerValue(request, "authorization");
-  const fromHeader = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : null;
-  const provided = fromQuery ?? fromHeader;
-  if (!provided) {
-    return false;
-  }
-
-  const expected = authMode === "project-key" ? deriveProjectKey(masterSecret, repoId) : authToken;
-  const a = Buffer.from(provided);
-  const b = Buffer.from(expected);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
-function validGitHubSignature(rawBody: string, signature: string | null, secret: string): boolean {
-  if (!signature?.startsWith("sha256=")) {
-    return false;
-  }
-
-  const expected = `sha256=${createHmac("sha256", secret).update(rawBody).digest("hex")}`;
-  const actualBuffer = Buffer.from(signature);
-  const expectedBuffer = Buffer.from(expected);
-  return (
-    actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer)
-  );
-}
-
-function headerValue(request: IncomingMessage, name: string): string | null {
-  const value = request.headers[name];
-  if (Array.isArray(value)) {
-    return value[0] ?? null;
-  }
-
-  return value ?? null;
-}
-
-function writeJson(response: ServerResponse, statusCode: number, body: unknown): void {
-  response.writeHead(statusCode, { "content-type": "application/json" });
-  response.end(JSON.stringify(body, null, 2));
 }
