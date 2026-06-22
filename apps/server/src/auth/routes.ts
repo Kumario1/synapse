@@ -89,6 +89,234 @@ function requireOwner(
   return verifySession(cookies[SESSION_COOKIE], ctx.sessionKey);
 }
 
+/**
+ * One handled `/auth/*` route. The dispatcher ({@link resolveAuthRoute}) owns
+ * the shared envelope — prefix match, method+path lookup, and (when
+ * `requireOwner` is set) the single sign-in check that returns 401 before the
+ * handler runs and otherwise passes the resolved Owner in. Handlers therefore
+ * carry only their own logic: per-route param/state validation, ownership
+ * authorization, and the response. Keeping the table the single source of which
+ * "METHOD /path" pairs exist replaces the former flat if-ladder.
+ */
+interface AuthRoute {
+  /** Run the shared sign-in check once; 401 short-circuits before `handle`. */
+  requireOwner?: boolean;
+  handle: (args: {
+    query: URLSearchParams;
+    cookies: Record<string, string>;
+    ctx: AuthContext;
+    /** Present iff `requireOwner` is set (the dispatcher resolved it). */
+    owner: { userId: string };
+  }) => Promise<RouteResult> | RouteResult;
+}
+
+const AUTH_ROUTES: Record<string, AuthRoute> = {
+  "GET /auth/github": {
+    handle: ({ ctx }) => {
+      const state = signState(ctx.sessionKey);
+      return {
+        status: 302,
+        redirect: buildAuthorizeUrl(ctx.creds, state, ctx.redirectUri),
+        setCookies: [
+          serializeCookie(OAUTH_STATE_COOKIE, state, {
+            httpOnly: true,
+            sameSite: "Lax",
+            secure: ctx.isSecure,
+            maxAgeSec: STATE_MAX_AGE_SEC,
+            path: "/"
+          })
+        ]
+      };
+    }
+  },
+
+  "GET /auth/github/callback": {
+    handle: async ({ query, cookies, ctx }) => {
+      const state = query.get("state");
+      const cookieState = cookies[OAUTH_STATE_COOKIE];
+      if (!verifyStateSigned(state, cookieState, ctx.sessionKey)) {
+        return { status: 400, body: { error: "bad_state" } };
+      }
+      const code = query.get("code");
+      if (!code) {
+        return { status: 400, body: { error: "missing_code" } };
+      }
+      let gh: GitHubUser;
+      try {
+        const token = await ctx.exchangeCodeForToken(code);
+        // ponytail: the GitHub user access token (`token`) is intentionally not
+        // persisted here — repo claiming / installation tokens are issue #104.
+        gh = await ctx.fetchGitHubUser(token);
+      } catch {
+        return { status: 502, body: { error: "github_exchange_failed" } };
+      }
+      const user = await ctx.userStore.upsertUser({
+        id: gh.id,
+        login: gh.login,
+        name: gh.name,
+        avatarUrl: gh.avatarUrl
+      });
+      const session = signSession(user.id, ctx.sessionKey);
+      return {
+        status: 302,
+        redirect: "/",
+        setCookies: [sessionCookie(session, ctx.isSecure), clearCookie(OAUTH_STATE_COOKIE)]
+      };
+    }
+  },
+
+  "GET /auth/me": {
+    handle: async ({ cookies, ctx }) => {
+      const verified = verifySession(cookies[SESSION_COOKIE], ctx.sessionKey);
+      if (!verified) {
+        return { status: 401, body: { error: "unauthenticated" } };
+      }
+      const user = await ctx.userStore.getUserById(verified.userId);
+      if (!user) {
+        return { status: 401, body: { error: "unauthenticated" } };
+      }
+      return {
+        status: 200,
+        body: { owner: { login: user.login, name: user.name, avatarUrl: user.avatarUrl } }
+      };
+    }
+  },
+
+  "POST /auth/logout": {
+    handle: () => ({ status: 200, body: { ok: true }, setCookies: [clearCookie(SESSION_COOKIE)] })
+  },
+  "GET /auth/logout": {
+    handle: () => ({ status: 200, body: { ok: true }, setCookies: [clearCookie(SESSION_COOKIE)] })
+  },
+
+  // Start a repo claim: send the signed-in Owner through the App install flow.
+  "GET /auth/projects/add": {
+    requireOwner: true,
+    handle: ({ ctx }) => {
+      if (!ctx.appSlug || !ctx.masterSecret) {
+        return { status: 503, body: { error: "claiming_unavailable" } };
+      }
+      const state = signState(ctx.sessionKey);
+      return {
+        status: 302,
+        redirect: buildInstallUrl(ctx.appSlug, state),
+        setCookies: [
+          serializeCookie(INSTALL_STATE_COOKIE, state, {
+            httpOnly: true,
+            sameSite: "Lax",
+            secure: ctx.isSecure,
+            maxAgeSec: STATE_MAX_AGE_SEC,
+            path: "/"
+          })
+        ]
+      };
+    }
+  },
+
+  // Install setup callback: verify push access, record Owner↔repo, mint key.
+  "GET /auth/github/setup": {
+    requireOwner: true,
+    handle: async ({ query, cookies, ctx, owner }) => {
+      if (!verifyStateSigned(query.get("state"), cookies[INSTALL_STATE_COOKIE], ctx.sessionKey)) {
+        return { status: 400, body: { error: "bad_state" } };
+      }
+      const installationId = query.get("installation_id");
+      const code = query.get("code");
+      if (!installationId || !code) {
+        return { status: 400, body: { error: "missing_installation" } };
+      }
+      let repos: ClaimedRepo[];
+      try {
+        // The user access token is used once here and discarded — never stored.
+        const userToken = await ctx.exchangeCodeForToken(code);
+        repos = await ctx.listInstallationReposForUser(installationId, userToken);
+      } catch {
+        return { status: 502, body: { error: "github_install_failed" } };
+      }
+      // Only repos the Owner can push to are claimed; non-push repos are ignored.
+      const claimable = repos.filter((r) => r.pushAccess);
+      for (const repo of claimable) {
+        const key = deriveProjectKey(ctx.masterSecret, repo.fullName);
+        await ctx.projectStore.claimProject(owner.userId, repo.fullName, key);
+      }
+      return {
+        status: 302,
+        redirect: "/",
+        setCookies: [clearCookie(INSTALL_STATE_COOKIE)]
+      };
+    }
+  },
+
+  // The Owner's own claimed projects + their per-repo daemon credential.
+  "GET /auth/projects": {
+    requireOwner: true,
+    handle: async ({ ctx, owner }) => {
+      const projects = await ctx.projectStore.listProjectsForOwner(owner.userId);
+      return {
+        status: 200,
+        body: { projects: projects.map((p) => ({ repoId: p.repoId, projectKey: p.projectKey })) }
+      };
+    }
+  },
+
+  // Owner dashboard read: cookie-authed, authorized by ownership. An Owner may read
+  // the live Room only for a repo they have claimed. Distinct from the machine
+  // GET /state (project-key) path — the boundary stays separate.
+  "GET /auth/projects/state": {
+    requireOwner: true,
+    handle: async ({ query, ctx, owner }) => {
+      const repoId = query.get("repoId");
+      if (!repoId) {
+        return { status: 400, body: { error: "missing_repo" } };
+      }
+      const project = await ctx.projectStore.getProject(owner.userId, repoId);
+      if (!project) {
+        return { status: 403, body: { error: "not_owner" } };
+      }
+      const state = await ctx.readRoomState(repoId);
+      return { status: 200, body: state };
+    }
+  },
+
+  // Owner kick: force-end an agent Session in a Project the Owner owns. HTTP only,
+  // cookie-authed, authorized by ownership — never a browser WS message. repoId and
+  // sessionId ride the query string (resolveAuthRoute has no request body).
+  "POST /auth/projects/kick": {
+    requireOwner: true,
+    handle: async ({ query, ctx, owner }) => {
+      const repoId = query.get("repoId");
+      const sessionId = query.get("sessionId");
+      if (!repoId || !sessionId) {
+        return { status: 400, body: { error: "missing_params" } };
+      }
+      const project = await ctx.projectStore.getProject(owner.userId, repoId);
+      if (!project) {
+        return { status: 403, body: { error: "not_owner" } };
+      }
+      await ctx.kickSession(repoId, sessionId);
+      return { status: 200, body: { ok: true } };
+    }
+  },
+
+  "POST /auth/projects/resolve-winner": {
+    requireOwner: true,
+    handle: async ({ query, ctx, owner }) => {
+      const repoId = query.get("repoId");
+      const proposalId = query.get("proposalId");
+      const winnerSessionId = query.get("winnerSessionId");
+      if (!repoId || !proposalId || !winnerSessionId) {
+        return { status: 400, body: { error: "missing_params" } };
+      }
+      const project = await ctx.projectStore.getProject(owner.userId, repoId);
+      if (!project) {
+        return { status: 403, body: { error: "not_owner" } };
+      }
+      await ctx.pickResolutionWinner(repoId, proposalId, winnerSessionId);
+      return { status: 200, body: { ok: true } };
+    }
+  }
+};
+
 export async function resolveAuthRoute(
   method: string,
   pathname: string,
@@ -100,209 +328,24 @@ export async function resolveAuthRoute(
     return null;
   }
 
-  if (method === "GET" && pathname === "/auth/github") {
-    const state = signState(ctx.sessionKey);
-    return {
-      status: 302,
-      redirect: buildAuthorizeUrl(ctx.creds, state, ctx.redirectUri),
-      setCookies: [
-        serializeCookie(OAUTH_STATE_COOKIE, state, {
-          httpOnly: true,
-          sameSite: "Lax",
-          secure: ctx.isSecure,
-          maxAgeSec: STATE_MAX_AGE_SEC,
-          path: "/"
-        })
-      ]
-    };
+  const route = AUTH_ROUTES[`${method} ${pathname}`];
+  if (!route) {
+    return { status: 404, body: { error: "not_found" } };
   }
 
-  if (method === "GET" && pathname === "/auth/github/callback") {
-    const state = query.get("state");
-    const cookieState = cookies[OAUTH_STATE_COOKIE];
-    if (!verifyStateSigned(state, cookieState, ctx.sessionKey)) {
-      return { status: 400, body: { error: "bad_state" } };
-    }
-    const code = query.get("code");
-    if (!code) {
-      return { status: 400, body: { error: "missing_code" } };
-    }
-    let gh: GitHubUser;
-    try {
-      const token = await ctx.exchangeCodeForToken(code);
-      // ponytail: the GitHub user access token (`token`) is intentionally not
-      // persisted here — repo claiming / installation tokens are issue #104.
-      gh = await ctx.fetchGitHubUser(token);
-    } catch {
-      return { status: 502, body: { error: "github_exchange_failed" } };
-    }
-    const user = await ctx.userStore.upsertUser({
-      id: gh.id,
-      login: gh.login,
-      name: gh.name,
-      avatarUrl: gh.avatarUrl
-    });
-    const session = signSession(user.id, ctx.sessionKey);
-    return {
-      status: 302,
-      redirect: "/",
-      setCookies: [sessionCookie(session, ctx.isSecure), clearCookie(OAUTH_STATE_COOKIE)]
-    };
-  }
-
-  if (method === "GET" && pathname === "/auth/me") {
-    const verified = verifySession(cookies[SESSION_COOKIE], ctx.sessionKey);
-    if (!verified) {
+  // Shared envelope, run once: routes that need a signed-in Owner resolve it
+  // here and 401 before their handler. The placeholder satisfies the handler
+  // type for the open (non-owner) routes that never read it.
+  let owner: { userId: string } = { userId: "" };
+  if (route.requireOwner) {
+    const resolved = requireOwner(cookies, ctx);
+    if (!resolved) {
       return { status: 401, body: { error: "unauthenticated" } };
     }
-    const user = await ctx.userStore.getUserById(verified.userId);
-    if (!user) {
-      return { status: 401, body: { error: "unauthenticated" } };
-    }
-    return {
-      status: 200,
-      body: { owner: { login: user.login, name: user.name, avatarUrl: user.avatarUrl } }
-    };
+    owner = resolved;
   }
 
-  if ((method === "POST" || method === "GET") && pathname === "/auth/logout") {
-    return { status: 200, body: { ok: true }, setCookies: [clearCookie(SESSION_COOKIE)] };
-  }
-
-  // Start a repo claim: send the signed-in Owner through the App install flow.
-  if (method === "GET" && pathname === "/auth/projects/add") {
-    const owner = requireOwner(cookies, ctx);
-    if (!owner) {
-      return { status: 401, body: { error: "unauthenticated" } };
-    }
-    if (!ctx.appSlug || !ctx.masterSecret) {
-      return { status: 503, body: { error: "claiming_unavailable" } };
-    }
-    const state = signState(ctx.sessionKey);
-    return {
-      status: 302,
-      redirect: buildInstallUrl(ctx.appSlug, state),
-      setCookies: [
-        serializeCookie(INSTALL_STATE_COOKIE, state, {
-          httpOnly: true,
-          sameSite: "Lax",
-          secure: ctx.isSecure,
-          maxAgeSec: STATE_MAX_AGE_SEC,
-          path: "/"
-        })
-      ]
-    };
-  }
-
-  // Install setup callback: verify push access, record Owner↔repo, mint key.
-  if (method === "GET" && pathname === "/auth/github/setup") {
-    const owner = requireOwner(cookies, ctx);
-    if (!owner) {
-      return { status: 401, body: { error: "unauthenticated" } };
-    }
-    if (!verifyStateSigned(query.get("state"), cookies[INSTALL_STATE_COOKIE], ctx.sessionKey)) {
-      return { status: 400, body: { error: "bad_state" } };
-    }
-    const installationId = query.get("installation_id");
-    const code = query.get("code");
-    if (!installationId || !code) {
-      return { status: 400, body: { error: "missing_installation" } };
-    }
-    let repos: ClaimedRepo[];
-    try {
-      // The user access token is used once here and discarded — never stored.
-      const userToken = await ctx.exchangeCodeForToken(code);
-      repos = await ctx.listInstallationReposForUser(installationId, userToken);
-    } catch {
-      return { status: 502, body: { error: "github_install_failed" } };
-    }
-    // Only repos the Owner can push to are claimed; non-push repos are ignored.
-    const claimable = repos.filter((r) => r.pushAccess);
-    for (const repo of claimable) {
-      const key = deriveProjectKey(ctx.masterSecret, repo.fullName);
-      await ctx.projectStore.claimProject(owner.userId, repo.fullName, key);
-    }
-    return {
-      status: 302,
-      redirect: "/",
-      setCookies: [clearCookie(INSTALL_STATE_COOKIE)]
-    };
-  }
-
-  // The Owner's own claimed projects + their per-repo daemon credential.
-  if (method === "GET" && pathname === "/auth/projects") {
-    const owner = requireOwner(cookies, ctx);
-    if (!owner) {
-      return { status: 401, body: { error: "unauthenticated" } };
-    }
-    const projects = await ctx.projectStore.listProjectsForOwner(owner.userId);
-    return {
-      status: 200,
-      body: { projects: projects.map((p) => ({ repoId: p.repoId, projectKey: p.projectKey })) }
-    };
-  }
-
-  // Owner dashboard read: cookie-authed, authorized by ownership. An Owner may read
-  // the live Room only for a repo they have claimed. Distinct from the machine
-  // GET /state (project-key) path — the boundary stays separate.
-  if (method === "GET" && pathname === "/auth/projects/state") {
-    const owner = requireOwner(cookies, ctx);
-    if (!owner) {
-      return { status: 401, body: { error: "unauthenticated" } };
-    }
-    const repoId = query.get("repoId");
-    if (!repoId) {
-      return { status: 400, body: { error: "missing_repo" } };
-    }
-    const project = await ctx.projectStore.getProject(owner.userId, repoId);
-    if (!project) {
-      return { status: 403, body: { error: "not_owner" } };
-    }
-    const state = await ctx.readRoomState(repoId);
-    return { status: 200, body: state };
-  }
-
-  // Owner kick: force-end an agent Session in a Project the Owner owns. HTTP only,
-  // cookie-authed, authorized by ownership — never a browser WS message. repoId and
-  // sessionId ride the query string (resolveAuthRoute has no request body).
-  if (method === "POST" && pathname === "/auth/projects/kick") {
-    const owner = requireOwner(cookies, ctx);
-    if (!owner) {
-      return { status: 401, body: { error: "unauthenticated" } };
-    }
-    const repoId = query.get("repoId");
-    const sessionId = query.get("sessionId");
-    if (!repoId || !sessionId) {
-      return { status: 400, body: { error: "missing_params" } };
-    }
-    const project = await ctx.projectStore.getProject(owner.userId, repoId);
-    if (!project) {
-      return { status: 403, body: { error: "not_owner" } };
-    }
-    await ctx.kickSession(repoId, sessionId);
-    return { status: 200, body: { ok: true } };
-  }
-
-  if (method === "POST" && pathname === "/auth/projects/resolve-winner") {
-    const owner = requireOwner(cookies, ctx);
-    if (!owner) {
-      return { status: 401, body: { error: "unauthenticated" } };
-    }
-    const repoId = query.get("repoId");
-    const proposalId = query.get("proposalId");
-    const winnerSessionId = query.get("winnerSessionId");
-    if (!repoId || !proposalId || !winnerSessionId) {
-      return { status: 400, body: { error: "missing_params" } };
-    }
-    const project = await ctx.projectStore.getProject(owner.userId, repoId);
-    if (!project) {
-      return { status: 403, body: { error: "not_owner" } };
-    }
-    await ctx.pickResolutionWinner(repoId, proposalId, winnerSessionId);
-    return { status: 200, body: { ok: true } };
-  }
-
-  return { status: 404, body: { error: "not_found" } };
+  return route.handle({ query, cookies, ctx, owner });
 }
 
 /**
